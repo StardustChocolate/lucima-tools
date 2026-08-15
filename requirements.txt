@@ -1,0 +1,13 @@
+# 运行时依赖。版本按实测环境固定，避免上游破坏性更新。
+# 说明：服务器层使用标准库 http.server，不需要 FastAPI/uvicorn。
+
+# 核心 HTTP 客户端——纯 Python，Windows 和 Android(Chaquopy) 共用
+httpx==0.28.1
+
+# 以下仅 Windows 桌面端需要；Android 端不装（登录走 WebView + Kotlin）
+playwright==1.61.0   # 门户登录时驱动 Edge 让用户点验证码
+pywebview==6.2.1     # 原生窗口外壳（WebView2，Win10/11 自带）
+
+# 打包/开发工具（运行应用本身不需要，按需手动装）
+# pyinstaller==6.20.0  # 打 exe，见 BUILD.md
+# Pillow==12.2.0       # tools/gen_icons.py 生成图标
