@@ -1,0 +1,51 @@
+# ===================== 隐私 / 凭据（务必保持忽略）=====================
+# 账号注册表 + base64 保存的密码 + 各项设置
+settings.json
+settings.local.json
+# 浏览器登录态（Playwright profile，含 cookie/JWT）
+# ⚠️ 单数是旧的单账号目录，复数是多账号版——两条都要，早先只写了单数那条
+.browser_profile/
+.browser_profiles/
+# 运行日志（含账号名、请求路径、traceback）
+logs/
+*.log
+
+# ===================== 本地研究 / 试稿 =====================
+# 协议逆向、抓包与 UI 试稿不属于 LucimaTools 发布源码。
+/capture/
+/mockups/
+/recon/
+/capture_browser.bat
+/capture_proxy.bat
+
+# 本地测试与外部 Wiki 全量资源不进入发布仓库。
+/tests/
+/assets_full/
+
+# ===================== 构建产物 =====================
+build/
+dist/
+*.spec.bak
+__pycache__/
+*.py[cod]
+
+# ---- Android ----
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+android/keystore.properties
+*.jks
+*.keystore
+# 构建时从项目根复制进来的共享源（单一真源在 backend/ frontend/ assets/）
+android/app/src/main/python/backend/
+android/app/src/main/assets/web/
+android/.idea/
+*.iml
+
+# ===================== 编辑器 / 系统 =====================
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

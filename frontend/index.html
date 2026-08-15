@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>LucimaTools · 璐茜玛的深层幻影</title>
+  <link rel="icon" type="image/png" href="/static/assets/app-icon.png?v=76">
+  <link rel="stylesheet" href="/static/style.css?v=76">
+</head>
+<body>
+  <!-- ===================== 登录视图 ===================== -->
+  <div class="login-view" id="loginView">
+    <div class="login-card" id="loginPanel">
+      <button class="theme-mini" id="loginThemeBtn" title="切换明暗">🌙</button>
+      <div class="login-brand">
+        <div class="logo"></div>
+        <h1>Lucima<span>Tools</span></h1>
+        <div class="sub">璐茜玛的深层幻影</div>
+      </div>
+      <div class="field">
+        <label>账号</label>
+        <div class="acct-combo" id="acctCombo">
+          <input id="account" type="text" placeholder="邮箱账号" autocomplete="username">
+          <button type="button" class="acct-caret hidden" id="acctCaret" title="已保存的账号">▾</button>
+          <div class="acct-menu hidden" id="savedAccts"></div>
+        </div>
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+      </div>
+      <label class="save-pwd" id="savePwdRow">
+        <input type="checkbox" id="savePwd">
+        <span class="sp-box"></span>
+        <span class="sp-txt">保存密码</span>
+      </label>
+      <div class="login-status hint" id="loginStatus">
+        点击登录后会弹出一个小窗口，<b>你只需点一下里面的验证码</b>，随后自动完成登录。
+      </div>
+      <button class="btn primary" id="loginBtn">登录</button>
+      <button class="btn ghost hidden" id="loginCancel">取消</button>
+    </div>
+  </div>
+
+  <!-- ===================== 应用视图 ===================== -->
+  <div class="app-view hidden" id="appView">
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="side-brand">
+        <div class="logo"></div>
+        <div>
+          <h1>Lucima<span>Tools</span></h1>
+          <div class="sub">璐茜玛的深层幻影</div>
+        </div>
+      </div>
+      <nav class="side-nav" id="sideNav">
+        <button class="nav-item active" data-section="info"><span class="ni-icon">📊</span><span class="ni-label">基本信息</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="auto"><span class="ni-icon">🔄</span><span class="ni-label">自动任务</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="manual"><span class="ni-icon">🎯</span><span class="ni-label">主动任务</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="logs"><span class="ni-icon">📜</span><span class="ni-label">运行日志</span><span class="ni-badge hidden" id="logBadge">0</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="settings"><span class="ni-icon">⚙️</span><span class="ni-label">系统设置</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="about"><span class="ni-icon">❤️</span><span class="ni-label">关于我们</span><span class="ni-dot"></span></button>
+      </nav>
+      <div class="side-foot">
+        <!-- 多账号切换器（左下角）：当前账号胶囊，点击展开列表/添加账号 -->
+        <div class="acc-switcher" id="accSwitcher"></div>
+        <button class="side-btn" id="themeToggle"><span>🌓</span> 切换明暗</button>
+        <button class="side-btn danger" id="logoutBtn"><span>⎋</span> 退出当前账号</button>
+      </div>
+    </aside>
+
+    <!-- 抽屉遮罩（仅窄屏抽屉展开时显示，点击收起） -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+    <!-- 主内容区 -->
+    <main class="main">
+      <header class="topbar">
+        <button class="menu-btn" id="menuBtn">☰</button>
+        <div class="crumb" id="crumb">基本信息</div>
+        <div class="pill" id="connPill">● 未连接</div>
+      </header>
+
+      <div class="content" id="content">
+        <!-- 基本信息 -->
+        <section class="section active" id="section-info">
+          <div class="card">
+            <div class="card-title">
+              <span class="dot"></span>账号状态
+              <button class="mini" id="refreshBtn">刷新</button>
+            </div>
+            <!-- 顶行：头像 + 名字/UID/等级 + 表盘组（能源/旗帜，左） + 货币列（金币/钻石/契约，右） -->
+            <div class="info-top">
+              <div class="avatar-wrap">
+                <div class="avatar" id="avatar">?</div>
+                <i class="avatar-ring"></i>
+              </div>
+              <div class="pinfo">
+                <div class="pname" id="pName">—</div>
+                <div class="puid" id="pUid">—</div>
+                <div class="pname-lv" id="pLv">—</div>
+              </div>
+              <!-- 能源 / 旗帜：表盘（左移，紧跟名字信息） -->
+              <div class="dial-row" id="gaugeRow"></div>
+              <!-- 货币列：金币 / 钻石 / 三种契约（图标 + 数量，竖排，靠右） -->
+              <div class="asset-col" id="curBar"></div>
+            </div>
+          </div>
+
+          <!-- 团员 / 物品 -->
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>团员与物品</div>
+            <div class="roster-tabs">
+              <button class="rtab active" data-rtab="heroes">团员<span class="rtab-n" id="heroCount"></span></button>
+              <button class="rtab" data-rtab="items">物品<span class="rtab-n" id="itemCount"></span></button>
+            </div>
+            <div class="roster-body">
+              <div class="roster-pane active" id="rosterHeroes"><div class="roster-empty">登录后加载…</div></div>
+              <div class="roster-pane" id="rosterItems"><div class="roster-empty">登录后加载…</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 自动任务 -->
+        <section class="section" id="section-auto">
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>自动功能</div>
+            <p class="card-note">登录后按开关执行，可每小时自动重跑。月签到 / 活动签到 / 助战好友为登录必跑项，无需开关。</p>
+            <div class="auto-list" id="autoList"></div>
+            <div class="buy-targets" id="buyTargets">
+              <div class="bt-label">自动购买目标</div>
+              <div class="bt-opts" id="btOpts"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 主动任务 -->
+        <section class="section" id="section-manual">
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>主动任务</div>
+            <div class="task-list" id="taskList"></div>
+          </div>
+        </section>
+
+        <!-- 运行日志 -->
+        <section class="section" id="section-logs">
+          <div class="card">
+            <div class="card-title">
+              <span class="dot"></span>运行日志
+              <button class="mini" id="clearLogBtn">清空</button>
+            </div>
+            <pre class="log" id="log"></pre>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              <span class="dot"></span>开发者日志
+              <button class="mini" id="loadDevLogBtn">加载</button>
+            </div>
+            <p class="card-note">遇到异常问题时，点「加载」查看详细日志（含错误堆栈），可全选复制发给开发者排查。文件位置见下方路径。</p>
+            <div class="devlog-path" id="devLogPath">—</div>
+            <pre class="log" id="devLog" style="display:none"></pre>
+          </div>
+        </section>
+
+        <!-- 系统设置 -->
+        <section class="section" id="section-settings">
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>主题色彩</div>
+            <p class="card-note">选择一个预设主题色，或自定义主色与辅色。设置会记住在本机。</p>
+            <div class="swatch-row" id="swatchRow"></div>
+            <div class="custom-color">
+              <label class="cc-item"><span>主色</span><input type="color" id="accentPick"></label>
+              <label class="cc-item"><span>辅色</span><input type="color" id="accent2Pick"></label>
+              <label class="cc-item mode"><span>明暗</span>
+                <div class="seg" id="modeSeg">
+                  <button data-mode="dark" class="active">暗色</button>
+                  <button data-mode="light">亮色</button>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>网络代理</div>
+            <p class="card-note">游戏服务器有地区限制，需经代理访问。推荐「跟随系统代理」：像浏览器一样自动使用代理软件（Clash 等）的设置，你只需开关代理软件，无需在这里配置。</p>
+            <div class="proxy-modes" id="proxyModes">
+              <label class="pm-opt"><input type="radio" name="proxyMode" value="system"><span class="pm-box"></span>
+                <span class="pm-txt"><b>跟随系统代理</b><small>自动使用系统/代理软件设置，兼容 Clash 系统代理与 TUN 模式</small></span></label>
+              <label class="pm-opt"><input type="radio" name="proxyMode" value="manual"><span class="pm-box"></span>
+                <span class="pm-txt"><b>手动指定</b><small>代理在其它机器或端口时使用</small></span></label>
+              <label class="pm-opt"><input type="radio" name="proxyMode" value="direct"><span class="pm-box"></span>
+                <span class="pm-txt"><b>直连</b><small>不经代理（仅在已全局翻墙时可用）</small></span></label>
+            </div>
+            <div class="field" id="proxyManualField">
+              <label>代理地址</label>
+              <input id="proxyInput" type="text" placeholder="http://127.0.0.1:7890" autocomplete="off">
+            </div>
+            <button class="btn primary" id="saveProxyBtn">保存代理设置</button>
+            <div id="proxyNotice"></div>
+          </div>
+          <!-- 开发者模式入口：一个没有任何标签/提示/按钮的输入框，输对口令才显出下面
+               的控制台卡片。故意不写 placeholder、不加说明文字。口令在后端校验
+               （backend/config.py DEV_PASSPHRASE），前端不写死。 -->
+          <div class="dev-gate"><input id="devGate" type="text" spellcheck="false"
+                 autocomplete="off" autocapitalize="off"></div>
+          <div class="card" id="devConsoleCard" style="display:none">
+            <div class="card-title"><span class="dot"></span>开发者模式 · 协议控制台</div>
+            <p class="card-note dev-warn">直接向游戏服务器发任意请求，用于抓协议、核对报文。
+              <b>请求会真实生效</b>：买东西真扣货币、卖装备真卖掉，不可撤销。响应原样显示，不做任何解析或写回。</p>
+            <div class="dev-row">
+              <span class="dev-lbl">route</span>
+              <input id="devRoute" type="text" spellcheck="false" autocomplete="off"
+                     placeholder="StoreHandler.ResetRandomStore">
+              <div class="dd dev-preset" id="devPreset"></div>
+            </div>
+            <div class="dev-row col">
+              <span class="dev-lbl">data（JSON，AID / SessionID 自动补）</span>
+              <textarea id="devData" spellcheck="false" rows="6"
+                        placeholder='{"StoreID": "SecretShop", "IsUseGold": 0}'></textarea>
+              <div class="dev-hint" id="devHint"></div>
+            </div>
+            <div class="dev-row">
+              <label class="bt-opt"><input type="checkbox" id="devUseAuth" checked>
+                <span>自动补 AID / SessionID</span></label>
+              <button class="btn primary" id="devSendBtn">发送请求</button>
+              <button class="mini" id="devCopyBtn">复制收发</button>
+            </div>
+            <div class="dev-meta" id="devMeta"></div>
+            <div class="dev-io">
+              <div class="dev-pane">
+                <div class="dev-pane-h">→ 请求</div>
+                <pre class="log" id="devReq"></pre>
+              </div>
+              <div class="dev-pane">
+                <div class="dev-pane-h">← 响应</div>
+                <pre class="log" id="devResp"></pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 关于我们 -->
+        <section class="section" id="section-about">
+          <div class="card about-hero">
+            <div class="about-logo"></div>
+            <h2 class="about-title">关于 <span>LucimaTools · 璐茜玛的深层幻影</span></h2>
+            <p class="about-tagline">原生、轻量、跨平台</p>
+            <!-- 版本号由 app.js 从 /api/config 注入（唯一真源 backend/version.py），勿写死 -->
+            <span class="about-ver" id="aboutVer">v…</span>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>项目简介</div>
+            <p class="about-intro">LucimaTools · 璐茜玛的深层幻影 是一个致力于降低星陨玩家日常肝度的开源项目。我们利用了游戏的底层交互，构建了一套无需 Client 自动执行任务的 Headless 框架。无论你在用哪个平台，LucimaTools 都能提供开箱即用的自动任务，告别繁琐的日常，将更多时间用于研究配队、水群，或者陪伴重要的人~❤</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>信息</div>
+            <div class="about-list">
+              <div class="about-row"><span class="about-k">开发者</span><span class="about-v">巧克力、花崎桜雪</span></div>
+              <div class="about-row"><span class="about-k">GitHub</span><span class="about-v">（即将上线）</span></div>
+              <div class="about-row"><span class="about-k">交流群</span><span class="about-v">1032070842</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>技术栈</div>
+            <div class="tech-tags">
+              <span class="tech-tag">Python</span>
+              <span class="tech-tag">httpx</span>
+              <span class="tech-tag">HTML / CSS / JS</span>
+              <span class="tech-tag">pywebview</span>
+              <span class="tech-tag">PyInstaller</span>
+              <span class="tech-tag">Kotlin</span>
+              <span class="tech-tag">Chaquopy</span>
+              <span class="tech-tag">Android WebView</span>
+              <span class="tech-tag">Playwright</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=76"></script>
+</body>
+</html>
