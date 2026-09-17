@@ -13,6 +13,9 @@ from pathlib import Path
 
 from . import config
 from . import accounts
+from .guild import GuildService
+from .guild_jobs import manager as guild_jobs
+from contextlib import contextmanager
 from .logutil import log
 from .game_client import GameClient, GameError
 from .portal import (
@@ -347,6 +350,56 @@ def _require(account: str | None) -> accounts.Account:
     if not acc:
         raise ApiError(401, "账号未登录或已下线")
     return acc
+
+@contextmanager
+def _guild_account(account):
+    a = _require(account)
+    if not a.lock.acquire(blocking=False):
+        raise ApiError(409, "当前账号正在执行任务，请稍后再试；可随时查看领奖进度或停止")
+    try:
+        if accounts.get(account or "") is not a:
+            raise ApiError(401, "登录会话已变更，请切换到当前账号")
+        yield a
+    finally:
+        a.lock.release()
+
+
+def guild_overview(account):
+    with _guild_account(account) as a:
+        return GuildService(a.client).overview()
+def guild_action(account, action, data=None):
+    data = data or {}
+    with _guild_account(account) as a:
+        g = GuildService(a.client)
+        if action == "checkin": return g.checkin()
+        if action == "attendance": return g.attendance()
+        if action == "search": return g.search(data.get("name", ""))
+        if action == "join": return g.join(data["guildId"])
+        if action == "leave": return g.leave()
+        if action == "aid_request": return g.aid_request(data["itemId"])
+        if action == "aid_support": return g.aid_support(data["itemId"])
+        if action == "buy": return g.buy(data["itemId"], data.get("count", 1))
+    raise ApiError(400, "未知工会操作")
+def guild_quests_query(account):
+    with _guild_account(account) as a:
+        return GuildService(a.client).quest_ids()
+
+
+def guild_quests_start(account, data):
+    a = _require(account)
+    return guild_jobs.start_rewards(a, rounds=data.get("rounds", 30), requestId=data.get("requestId"))
+
+
+def guild_quests_status(account, job_id=None):
+    _require(account)
+    return guild_jobs.status(account, job_id, kind="quest_rewards")
+
+
+def guild_quests_cancel(account, job_id):
+    _require(account)
+    if not job_id:
+        raise ApiError(400, "缺少任务 ID")
+    return guild_jobs.cancel(account, job_id, kind="quest_rewards")
 
 
 # ---------- 端点处理（平台无关） ----------

@@ -99,6 +99,7 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.12"
+        buildPython(System.getenv("LUCIMA_BUILD_PYTHON") ?: "python3.12")
         pip {
             // httpx 及其纯 Python 依赖；游戏协议客户端用它走代理
             install("httpx")

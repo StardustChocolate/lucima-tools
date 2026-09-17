@@ -343,14 +343,19 @@ def all_accounts() -> list[Account]:
 
 
 def add(email: str, client: GameClient, portal: dict | None) -> Account:
-    """登录成功后登记账号；若同 email 已在线，先关掉旧的再替换。"""
+    """登记新会话，再在注册锁外关闭被替换的旧会话。"""
+    # Account 初始化会读取配置，不需要占用注册表锁。
+    acc = Account(email, client, portal)
     with _reg_lock:
         old = _accounts.get(email)
-        if old:
-            old.close()
-        acc = Account(email, client, portal)
         _accounts[email] = acc
-    acc.start_scheduler()
+        # start_scheduler 只更新事件并启动线程，不获取 acc.lock。与登记放在同一
+        # 临界区，避免 remove 已关闭账号后，本线程才迟到地重新启动调度器。
+        acc.start_scheduler()
+    # close 会等待旧账号的 lock。持有旧账号锁的任务可能正在 accounts.get，
+    # 所以此处绝不能再持有 _reg_lock，否则重登与后台任务会互相等待。
+    if old:
+        old.close()
     return acc
 
 

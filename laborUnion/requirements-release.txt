@@ -1,0 +1,2 @@
+# Release-workstation dependency only. It is not bundled into the application.
+cryptography==48.0.0

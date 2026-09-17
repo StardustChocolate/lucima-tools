@@ -1,0 +1,3104 @@
+{
+ "E0896": {
+  "level": 85,
+  "name": "Goldhoarder's Heels",
+  "slot": "boots",
+  "img": "assets/img/equip/E0896.png"
+ },
+ "E0766": {
+  "level": 85,
+  "name": "Boots of Eternal Stars",
+  "slot": "boots",
+  "img": "assets/img/equip/E0766.png"
+ },
+ "E0454": {
+  "level": 78,
+  "name": "Kitty Companion",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0454.png"
+ },
+ "E0332": {
+  "level": 70,
+  "name": "灿烂晶石钢盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0332.png"
+ },
+ "E0074": {
+  "level": 41,
+  "name": "烈焰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0074.png"
+ },
+ "E1083": {
+  "level": 85,
+  "name": "Summer Blossom Veil",
+  "slot": "armor",
+  "img": "assets/img/equip/E1083.png"
+ },
+ "E0726": {
+  "level": 85,
+  "name": "Reincarnated Merciful Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0726.png"
+ },
+ "E0152": {
+  "level": 70,
+  "name": "天然晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0152.png"
+ },
+ "E0081": {
+  "level": 55,
+  "name": "烈焰晶石爪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0081.png"
+ },
+ "E1002": {
+  "level": 85,
+  "name": "Kitty Earrings",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1002.png"
+ },
+ "E1045": {
+  "level": 85,
+  "name": "Weaver's Nail Polish",
+  "slot": "ring",
+  "img": "assets/img/equip/E1045.png"
+ },
+ "E0866": {
+  "level": 85,
+  "name": "Seafoam Waltz",
+  "slot": "boots",
+  "img": "assets/img/equip/E0866.png"
+ },
+ "E0716": {
+  "level": 85,
+  "name": "Reincarnated Inferno Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0716.png"
+ },
+ "E0942": {
+  "level": 85,
+  "name": "Cheerleader's Sparkle",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0942.png"
+ },
+ "E0436": {
+  "level": 78,
+  "name": "Dancing Lion Mask",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0436.png"
+ },
+ "E1086": {
+  "level": 85,
+  "name": "Summer Blossom Path",
+  "slot": "boots",
+  "img": "assets/img/equip/E1086.png"
+ },
+ "E0316": {
+  "level": 41,
+  "name": "灿烂晶石钢靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0316.png"
+ },
+ "E1073": {
+  "level": 85,
+  "name": "Ephemeral Veil",
+  "slot": "armor",
+  "img": "assets/img/equip/E1073.png"
+ },
+ "E0440": {
+  "level": 78,
+  "name": "Scarlet Shooter U-DX",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0440.png"
+ },
+ "E0782": {
+  "level": 85,
+  "name": "Blooming Peony Hairband",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0782.png"
+ },
+ "E0458": {
+  "level": 78,
+  "name": "Hyperspace Wings",
+  "slot": "armor",
+  "img": "assets/img/equip/E0458.png"
+ },
+ "E0254": {
+  "level": 41,
+  "name": "幽暗晶石耳饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0254.png"
+ },
+ "E0193": {
+  "level": 41,
+  "name": "寒冰晶石护胸",
+  "slot": "armor",
+  "img": "assets/img/equip/E0193.png"
+ },
+ "E0203": {
+  "level": 55,
+  "name": "寒冰晶石护胸",
+  "slot": "armor",
+  "img": "assets/img/equip/E0203.png"
+ },
+ "E0304": {
+  "level": 27,
+  "name": "灿烂晶石徽章",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0304.png"
+ },
+ "E2026": {
+  "level": 85,
+  "name": "Insightful Gladiator's Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E2026.png"
+ },
+ "E0450": {
+  "level": 78,
+  "name": "Frostbite Kunai",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0450.png"
+ },
+ "E0983": {
+  "level": 85,
+  "name": "Coat of Remembrance",
+  "slot": "armor",
+  "img": "assets/img/equip/E0983.png"
+ },
+ "E1005": {
+  "level": 85,
+  "name": "Kitty Bracelet",
+  "slot": "ring",
+  "img": "assets/img/equip/E1005.png"
+ },
+ "E0213": {
+  "level": 70,
+  "name": "寒冰晶石护胸",
+  "slot": "armor",
+  "img": "assets/img/equip/E0213.png"
+ },
+ "E0743": {
+  "level": 85,
+  "name": "Reincarnated Armor of Desire",
+  "slot": "armor",
+  "img": "assets/img/equip/E0743.png"
+ },
+ "E0392": {
+  "level": 85,
+  "name": "Chaos Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0392.png"
+ },
+ "E0505": {
+  "level": 85,
+  "name": "2.5 Anniversary Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0505.png"
+ },
+ "E0972": {
+  "level": 85,
+  "name": "Veil of the Devout",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0972.png"
+ },
+ "E0285": {
+  "level": 85,
+  "name": "幽暗晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0285.png"
+ },
+ "E0101": {
+  "level": 85,
+  "name": "烈焰晶石爪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0101.png"
+ },
+ "E0415": {
+  "level": 75,
+  "name": "Guardian Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0415.png"
+ },
+ "E0955": {
+  "level": 85,
+  "name": "Flourishing Neckerchief",
+  "slot": "ring",
+  "img": "assets/img/equip/E0955.png"
+ },
+ "E1006": {
+  "level": 85,
+  "name": "Kitty Sandals",
+  "slot": "boots",
+  "img": "assets/img/equip/E1006.png"
+ },
+ "E0975": {
+  "level": 85,
+  "name": "Consecration of the Devout",
+  "slot": "ring",
+  "img": "assets/img/equip/E0975.png"
+ },
+ "E0131": {
+  "level": 41,
+  "name": "天然晶石剑刃",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0131.png"
+ },
+ "E0342": {
+  "level": 85,
+  "name": "灿烂晶石钢盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0342.png"
+ },
+ "E0292": {
+  "level": 90,
+  "name": "幽暗晶石护目镜(异变)",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0292.png"
+ },
+ "E0113": {
+  "level": 90,
+  "name": "烈焰晶石护甲(异变)",
+  "slot": "armor",
+  "img": "assets/img/equip/E0113.png"
+ },
+ "E0856": {
+  "level": 85,
+  "name": "Tropical Stroll",
+  "slot": "boots",
+  "img": "assets/img/equip/E0856.png"
+ },
+ "E0841": {
+  "level": 85,
+  "name": "Dreamlight Beacon",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0841.png"
+ },
+ "E0991": {
+  "level": 85,
+  "name": "Stylish Handbag",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0991.png"
+ },
+ "E0785": {
+  "level": 85,
+  "name": "Blooming Peony Hairband (Ring)",
+  "slot": "ring",
+  "img": "assets/img/equip/E0785.png"
+ },
+ "E0449": {
+  "level": 78,
+  "name": "Simple Plant Pot",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0449.png"
+ },
+ "E0863": {
+  "level": 85,
+  "name": "Seafoam Swimsuit",
+  "slot": "armor",
+  "img": "assets/img/equip/E0863.png"
+ },
+ "E0966": {
+  "level": 85,
+  "name": "Starfire Anthem: Journey",
+  "slot": "boots",
+  "img": "assets/img/equip/E0966.png"
+ },
+ "E0963": {
+  "level": 85,
+  "name": "Starfire Anthem: Embrace",
+  "slot": "armor",
+  "img": "assets/img/equip/E0963.png"
+ },
+ "E0324": {
+  "level": 55,
+  "name": "灿烂晶石徽章",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0324.png"
+ },
+ "E0322": {
+  "level": 55,
+  "name": "灿烂晶石钢盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0322.png"
+ },
+ "E0211": {
+  "level": 70,
+  "name": "寒冰晶石长枪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0211.png"
+ },
+ "E0721": {
+  "level": 85,
+  "name": "Reincarnated Merciful Axe",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0721.png"
+ },
+ "E2005": {
+  "level": 85,
+  "name": "Compassionate Gladiator's Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E2005.png"
+ },
+ "E0083": {
+  "level": 55,
+  "name": "烈焰晶石护甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0083.png"
+ },
+ "E0775": {
+  "level": 85,
+  "name": "Firework Expert Gloves",
+  "slot": "ring",
+  "img": "assets/img/equip/E0775.png"
+ },
+ "E0263": {
+  "level": 55,
+  "name": "幽暗晶石重甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0263.png"
+ },
+ "E0046": {
+  "level": 44,
+  "name": "Tactical Leather Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0046.png"
+ },
+ "E0433": {
+  "level": 78,
+  "name": "Super Alloy Frost Blaster DX",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0433.png"
+ },
+ "E0076": {
+  "level": 41,
+  "name": "烈焰晶石长靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0076.png"
+ },
+ "E0156": {
+  "level": 70,
+  "name": "天然晶石靴子",
+  "slot": "boots",
+  "img": "assets/img/equip/E0156.png"
+ },
+ "E0416": {
+  "level": 75,
+  "name": "Guardian Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0416.png"
+ },
+ "E1084": {
+  "level": 85,
+  "name": "Summer Blossom Tear",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1084.png"
+ },
+ "E0895": {
+  "level": 85,
+  "name": "Goldhoarder's Gloves",
+  "slot": "ring",
+  "img": "assets/img/equip/E0895.png"
+ },
+ "E0043": {
+  "level": 44,
+  "name": "Tactical Heavy Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0043.png"
+ },
+ "E0154": {
+  "level": 70,
+  "name": "天然晶石挂饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0154.png"
+ },
+ "E0754": {
+  "level": 85,
+  "name": "Reincarnated Ursine Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0754.png"
+ },
+ "E1021": {
+  "level": 85,
+  "name": "Bottoms Up!",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1021.png"
+ },
+ "E0026": {
+  "level": 15,
+  "name": "Defender's Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0026.png"
+ },
+ "E4002": {
+  "level": 85,
+  "name": "Hidden Spring Accessory",
+  "slot": "helmet",
+  "img": "assets/img/equip/E4002.png"
+ },
+ "E0084": {
+  "level": 55,
+  "name": "烈焰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0084.png"
+ },
+ "E0893": {
+  "level": 85,
+  "name": "Goldhoarder's Dress",
+  "slot": "armor",
+  "img": "assets/img/equip/E0893.png"
+ },
+ "E0842": {
+  "level": 85,
+  "name": "Dreamlight Vision",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0842.png"
+ },
+ "E0124": {
+  "level": 27,
+  "name": "天然晶石挂饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0124.png"
+ },
+ "E2006": {
+  "level": 85,
+  "name": "Compassionate Gladiator's Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E2006.png"
+ },
+ "E0056": {
+  "level": 51,
+  "name": "Electromagnetic Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0056.png"
+ },
+ "E1026": {
+  "level": 85,
+  "name": "Drinker's High Heels",
+  "slot": "boots",
+  "img": "assets/img/equip/E1026.png"
+ },
+ "E0253": {
+  "level": 41,
+  "name": "幽暗晶石重甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0253.png"
+ },
+ "E0915": {
+  "level": 85,
+  "name": "Oathbound Promise",
+  "slot": "ring",
+  "img": "assets/img/equip/E0915.png"
+ },
+ "E0441": {
+  "level": 78,
+  "name": "Summer Ribbon",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0441.png"
+ },
+ "E1041": {
+  "level": 85,
+  "name": "Nexus of Fate",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1041.png"
+ },
+ "E0460": {
+  "level": 78,
+  "name": "Lunar Coral",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0460.png"
+ },
+ "E0411": {
+  "level": 75,
+  "name": "Guardian Hammer",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0411.png"
+ },
+ "E0224": {
+  "level": 85,
+  "name": "寒冰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0224.png"
+ },
+ "E0311": {
+  "level": 41,
+  "name": "灿烂晶石枪炮",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0311.png"
+ },
+ "E0295": {
+  "level": 90,
+  "name": "幽暗晶石戒指(异变)",
+  "slot": "ring",
+  "img": "assets/img/equip/E0295.png"
+ },
+ "E0133": {
+  "level": 41,
+  "name": "天然晶石铠甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0133.png"
+ },
+ "E0314": {
+  "level": 41,
+  "name": "灿烂晶石徽章",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0314.png"
+ },
+ "E0805": {
+  "level": 85,
+  "name": "Traveler's Vow",
+  "slot": "ring",
+  "img": "assets/img/equip/E0805.png"
+ },
+ "E0343": {
+  "level": 85,
+  "name": "灿烂晶石钢甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0343.png"
+ },
+ "E0135": {
+  "level": 41,
+  "name": "天然晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0135.png"
+ },
+ "E1034": {
+  "level": 85,
+  "name": "Mechanic's Neck Guard",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1034.png"
+ },
+ "E0112": {
+  "level": 90,
+  "name": "烈焰晶石头盔(异变)",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0112.png"
+ },
+ "E0225": {
+  "level": 85,
+  "name": "寒冰晶石手环",
+  "slot": "ring",
+  "img": "assets/img/equip/E0225.png"
+ },
+ "E0111": {
+  "level": 90,
+  "name": "烈焰晶石爪(异变)",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0111.png"
+ },
+ "E0301": {
+  "level": 27,
+  "name": "灿烂晶石枪炮",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0301.png"
+ },
+ "E0033": {
+  "level": 30,
+  "name": "Mercenary's Combat Robe",
+  "slot": "armor",
+  "img": "assets/img/equip/E0033.png"
+ },
+ "E0016": {
+  "level": 1,
+  "name": "Lightweight Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0016.png"
+ },
+ "E0834": {
+  "level": 85,
+  "name": "Gazer's Pursuit",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0834.png"
+ },
+ "E0141": {
+  "level": 55,
+  "name": "天然晶石剑刃",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0141.png"
+ },
+ "E0022": {
+  "level": 15,
+  "name": "Defender's Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0022.png"
+ },
+ "E1015": {
+  "level": 85,
+  "name": "Merrymaker's Glory",
+  "slot": "ring",
+  "img": "assets/img/equip/E1015.png"
+ },
+ "E0235": {
+  "level": 90,
+  "name": "寒冰晶石手环(异变)",
+  "slot": "ring",
+  "img": "assets/img/equip/E0235.png"
+ },
+ "E0911": {
+  "level": 85,
+  "name": "Voiceless Vow",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0911.png"
+ },
+ "E0075": {
+  "level": 41,
+  "name": "烈焰晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0075.png"
+ },
+ "E0936": {
+  "level": 85,
+  "name": "Rascal's Trail",
+  "slot": "boots",
+  "img": "assets/img/equip/E0936.png"
+ },
+ "E0784": {
+  "level": 85,
+  "name": "Blooming Peony Pendant",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0784.png"
+ },
+ "E0941": {
+  "level": 85,
+  "name": "Cheering for You",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0941.png"
+ },
+ "E0964": {
+  "level": 85,
+  "name": "Starfire Anthem: Soul",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0964.png"
+ },
+ "E0202": {
+  "level": 55,
+  "name": "寒冰晶石面罩",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0202.png"
+ },
+ "E0326": {
+  "level": 55,
+  "name": "灿烂晶石钢靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0326.png"
+ },
+ "E1033": {
+  "level": 85,
+  "name": "Mechanic's Attire",
+  "slot": "armor",
+  "img": "assets/img/equip/E1033.png"
+ },
+ "E0833": {
+  "level": 85,
+  "name": "Gazer's Robe",
+  "slot": "armor",
+  "img": "assets/img/equip/E0833.png"
+ },
+ "E0136": {
+  "level": 41,
+  "name": "天然晶石靴子",
+  "slot": "boots",
+  "img": "assets/img/equip/E0136.png"
+ },
+ "E0196": {
+  "level": 41,
+  "name": "寒冰晶石短靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0196.png"
+ },
+ "E2012": {
+  "level": 85,
+  "name": "Competitive Gladiator's Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E2012.png"
+ },
+ "E0164": {
+  "level": 85,
+  "name": "天然晶石挂饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0164.png"
+ },
+ "E0904": {
+  "level": 85,
+  "name": "Redeemer's Confession",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0904.png"
+ },
+ "E0425": {
+  "level": 78,
+  "name": "Anastasia's Eyepatch",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0425.png"
+ },
+ "E0783": {
+  "level": 85,
+  "name": "Blooming Peony Robe",
+  "slot": "armor",
+  "img": "assets/img/equip/E0783.png"
+ },
+ "E0806": {
+  "level": 85,
+  "name": "Traveler's Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0806.png"
+ },
+ "E1085": {
+  "level": 85,
+  "name": "Summer Blossom Vow",
+  "slot": "ring",
+  "img": "assets/img/equip/E1085.png"
+ },
+ "E0105": {
+  "level": 85,
+  "name": "烈焰晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0105.png"
+ },
+ "E0974": {
+  "level": 85,
+  "name": "Beacon of the Devout",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0974.png"
+ },
+ "E0913": {
+  "level": 85,
+  "name": "Oathbound Mantle",
+  "slot": "armor",
+  "img": "assets/img/equip/E0913.png"
+ },
+ "E0071": {
+  "level": 41,
+  "name": "烈焰晶石爪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0071.png"
+ },
+ "E0103": {
+  "level": 85,
+  "name": "烈焰晶石护甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0103.png"
+ },
+ "E0995": {
+  "level": 85,
+  "name": "Lady's Timid Charm",
+  "slot": "ring",
+  "img": "assets/img/equip/E0995.png"
+ },
+ "E0233": {
+  "level": 90,
+  "name": "寒冰晶石护胸(异变)",
+  "slot": "armor",
+  "img": "assets/img/equip/E0233.png"
+ },
+ "E0803": {
+  "level": 85,
+  "name": "Traveler's Cape",
+  "slot": "armor",
+  "img": "assets/img/equip/E0803.png"
+ },
+ "E1011": {
+  "level": 85,
+  "name": "Kaboom!",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1011.png"
+ },
+ "E0273": {
+  "level": 70,
+  "name": "幽暗晶石重甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0273.png"
+ },
+ "E0996": {
+  "level": 85,
+  "name": "Lady's Gracious Stroll",
+  "slot": "boots",
+  "img": "assets/img/equip/E0996.png"
+ },
+ "E4003": {
+  "level": 85,
+  "name": "Hidden Spring Yukata",
+  "slot": "armor",
+  "img": "assets/img/equip/E4003.png"
+ },
+ "E0742": {
+  "level": 85,
+  "name": "Reincarnated Helmet of Desire",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0742.png"
+ },
+ "E4001": {
+  "level": 85,
+  "name": "Cozy Haven",
+  "slot": "weapon",
+  "img": "assets/img/equip/E4001.png"
+ },
+ "E0283": {
+  "level": 85,
+  "name": "幽暗晶石重甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0283.png"
+ },
+ "E0023": {
+  "level": 15,
+  "name": "Defender's Jacket",
+  "slot": "armor",
+  "img": "assets/img/equip/E0023.png"
+ },
+ "E0194": {
+  "level": 41,
+  "name": "寒冰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0194.png"
+ },
+ "E0145": {
+  "level": 55,
+  "name": "天然晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0145.png"
+ },
+ "E1032": {
+  "level": 85,
+  "name": "Mechanic's Goggles",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1032.png"
+ },
+ "E0095": {
+  "level": 70,
+  "name": "烈焰晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0095.png"
+ },
+ "E0985": {
+  "level": 85,
+  "name": "Gloves of Remembrance",
+  "slot": "ring",
+  "img": "assets/img/equip/E0985.png"
+ },
+ "E4014": {
+  "level": 85,
+  "name": "Promise of Salvation",
+  "slot": "necklace",
+  "img": "assets/img/equip/E4014.png"
+ },
+ "E0296": {
+  "level": 90,
+  "name": "幽暗晶石护膝(异变)",
+  "slot": "boots",
+  "img": "assets/img/equip/E0296.png"
+ },
+ "E0041": {
+  "level": 44,
+  "name": "Tactical Energy Rifle",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0041.png"
+ },
+ "E2003": {
+  "level": 85,
+  "name": "Compassionate Gladiator's Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E2003.png"
+ },
+ "E0933": {
+  "level": 85,
+  "name": "Rascal's Getup",
+  "slot": "armor",
+  "img": "assets/img/equip/E0933.png"
+ },
+ "E0312": {
+  "level": 41,
+  "name": "灿烂晶石钢盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0312.png"
+ },
+ "E0731": {
+  "level": 85,
+  "name": "Reincarnated Lion King's Greatsword",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0731.png"
+ },
+ "E0845": {
+  "level": 85,
+  "name": "Dreamlight Emblem",
+  "slot": "ring",
+  "img": "assets/img/equip/E0845.png"
+ },
+ "E2002": {
+  "level": 85,
+  "name": "Compassionate Gladiator's Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E2002.png"
+ },
+ "E0872": {
+  "level": 85,
+  "name": "Specter's Gaze",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0872.png"
+ },
+ "E0746": {
+  "level": 85,
+  "name": "Reincarnated Boots of Desire",
+  "slot": "boots",
+  "img": "assets/img/equip/E0746.png"
+ },
+ "E0452": {
+  "level": 78,
+  "name": "Stylish Shades",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0452.png"
+ },
+ "E0501": {
+  "level": 85,
+  "name": "1st Anniversary Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0501.png"
+ },
+ "E0303": {
+  "level": 27,
+  "name": "灿烂晶石钢甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0303.png"
+ },
+ "E0191": {
+  "level": 41,
+  "name": "寒冰晶石长枪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0191.png"
+ },
+ "E0953": {
+  "level": 85,
+  "name": "Flourishing Gardener's Garb",
+  "slot": "armor",
+  "img": "assets/img/equip/E0953.png"
+ },
+ "E1081": {
+  "level": 85,
+  "name": "Floral Whispers",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1081.png"
+ },
+ "E0903": {
+  "level": 85,
+  "name": "Redeemer's Mantle",
+  "slot": "armor",
+  "img": "assets/img/equip/E0903.png"
+ },
+ "E0931": {
+  "level": 85,
+  "name": "Rascal's Talisman",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0931.png"
+ },
+ "E0274": {
+  "level": 70,
+  "name": "幽暗晶石耳饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0274.png"
+ },
+ "E0166": {
+  "level": 85,
+  "name": "天然晶石靴子",
+  "slot": "boots",
+  "img": "assets/img/equip/E0166.png"
+ },
+ "E0992": {
+  "level": 85,
+  "name": "Lady's Visage",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0992.png"
+ },
+ "E0102": {
+  "level": 85,
+  "name": "烈焰晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0102.png"
+ },
+ "E0186": {
+  "level": 27,
+  "name": "寒冰晶石短靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0186.png"
+ },
+ "E0954": {
+  "level": 85,
+  "name": "Flourishing Vista",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0954.png"
+ },
+ "E1023": {
+  "level": 85,
+  "name": "Drinker's Outfit",
+  "slot": "armor",
+  "img": "assets/img/equip/E1023.png"
+ },
+ "E0853": {
+  "level": 85,
+  "name": "Tropical Sailor Uniform",
+  "slot": "armor",
+  "img": "assets/img/equip/E0853.png"
+ },
+ "E0835": {
+  "level": 85,
+  "name": "Gazer's Attendant",
+  "slot": "ring",
+  "img": "assets/img/equip/E0835.png"
+ },
+ "E0223": {
+  "level": 85,
+  "name": "寒冰晶石护胸",
+  "slot": "armor",
+  "img": "assets/img/equip/E0223.png"
+ },
+ "E0276": {
+  "level": 70,
+  "name": "幽暗晶石护膝",
+  "slot": "boots",
+  "img": "assets/img/equip/E0276.png"
+ },
+ "E4006": {
+  "level": 85,
+  "name": "Hidden Spring Geta",
+  "slot": "boots",
+  "img": "assets/img/equip/E4006.png"
+ },
+ "E0761": {
+  "level": 85,
+  "name": "Eternal Stars",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0761.png"
+ },
+ "E0864": {
+  "level": 85,
+  "name": "Seafoam Gleam",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0864.png"
+ },
+ "E0336": {
+  "level": 70,
+  "name": "灿烂晶石钢靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0336.png"
+ },
+ "E0802": {
+  "level": 85,
+  "name": "Traveler's Cap",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0802.png"
+ },
+ "E0205": {
+  "level": 55,
+  "name": "寒冰晶石手环",
+  "slot": "ring",
+  "img": "assets/img/equip/E0205.png"
+ },
+ "E0843": {
+  "level": 85,
+  "name": "Dreamlight Coat",
+  "slot": "armor",
+  "img": "assets/img/equip/E0843.png"
+ },
+ "E0151": {
+  "level": 70,
+  "name": "天然晶石剑刃",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0151.png"
+ },
+ "E0053": {
+  "level": 51,
+  "name": "Electromagnetic Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0053.png"
+ },
+ "E0072": {
+  "level": 41,
+  "name": "烈焰晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0072.png"
+ },
+ "E0438": {
+  "level": 78,
+  "name": "Blissful Union",
+  "slot": "armor",
+  "img": "assets/img/equip/E0438.png"
+ },
+ "E0994": {
+  "level": 85,
+  "name": "Lady's Demeanor",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0994.png"
+ },
+ "E0765": {
+  "level": 85,
+  "name": "Chime of Eternal Stars",
+  "slot": "ring",
+  "img": "assets/img/equip/E0765.png"
+ },
+ "E0064": {
+  "level": 27,
+  "name": "烈焰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0064.png"
+ },
+ "E0946": {
+  "level": 85,
+  "name": "Cheerleader's Dance",
+  "slot": "boots",
+  "img": "assets/img/equip/E0946.png"
+ },
+ "E0032": {
+  "level": 30,
+  "name": "Mercenary's Combat Helm",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0032.png"
+ },
+ "E0281": {
+  "level": 85,
+  "name": "幽暗晶石战斧",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0281.png"
+ },
+ "E0702": {
+  "level": 85,
+  "name": "Reincarnated Wavebreaker Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0702.png"
+ },
+ "E2015": {
+  "level": 85,
+  "name": "Competitive Gladiator's Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E2015.png"
+ },
+ "E0036": {
+  "level": 30,
+  "name": "Mercenary's Combat Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0036.png"
+ },
+ "E0892": {
+  "level": 85,
+  "name": "Goldhoarder's Glory",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0892.png"
+ },
+ "E0356": {
+  "level": 90,
+  "name": "灿烂晶石钢靴(异变)",
+  "slot": "boots",
+  "img": "assets/img/equip/E0356.png"
+ },
+ "E0406": {
+  "level": 75,
+  "name": "Survivor Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0406.png"
+ },
+ "E0394": {
+  "level": 85,
+  "name": "Chaos Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0394.png"
+ },
+ "E0715": {
+  "level": 85,
+  "name": "Reincarnated Inferno Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0715.png"
+ },
+ "E0446": {
+  "level": 78,
+  "name": "Weight of the World (Helmet)",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0446.png"
+ },
+ "E0153": {
+  "level": 70,
+  "name": "天然晶石铠甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0153.png"
+ },
+ "E2025": {
+  "level": 85,
+  "name": "Insightful Gladiator's Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E2025.png"
+ },
+ "E0855": {
+  "level": 85,
+  "name": "Tropical Healing",
+  "slot": "ring",
+  "img": "assets/img/equip/E0855.png"
+ },
+ "E1071": {
+  "level": 85,
+  "name": "Siren's Song",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1071.png"
+ },
+ "E2022": {
+  "level": 85,
+  "name": "Insightful Gladiator's Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E2022.png"
+ },
+ "E0836": {
+  "level": 85,
+  "name": "Gazer's Foundation",
+  "slot": "boots",
+  "img": "assets/img/equip/E0836.png"
+ },
+ "E0126": {
+  "level": 27,
+  "name": "天然晶石靴子",
+  "slot": "boots",
+  "img": "assets/img/equip/E0126.png"
+ },
+ "E1004": {
+  "level": 85,
+  "name": "Kitty Bell",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1004.png"
+ },
+ "E0261": {
+  "level": 55,
+  "name": "幽暗晶石战斧",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0261.png"
+ },
+ "E0165": {
+  "level": 85,
+  "name": "天然晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0165.png"
+ },
+ "E0502": {
+  "level": 85,
+  "name": "1.5 Anniversary Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0502.png"
+ },
+ "E0183": {
+  "level": 27,
+  "name": "寒冰晶石护胸",
+  "slot": "armor",
+  "img": "assets/img/equip/E0183.png"
+ },
+ "E1055": {
+  "level": 85,
+  "name": "Stylist's Palette",
+  "slot": "ring",
+  "img": "assets/img/equip/E1055.png"
+ },
+ "E0793": {
+  "level": 85,
+  "name": "New Year's Blanket",
+  "slot": "armor",
+  "img": "assets/img/equip/E0793.png"
+ },
+ "E1043": {
+  "level": 85,
+  "name": "Weaver's Tactical Suit",
+  "slot": "armor",
+  "img": "assets/img/equip/E1043.png"
+ },
+ "E0873": {
+  "level": 85,
+  "name": "Specter's Disguise",
+  "slot": "armor",
+  "img": "assets/img/equip/E0873.png"
+ },
+ "E0275": {
+  "level": 70,
+  "name": "幽暗晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0275.png"
+ },
+ "E0993": {
+  "level": 85,
+  "name": "Lady's Date Attire",
+  "slot": "armor",
+  "img": "assets/img/equip/E0993.png"
+ },
+ "E0313": {
+  "level": 41,
+  "name": "灿烂晶石钢甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0313.png"
+ },
+ "E0264": {
+  "level": 55,
+  "name": "幽暗晶石耳饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0264.png"
+ },
+ "E0503": {
+  "level": 85,
+  "name": "RTA 2025 S1 Commemorative Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0503.png"
+ },
+ "E0736": {
+  "level": 85,
+  "name": "Reincarnated Lion King's Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0736.png"
+ },
+ "E0424": {
+  "level": 78,
+  "name": "Succubus Attire",
+  "slot": "armor",
+  "img": "assets/img/equip/E0424.png"
+ },
+ "E0221": {
+  "level": 85,
+  "name": "寒冰晶石长枪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0221.png"
+ },
+ "E0982": {
+  "level": 85,
+  "name": "Hat of Remembrance",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0982.png"
+ },
+ "E0791": {
+  "level": 85,
+  "name": "Lucky Money",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0791.png"
+ },
+ "E0796": {
+  "level": 85,
+  "name": "New Year's Socks",
+  "slot": "boots",
+  "img": "assets/img/equip/E0796.png"
+ },
+ "E0333": {
+  "level": 70,
+  "name": "灿烂晶石钢甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0333.png"
+ },
+ "E0266": {
+  "level": 55,
+  "name": "幽暗晶石护膝",
+  "slot": "boots",
+  "img": "assets/img/equip/E0266.png"
+ },
+ "E1024": {
+  "level": 85,
+  "name": "Drinker's Necktie",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1024.png"
+ },
+ "E0344": {
+  "level": 85,
+  "name": "灿烂晶石徽章",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0344.png"
+ },
+ "E1053": {
+  "level": 85,
+  "name": "Stylist's Apron",
+  "slot": "armor",
+  "img": "assets/img/equip/E1053.png"
+ },
+ "E0222": {
+  "level": 85,
+  "name": "寒冰晶石面罩",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0222.png"
+ },
+ "E0212": {
+  "level": 70,
+  "name": "寒冰晶石面罩",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0212.png"
+ },
+ "E0291": {
+  "level": 90,
+  "name": "幽暗晶石战斧(异变)",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0291.png"
+ },
+ "E0331": {
+  "level": 70,
+  "name": "灿烂晶石枪炮",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0331.png"
+ },
+ "E0256": {
+  "level": 41,
+  "name": "幽暗晶石护膝",
+  "slot": "boots",
+  "img": "assets/img/equip/E0256.png"
+ },
+ "E0284": {
+  "level": 85,
+  "name": "幽暗晶石耳饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0284.png"
+ },
+ "E0173": {
+  "level": 90,
+  "name": "天然晶石铠甲(异变)",
+  "slot": "armor",
+  "img": "assets/img/equip/E0173.png"
+ },
+ "E0125": {
+  "level": 27,
+  "name": "天然晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0125.png"
+ },
+ "E0174": {
+  "level": 90,
+  "name": "天然晶石挂饰(异变)",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0174.png"
+ },
+ "E0245": {
+  "level": 27,
+  "name": "幽暗晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0245.png"
+ },
+ "E0286": {
+  "level": 85,
+  "name": "幽暗晶石护膝",
+  "slot": "boots",
+  "img": "assets/img/equip/E0286.png"
+ },
+ "E0232": {
+  "level": 90,
+  "name": "寒冰晶石面罩(异变)",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0232.png"
+ },
+ "E0085": {
+  "level": 55,
+  "name": "烈焰晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0085.png"
+ },
+ "E0243": {
+  "level": 27,
+  "name": "幽暗晶石重甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0243.png"
+ },
+ "E0236": {
+  "level": 90,
+  "name": "寒冰晶石短靴(异变)",
+  "slot": "boots",
+  "img": "assets/img/equip/E0236.png"
+ },
+ "E0973": {
+  "level": 85,
+  "name": "Sanctuary of the Devout",
+  "slot": "armor",
+  "img": "assets/img/equip/E0973.png"
+ },
+ "E0427": {
+  "level": 78,
+  "name": "Fashionable Sunglasses",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0427.png"
+ },
+ "E0013": {
+  "level": 1,
+  "name": "Lightweight Jacket",
+  "slot": "armor",
+  "img": "assets/img/equip/E0013.png"
+ },
+ "E0181": {
+  "level": 27,
+  "name": "寒冰晶石长枪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0181.png"
+ },
+ "E0455": {
+  "level": 78,
+  "name": "Signature Jacket",
+  "slot": "armor",
+  "img": "assets/img/equip/E0455.png"
+ },
+ "E1025": {
+  "level": 85,
+  "name": "Drinker's Black Gloves",
+  "slot": "ring",
+  "img": "assets/img/equip/E1025.png"
+ },
+ "E0163": {
+  "level": 85,
+  "name": "天然晶石铠甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0163.png"
+ },
+ "E0951": {
+  "level": 85,
+  "name": "Flourishing Spring",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0951.png"
+ },
+ "E0393": {
+  "level": 85,
+  "name": "Chaos Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0393.png"
+ },
+ "E1075": {
+  "level": 85,
+  "name": "Ephemeral Bloom",
+  "slot": "ring",
+  "img": "assets/img/equip/E1075.png"
+ },
+ "E0437": {
+  "level": 78,
+  "name": "Snowy Bunny",
+  "slot": "armor",
+  "img": "assets/img/equip/E0437.png"
+ },
+ "E0901": {
+  "level": 85,
+  "name": "Maiden's Heart",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0901.png"
+ },
+ "E0226": {
+  "level": 85,
+  "name": "寒冰晶石短靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0226.png"
+ },
+ "E1003": {
+  "level": 85,
+  "name": "Kitty Sailor Uniform",
+  "slot": "armor",
+  "img": "assets/img/equip/E1003.png"
+ },
+ "E0302": {
+  "level": 27,
+  "name": "灿烂晶石钢盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0302.png"
+ },
+ "E0902": {
+  "level": 85,
+  "name": "Redeemer's Mischief",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0902.png"
+ },
+ "E0442": {
+  "level": 78,
+  "name": "Specter's Ribbon",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0442.png"
+ },
+ "E0094": {
+  "level": 70,
+  "name": "烈焰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0094.png"
+ },
+ "E0244": {
+  "level": 27,
+  "name": "幽暗晶石耳饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0244.png"
+ },
+ "E0854": {
+  "level": 85,
+  "name": "Tropical Promise",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0854.png"
+ },
+ "E2024": {
+  "level": 85,
+  "name": "Insightful Gladiator's Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E2024.png"
+ },
+ "E0504": {
+  "level": 85,
+  "name": "2nd Anniversary Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0504.png"
+ },
+ "E0774": {
+  "level": 85,
+  "name": "Firework Expert Talisman",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0774.png"
+ },
+ "E0751": {
+  "level": 85,
+  "name": "Reincarnated Ursine Gauntlets",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0751.png"
+ },
+ "E0804": {
+  "level": 85,
+  "name": "Traveler's Memory Pendant",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0804.png"
+ },
+ "E0172": {
+  "level": 90,
+  "name": "天然晶石头盔(异变)",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0172.png"
+ },
+ "E0093": {
+  "level": 70,
+  "name": "烈焰晶石护甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0093.png"
+ },
+ "E0912": {
+  "level": 85,
+  "name": "Oathbound Crown",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0912.png"
+ },
+ "E0092": {
+  "level": 70,
+  "name": "烈焰晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0092.png"
+ },
+ "E0986": {
+  "level": 85,
+  "name": "Boots of Remembrance",
+  "slot": "boots",
+  "img": "assets/img/equip/E0986.png"
+ },
+ "E0305": {
+  "level": 27,
+  "name": "灿烂晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0305.png"
+ },
+ "E0162": {
+  "level": 85,
+  "name": "天然晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0162.png"
+ },
+ "E0412": {
+  "level": 75,
+  "name": "Guardian Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0412.png"
+ },
+ "E0413": {
+  "level": 75,
+  "name": "Guardian Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0413.png"
+ },
+ "E0956": {
+  "level": 85,
+  "name": "Flourishing Path",
+  "slot": "boots",
+  "img": "assets/img/equip/E0956.png"
+ },
+ "E0430": {
+  "level": 78,
+  "name": "Phantom Thief Mask",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0430.png"
+ },
+ "E0875": {
+  "level": 85,
+  "name": "Specter's Bracelet",
+  "slot": "ring",
+  "img": "assets/img/equip/E0875.png"
+ },
+ "E0773": {
+  "level": 85,
+  "name": "Firework Expert Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0773.png"
+ },
+ "E0325": {
+  "level": 55,
+  "name": "灿烂晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0325.png"
+ },
+ "E1087": {
+  "level": 85,
+  "name": "Moonlit Beauty",
+  "slot": "ring",
+  "img": "assets/img/equip/E1087.png"
+ },
+ "E0354": {
+  "level": 90,
+  "name": "灿烂晶石徽章(异变)",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0354.png"
+ },
+ "E0459": {
+  "level": 78,
+  "name": "Premium Makeup Brush",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0459.png"
+ },
+ "E0353": {
+  "level": 90,
+  "name": "灿烂晶石钢甲(异变)",
+  "slot": "armor",
+  "img": "assets/img/equip/E0353.png"
+ },
+ "E0706": {
+  "level": 85,
+  "name": "Reincarnated Wavebreaker Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0706.png"
+ },
+ "E0744": {
+  "level": 85,
+  "name": "Reincarnated Necklace of Desire",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0744.png"
+ },
+ "E0753": {
+  "level": 85,
+  "name": "Reincarnated Ursine Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0753.png"
+ },
+ "E0874": {
+  "level": 85,
+  "name": "Specter's Echo",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0874.png"
+ },
+ "E1077": {
+  "level": 85,
+  "name": "Moonlit Azure Sea",
+  "slot": "ring",
+  "img": "assets/img/equip/E1077.png"
+ },
+ "E0214": {
+  "level": 70,
+  "name": "寒冰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0214.png"
+ },
+ "E0976": {
+  "level": 85,
+  "name": "Path of the Devout",
+  "slot": "boots",
+  "img": "assets/img/equip/E0976.png"
+ },
+ "E0876": {
+  "level": 85,
+  "name": "Specter's Shadow",
+  "slot": "boots",
+  "img": "assets/img/equip/E0876.png"
+ },
+ "E0781": {
+  "level": 85,
+  "name": "Blessings of Fortune",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0781.png"
+ },
+ "E0763": {
+  "level": 85,
+  "name": "Armor of Eternal Stars",
+  "slot": "armor",
+  "img": "assets/img/equip/E0763.png"
+ },
+ "E0713": {
+  "level": 85,
+  "name": "Reincarnated Inferno Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0713.png"
+ },
+ "E0762": {
+  "level": 85,
+  "name": "Crown of Eternal Stars",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0762.png"
+ },
+ "E0421": {
+  "level": 78,
+  "name": "Spring Stew",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0421.png"
+ },
+ "E0733": {
+  "level": 85,
+  "name": "Reincarnated Lion King's Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0733.png"
+ },
+ "E0066": {
+  "level": 27,
+  "name": "烈焰晶石长靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0066.png"
+ },
+ "E0122": {
+  "level": 27,
+  "name": "天然晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0122.png"
+ },
+ "E0031": {
+  "level": 30,
+  "name": "Mercenary's Battle-Axe",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0031.png"
+ },
+ "E2001": {
+  "level": 85,
+  "name": "Compassionate Gladiator's Lance",
+  "slot": "weapon",
+  "img": "assets/img/equip/E2001.png"
+ },
+ "E2004": {
+  "level": 85,
+  "name": "Compassionate Gladiator's Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E2004.png"
+ },
+ "E0401": {
+  "level": 75,
+  "name": "Survivor Stun Baton",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0401.png"
+ },
+ "E0114": {
+  "level": 90,
+  "name": "烈焰晶石项链(异变)",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0114.png"
+ },
+ "E0711": {
+  "level": 85,
+  "name": "Reincarnated Inferno Spear",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0711.png"
+ },
+ "E0756": {
+  "level": 85,
+  "name": "Reincarnated Ursine Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0756.png"
+ },
+ "E0086": {
+  "level": 55,
+  "name": "烈焰晶石长靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0086.png"
+ },
+ "E0844": {
+  "level": 85,
+  "name": "Dreamlight Brilliance",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0844.png"
+ },
+ "E0251": {
+  "level": 41,
+  "name": "幽暗晶石战斧",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0251.png"
+ },
+ "E0712": {
+  "level": 85,
+  "name": "Reincarnated Inferno Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0712.png"
+ },
+ "E1042": {
+  "level": 85,
+  "name": "Weaver's Antenna",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1042.png"
+ },
+ "E4005": {
+  "level": 85,
+  "name": "Hidden Spring Wristband",
+  "slot": "ring",
+  "img": "assets/img/equip/E4005.png"
+ },
+ "E0323": {
+  "level": 55,
+  "name": "灿烂晶石钢甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0323.png"
+ },
+ "E0201": {
+  "level": 55,
+  "name": "寒冰晶石长枪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0201.png"
+ },
+ "E0142": {
+  "level": 55,
+  "name": "天然晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0142.png"
+ },
+ "E0206": {
+  "level": 55,
+  "name": "寒冰晶石短靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0206.png"
+ },
+ "E0321": {
+  "level": 55,
+  "name": "灿烂晶石枪炮",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0321.png"
+ },
+ "E0735": {
+  "level": 85,
+  "name": "Reincarnated Lion King's Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0735.png"
+ },
+ "E1051": {
+  "level": 85,
+  "name": "Versatile Makeup Case",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1051.png"
+ },
+ "E0934": {
+  "level": 85,
+  "name": "Rascal's Vigil",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0934.png"
+ },
+ "E0984": {
+  "level": 85,
+  "name": "Ribbon of Remembrance",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0984.png"
+ },
+ "E0021": {
+  "level": 15,
+  "name": "Defender's Spear",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0021.png"
+ },
+ "E0429": {
+  "level": 78,
+  "name": "Cerulean Dress",
+  "slot": "armor",
+  "img": "assets/img/equip/E0429.png"
+ },
+ "E0851": {
+  "level": 85,
+  "name": "Tropical Flamingo Buoy",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0851.png"
+ },
+ "E0764": {
+  "level": 85,
+  "name": "Vow of Eternal Stars",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0764.png"
+ },
+ "E0391": {
+  "level": 85,
+  "name": "Chaos Dagger",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0391.png"
+ },
+ "E0315": {
+  "level": 41,
+  "name": "灿烂晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0315.png"
+ },
+ "E0772": {
+  "level": 85,
+  "name": "Firework Expert Earmuffs",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0772.png"
+ },
+ "E0456": {
+  "level": 78,
+  "name": "Cute Sticker",
+  "slot": "armor",
+  "img": "assets/img/equip/E0456.png"
+ },
+ "E0405": {
+  "level": 75,
+  "name": "Survivor Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0405.png"
+ },
+ "E0352": {
+  "level": 90,
+  "name": "灿烂晶石钢盔(异变)",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0352.png"
+ },
+ "E0786": {
+  "level": 85,
+  "name": "Blooming Peony Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0786.png"
+ },
+ "E0171": {
+  "level": 90,
+  "name": "天然晶石剑刃(异变)",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0171.png"
+ },
+ "E0231": {
+  "level": 90,
+  "name": "寒冰晶石长枪(异变)",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0231.png"
+ },
+ "E0271": {
+  "level": 70,
+  "name": "幽暗晶石战斧",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0271.png"
+ },
+ "E0422": {
+  "level": 78,
+  "name": "Spring Chic",
+  "slot": "armor",
+  "img": "assets/img/equip/E0422.png"
+ },
+ "E0161": {
+  "level": 85,
+  "name": "天然晶石剑刃",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0161.png"
+ },
+ "E4013": {
+  "level": 85,
+  "name": "Garments of Salvation",
+  "slot": "armor",
+  "img": "assets/img/equip/E4013.png"
+ },
+ "E0061": {
+  "level": 27,
+  "name": "烈焰晶石爪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0061.png"
+ },
+ "E0971": {
+  "level": 85,
+  "name": "Grip of Faith",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0971.png"
+ },
+ "E0428": {
+  "level": 78,
+  "name": "Obsidian Mask",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0428.png"
+ },
+ "E0894": {
+  "level": 85,
+  "name": "Goldhoarder's Servant",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0894.png"
+ },
+ "E0241": {
+  "level": 27,
+  "name": "幽暗晶石战斧",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0241.png"
+ },
+ "E0943": {
+  "level": 85,
+  "name": "Cheerleader's Vigor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0943.png"
+ },
+ "E0065": {
+  "level": 27,
+  "name": "烈焰晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0065.png"
+ },
+ "E0175": {
+  "level": 90,
+  "name": "天然晶石戒指(异变)",
+  "slot": "ring",
+  "img": "assets/img/equip/E0175.png"
+ },
+ "E0216": {
+  "level": 70,
+  "name": "寒冰晶石短靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0216.png"
+ },
+ "E0351": {
+  "level": 90,
+  "name": "灿烂晶石枪炮(异变)",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0351.png"
+ },
+ "E0012": {
+  "level": 1,
+  "name": "Lightweight Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0012.png"
+ },
+ "E0795": {
+  "level": 85,
+  "name": "New Year's Gloves",
+  "slot": "ring",
+  "img": "assets/img/equip/E0795.png"
+ },
+ "E0771": {
+  "level": 85,
+  "name": "Happy New Year",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0771.png"
+ },
+ "E0704": {
+  "level": 85,
+  "name": "Reincarnated Wavebreaker Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0704.png"
+ },
+ "E0705": {
+  "level": 85,
+  "name": "Reincarnated Wavebreaker Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0705.png"
+ },
+ "E0262": {
+  "level": 55,
+  "name": "幽暗晶石护目镜",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0262.png"
+ },
+ "E2016": {
+  "level": 85,
+  "name": "Competitive Gladiator's Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E2016.png"
+ },
+ "E0195": {
+  "level": 41,
+  "name": "寒冰晶石手环",
+  "slot": "ring",
+  "img": "assets/img/equip/E0195.png"
+ },
+ "E0741": {
+  "level": 85,
+  "name": "Reincarnated Bow of Desire",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0741.png"
+ },
+ "E0962": {
+  "level": 85,
+  "name": "Starfire Anthem: Aegis",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0962.png"
+ },
+ "E2014": {
+  "level": 85,
+  "name": "Competitive Gladiator's Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E2014.png"
+ },
+ "E0073": {
+  "level": 41,
+  "name": "烈焰晶石护甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0073.png"
+ },
+ "E0453": {
+  "level": 78,
+  "name": "Enigmatic Crème Brûlée",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0453.png"
+ },
+ "E0204": {
+  "level": 55,
+  "name": "寒冰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0204.png"
+ },
+ "E0945": {
+  "level": 85,
+  "name": "Cheerleader's Relief",
+  "slot": "ring",
+  "img": "assets/img/equip/E0945.png"
+ },
+ "E0461": {
+  "level": 78,
+  "name": "Ambrosial Mead",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0461.png"
+ },
+ "E0395": {
+  "level": 85,
+  "name": "Chaos Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0395.png"
+ },
+ "E0432": {
+  "level": 78,
+  "name": "Phantom Thief Mask",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0432.png"
+ },
+ "E0724": {
+  "level": 85,
+  "name": "Reincarnated Merciful Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0724.png"
+ },
+ "E2013": {
+  "level": 85,
+  "name": "Competitive Gladiator's Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E2013.png"
+ },
+ "E0091": {
+  "level": 70,
+  "name": "烈焰晶石爪",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0091.png"
+ },
+ "E0734": {
+  "level": 85,
+  "name": "Reincarnated Lion King's Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0734.png"
+ },
+ "E0451": {
+  "level": 78,
+  "name": "Whip of Penance",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0451.png"
+ },
+ "E0448": {
+  "level": 78,
+  "name": "Lucky Star",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0448.png"
+ },
+ "E0234": {
+  "level": 90,
+  "name": "寒冰晶石项链(异变)",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0234.png"
+ },
+ "E0335": {
+  "level": 70,
+  "name": "灿烂晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0335.png"
+ },
+ "E0755": {
+  "level": 85,
+  "name": "Reincarnated Ursine Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0755.png"
+ },
+ "E0792": {
+  "level": 85,
+  "name": "New Year's Pillow",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0792.png"
+ },
+ "E0215": {
+  "level": 70,
+  "name": "寒冰晶石手环",
+  "slot": "ring",
+  "img": "assets/img/equip/E0215.png"
+ },
+ "E1014": {
+  "level": 85,
+  "name": "Merrymaker's Neckerchief",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1014.png"
+ },
+ "E0435": {
+  "level": 78,
+  "name": "Artist's Thick Coat",
+  "slot": "armor",
+  "img": "assets/img/equip/E0435.png"
+ },
+ "E0935": {
+  "level": 85,
+  "name": "Rascal's Treasure",
+  "slot": "ring",
+  "img": "assets/img/equip/E0935.png"
+ },
+ "E1054": {
+  "level": 85,
+  "name": "Stylist's Neck Scarf",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1054.png"
+ },
+ "E0916": {
+  "level": 85,
+  "name": "Oathbound Grace",
+  "slot": "boots",
+  "img": "assets/img/equip/E0916.png"
+ },
+ "E0905": {
+  "level": 85,
+  "name": "Redeemer's Touch",
+  "slot": "ring",
+  "img": "assets/img/equip/E0905.png"
+ },
+ "E0255": {
+  "level": 41,
+  "name": "幽暗晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0255.png"
+ },
+ "E0082": {
+  "level": 55,
+  "name": "烈焰晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0082.png"
+ },
+ "E0862": {
+  "level": 85,
+  "name": "Seafoam Aroma",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0862.png"
+ },
+ "E0096": {
+  "level": 70,
+  "name": "烈焰晶石长靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0096.png"
+ },
+ "E0426": {
+  "level": 78,
+  "name": "Drizella's Swimsuit",
+  "slot": "armor",
+  "img": "assets/img/equip/E0426.png"
+ },
+ "E0776": {
+  "level": 85,
+  "name": "Firework Expert Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0776.png"
+ },
+ "E0965": {
+  "level": 85,
+  "name": "Starfire Anthem: Fist",
+  "slot": "ring",
+  "img": "assets/img/equip/E0965.png"
+ },
+ "E0871": {
+  "level": 85,
+  "name": "Specter's Edge",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0871.png"
+ },
+ "E4004": {
+  "level": 85,
+  "name": "Hidden Spring Beast",
+  "slot": "necklace",
+  "img": "assets/img/equip/E4004.png"
+ },
+ "E1031": {
+  "level": 85,
+  "name": "Grenadier \"No.17\"",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1031.png"
+ },
+ "E0282": {
+  "level": 85,
+  "name": "幽暗晶石护目镜",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0282.png"
+ },
+ "E0346": {
+  "level": 85,
+  "name": "灿烂晶石钢靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0346.png"
+ },
+ "E0106": {
+  "level": 85,
+  "name": "烈焰晶石长靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0106.png"
+ },
+ "E0146": {
+  "level": 55,
+  "name": "天然晶石靴子",
+  "slot": "boots",
+  "img": "assets/img/equip/E0146.png"
+ },
+ "E0272": {
+  "level": 70,
+  "name": "幽暗晶石护目镜",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0272.png"
+ },
+ "E1074": {
+  "level": 85,
+  "name": "Ephemeral Tear",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1074.png"
+ },
+ "E1052": {
+  "level": 85,
+  "name": "Stylist's Headband",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1052.png"
+ },
+ "E0334": {
+  "level": 70,
+  "name": "灿烂晶石徽章",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0334.png"
+ },
+ "E0865": {
+  "level": 85,
+  "name": "Seafoam Embrace",
+  "slot": "ring",
+  "img": "assets/img/equip/E0865.png"
+ },
+ "E0703": {
+  "level": 85,
+  "name": "Reincarnated Wavebreaker Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0703.png"
+ },
+ "E0155": {
+  "level": 70,
+  "name": "天然晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0155.png"
+ },
+ "E0944": {
+  "level": 85,
+  "name": "Cheerleader's Inspiration",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0944.png"
+ },
+ "E1001": {
+  "level": 85,
+  "name": "One-Hit Meow-ster",
+  "slot": "weapon",
+  "img": "assets/img/equip/E1001.png"
+ },
+ "E0144": {
+  "level": 55,
+  "name": "天然晶石挂饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0144.png"
+ },
+ "E0952": {
+  "level": 85,
+  "name": "Flourishing Hair Tie",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0952.png"
+ },
+ "E0341": {
+  "level": 85,
+  "name": "灿烂晶石枪炮",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0341.png"
+ },
+ "E0445": {
+  "level": 78,
+  "name": "Key of Affection",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0445.png"
+ },
+ "E0794": {
+  "level": 85,
+  "name": "New Year's Lion",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0794.png"
+ },
+ "E0121": {
+  "level": 27,
+  "name": "天然晶石剑刃",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0121.png"
+ },
+ "E1016": {
+  "level": 85,
+  "name": "Merrymaker's Steps",
+  "slot": "boots",
+  "img": "assets/img/equip/E1016.png"
+ },
+ "E4015": {
+  "level": 85,
+  "name": "Embrace of Salvation",
+  "slot": "ring",
+  "img": "assets/img/equip/E4015.png"
+ },
+ "E0246": {
+  "level": 27,
+  "name": "幽暗晶石护膝",
+  "slot": "boots",
+  "img": "assets/img/equip/E0246.png"
+ },
+ "E0961": {
+  "level": 85,
+  "name": "Starfire Anthem",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0961.png"
+ },
+ "E0184": {
+  "level": 27,
+  "name": "寒冰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0184.png"
+ },
+ "E0722": {
+  "level": 85,
+  "name": "Reincarnated Merciful Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0722.png"
+ },
+ "E0134": {
+  "level": 41,
+  "name": "天然晶石挂饰",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0134.png"
+ },
+ "E2023": {
+  "level": 85,
+  "name": "Insightful Gladiator's Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E2023.png"
+ },
+ "E4012": {
+  "level": 85,
+  "name": "Crown of Salvation",
+  "slot": "helmet",
+  "img": "assets/img/equip/E4012.png"
+ },
+ "E0345": {
+  "level": 85,
+  "name": "灿烂晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0345.png"
+ },
+ "E0355": {
+  "level": 90,
+  "name": "灿烂晶石戒指(异变)",
+  "slot": "ring",
+  "img": "assets/img/equip/E0355.png"
+ },
+ "E0414": {
+  "level": 75,
+  "name": "Guardian Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0414.png"
+ },
+ "E0062": {
+  "level": 27,
+  "name": "烈焰晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0062.png"
+ },
+ "E0051": {
+  "level": 51,
+  "name": "Electromagnetic Heavy Axe",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0051.png"
+ },
+ "E0723": {
+  "level": 85,
+  "name": "Reincarnated Merciful Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0723.png"
+ },
+ "E1046": {
+  "level": 85,
+  "name": "Weaver's Long Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E1046.png"
+ },
+ "E1072": {
+  "level": 85,
+  "name": "Ephemeral Fin",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1072.png"
+ },
+ "E0293": {
+  "level": 90,
+  "name": "幽暗晶石重甲(异变)",
+  "slot": "armor",
+  "img": "assets/img/equip/E0293.png"
+ },
+ "E0832": {
+  "level": 85,
+  "name": "Gazer's Earpiece",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0832.png"
+ },
+ "E2011": {
+  "level": 85,
+  "name": "Competitive Gladiator's Lance",
+  "slot": "weapon",
+  "img": "assets/img/equip/E2011.png"
+ },
+ "E0891": {
+  "level": 85,
+  "name": "Goldhoarder's Purse",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0891.png"
+ },
+ "E0981": {
+  "level": 85,
+  "name": "Halcyon Days",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0981.png"
+ },
+ "E0185": {
+  "level": 27,
+  "name": "寒冰晶石手环",
+  "slot": "ring",
+  "img": "assets/img/equip/E0185.png"
+ },
+ "E0052": {
+  "level": 51,
+  "name": "Electromagnetic Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0052.png"
+ },
+ "E4011": {
+  "level": 85,
+  "name": "Light of Redemption",
+  "slot": "weapon",
+  "img": "assets/img/equip/E4011.png"
+ },
+ "E0404": {
+  "level": 75,
+  "name": "Survivor Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0404.png"
+ },
+ "E1082": {
+  "level": 85,
+  "name": "Summer Blossom Hat",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1082.png"
+ },
+ "E0403": {
+  "level": 75,
+  "name": "Survivor Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0403.png"
+ },
+ "E0434": {
+  "level": 78,
+  "name": "Christmas Ribbon",
+  "slot": "armor",
+  "img": "assets/img/equip/E0434.png"
+ },
+ "E1076": {
+  "level": 85,
+  "name": "Ephemeral Trace",
+  "slot": "boots",
+  "img": "assets/img/equip/E1076.png"
+ },
+ "E0732": {
+  "level": 85,
+  "name": "Reincarnated Lion King's Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0732.png"
+ },
+ "E0725": {
+  "level": 85,
+  "name": "Reincarnated Merciful Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0725.png"
+ },
+ "E0444": {
+  "level": 78,
+  "name": "Mantle of Opulence",
+  "slot": "armor",
+  "img": "assets/img/equip/E0444.png"
+ },
+ "E0011": {
+  "level": 1,
+  "name": "Stun Gun",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0011.png"
+ },
+ "E0116": {
+  "level": 90,
+  "name": "烈焰晶石长靴(异变)",
+  "slot": "boots",
+  "img": "assets/img/equip/E0116.png"
+ },
+ "E0242": {
+  "level": 27,
+  "name": "幽暗晶石护目镜",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0242.png"
+ },
+ "E0932": {
+  "level": 85,
+  "name": "Rascal's Panache",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0932.png"
+ },
+ "E0714": {
+  "level": 85,
+  "name": "Reincarnated Inferno Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0714.png"
+ },
+ "E0063": {
+  "level": 27,
+  "name": "烈焰晶石护甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0063.png"
+ },
+ "E0906": {
+  "level": 85,
+  "name": "Redeemer's Path",
+  "slot": "boots",
+  "img": "assets/img/equip/E0906.png"
+ },
+ "E1022": {
+  "level": 85,
+  "name": "Drinker's Bunny Ears",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1022.png"
+ },
+ "E0447": {
+  "level": 78,
+  "name": "Pumpkin Ensemble",
+  "slot": "armor",
+  "img": "assets/img/equip/E0447.png"
+ },
+ "E0423": {
+  "level": 78,
+  "name": "Aoi's Nurse Cap",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0423.png"
+ },
+ "E0439": {
+  "level": 78,
+  "name": "Cosmic Robo Attendant β",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0439.png"
+ },
+ "E1036": {
+  "level": 85,
+  "name": "Mechanic's Steel Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E1036.png"
+ },
+ "E0846": {
+  "level": 85,
+  "name": "Dreamlight Stride",
+  "slot": "boots",
+  "img": "assets/img/equip/E0846.png"
+ },
+ "E2021": {
+  "level": 85,
+  "name": "Insightful Gladiator's Lance",
+  "slot": "weapon",
+  "img": "assets/img/equip/E2021.png"
+ },
+ "E0701": {
+  "level": 85,
+  "name": "Reincarnated Wavebreaker Trident",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0701.png"
+ },
+ "E0752": {
+  "level": 85,
+  "name": "Reincarnated Ursine Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0752.png"
+ },
+ "E1044": {
+  "level": 85,
+  "name": "Weaver's Patient Companion",
+  "slot": "necklace",
+  "img": "assets/img/equip/E1044.png"
+ },
+ "E0745": {
+  "level": 85,
+  "name": "Reincarnated Ring of Desire",
+  "slot": "ring",
+  "img": "assets/img/equip/E0745.png"
+ },
+ "E0123": {
+  "level": 27,
+  "name": "天然晶石铠甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0123.png"
+ },
+ "E0831": {
+  "level": 85,
+  "name": "Destiny Gazer",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0831.png"
+ },
+ "E0852": {
+  "level": 85,
+  "name": "Tropical Nurse Cap",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0852.png"
+ },
+ "E1013": {
+  "level": 85,
+  "name": "Merrymaker's Attire",
+  "slot": "armor",
+  "img": "assets/img/equip/E1013.png"
+ },
+ "E0402": {
+  "level": 75,
+  "name": "Survivor Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0402.png"
+ },
+ "E0294": {
+  "level": 90,
+  "name": "幽暗晶石耳饰(异变)",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0294.png"
+ },
+ "E0914": {
+  "level": 85,
+  "name": "Oathbound Burden",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0914.png"
+ },
+ "E0431": {
+  "level": 78,
+  "name": "Dazzling Jacket",
+  "slot": "armor",
+  "img": "assets/img/equip/E0431.png"
+ },
+ "E0115": {
+  "level": 90,
+  "name": "烈焰晶石戒指(异变)",
+  "slot": "ring",
+  "img": "assets/img/equip/E0115.png"
+ },
+ "E0252": {
+  "level": 41,
+  "name": "幽暗晶石护目镜",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0252.png"
+ },
+ "E0861": {
+  "level": 85,
+  "name": "Seafoam Whale Buoy",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0861.png"
+ },
+ "E0182": {
+  "level": 27,
+  "name": "寒冰晶石面罩",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0182.png"
+ },
+ "E0104": {
+  "level": 85,
+  "name": "烈焰晶石项链",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0104.png"
+ },
+ "E0457": {
+  "level": 78,
+  "name": "Autonomous Soldier \"No.18\"",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0457.png"
+ },
+ "E1012": {
+  "level": 85,
+  "name": "Merrymaker's Emblem",
+  "slot": "helmet",
+  "img": "assets/img/equip/E1012.png"
+ },
+ "E0396": {
+  "level": 85,
+  "name": "Chaos Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0396.png"
+ },
+ "E0265": {
+  "level": 55,
+  "name": "幽暗晶石戒指",
+  "slot": "ring",
+  "img": "assets/img/equip/E0265.png"
+ },
+ "E0042": {
+  "level": 44,
+  "name": "Tactical Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0042.png"
+ },
+ "E4016": {
+  "level": 85,
+  "name": "Path to Salvation",
+  "slot": "boots",
+  "img": "assets/img/equip/E4016.png"
+ },
+ "E0192": {
+  "level": 41,
+  "name": "寒冰晶石面罩",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0192.png"
+ },
+ "E0801": {
+  "level": 85,
+  "name": "Traveler's Cane",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0801.png"
+ },
+ "E1035": {
+  "level": 85,
+  "name": "Mechanic's Gloves",
+  "slot": "ring",
+  "img": "assets/img/equip/E1035.png"
+ },
+ "E0132": {
+  "level": 41,
+  "name": "天然晶石头盔",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0132.png"
+ },
+ "E0306": {
+  "level": 27,
+  "name": "灿烂晶石钢靴",
+  "slot": "boots",
+  "img": "assets/img/equip/E0306.png"
+ },
+ "E0143": {
+  "level": 55,
+  "name": "天然晶石铠甲",
+  "slot": "armor",
+  "img": "assets/img/equip/E0143.png"
+ },
+ "E1056": {
+  "level": 85,
+  "name": "Stylist's Heels",
+  "slot": "boots",
+  "img": "assets/img/equip/E1056.png"
+ },
+ "E0176": {
+  "level": 90,
+  "name": "天然晶石靴子(异变)",
+  "slot": "boots",
+  "img": "assets/img/equip/E0176.png"
+ },
+ "V0571": {
+  "level": 57,
+  "name": "Lifesteal Dagger",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0191.png"
+ },
+ "V0572": {
+  "level": 57,
+  "name": "Lifesteal Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0192.png"
+ },
+ "V0573": {
+  "level": 57,
+  "name": "Lifesteal Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0193.png"
+ },
+ "V0574": {
+  "level": 57,
+  "name": "Lifesteal Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0194.png"
+ },
+ "V0575": {
+  "level": 57,
+  "name": "Lifesteal Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0195.png"
+ },
+ "V0576": {
+  "level": 57,
+  "name": "Lifesteal Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0196.png"
+ },
+ "V0711": {
+  "level": 71,
+  "name": "Savage Dagger",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0141.png"
+ },
+ "V0712": {
+  "level": 71,
+  "name": "Savage Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0142.png"
+ },
+ "V0713": {
+  "level": 71,
+  "name": "Savage Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0143.png"
+ },
+ "V0714": {
+  "level": 71,
+  "name": "Savage Pin",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0144.png"
+ },
+ "V0715": {
+  "level": 71,
+  "name": "Savage Finger-cot",
+  "slot": "ring",
+  "img": "assets/img/equip/E0145.png"
+ },
+ "V0716": {
+  "level": 71,
+  "name": "Savage Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0146.png"
+ },
+ "E0381": {
+  "level": 85,
+  "name": "Sacrificial Dagger",
+  "slot": "weapon",
+  "img": "assets/img/equip/E0271.png"
+ },
+ "E0382": {
+  "level": 85,
+  "name": "Sacrificial Helmet",
+  "slot": "helmet",
+  "img": "assets/img/equip/E0272.png"
+ },
+ "E0383": {
+  "level": 85,
+  "name": "Sacrificial Armor",
+  "slot": "armor",
+  "img": "assets/img/equip/E0273.png"
+ },
+ "E0384": {
+  "level": 85,
+  "name": "Sacrificial Necklace",
+  "slot": "necklace",
+  "img": "assets/img/equip/E0274.png"
+ },
+ "E0385": {
+  "level": 85,
+  "name": "Sacrificial Ring",
+  "slot": "ring",
+  "img": "assets/img/equip/E0275.png"
+ },
+ "E0386": {
+  "level": 85,
+  "name": "Sacrificial Boots",
+  "slot": "boots",
+  "img": "assets/img/equip/E0276.png"
+ }
+}
