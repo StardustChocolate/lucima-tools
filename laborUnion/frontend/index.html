@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>LucimaTools · 璐茜玛的深层幻影</title>
+  <link rel="icon" type="image/png" href="/static/assets/app-icon.png?v=76">
+  <link rel="stylesheet" href="/static/style.css?v=172">
+</head>
+<body>
+  <!-- Lucide interface icons (ISC): local sprite, colored through currentColor. -->
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+    <symbol id="nav-layout-dashboard" viewBox="0 0 24 24">
+      <rect width="7" height="9" x="3" y="3" rx="1"></rect>
+      <rect width="7" height="5" x="14" y="3" rx="1"></rect>
+      <rect width="7" height="9" x="14" y="12" rx="1"></rect>
+      <rect width="7" height="5" x="3" y="16" rx="1"></rect>
+    </symbol>
+    <symbol id="nav-refresh-cw" viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+      <path d="M21 3v5h-5"></path>
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+      <path d="M8 16H3v5"></path>
+    </symbol>
+    <symbol id="nav-crosshair" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"></circle>
+      <line x1="22" x2="18" y1="12" y2="12"></line>
+      <line x1="6" x2="2" y1="12" y2="12"></line>
+      <line x1="12" x2="12" y1="6" y2="2"></line>
+      <line x1="12" x2="12" y1="22" y2="18"></line>
+    </symbol>
+    <symbol id="nav-users" viewBox="0 0 24 24">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+    </symbol>
+    <symbol id="nav-wrench" viewBox="0 0 24 24">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+    </symbol>
+    <symbol id="nav-scroll-text" viewBox="0 0 24 24">
+      <path d="M15 12h-5"></path>
+      <path d="M15 8h-5"></path>
+      <path d="M19 17V5a2 2 0 0 0-2-2H4"></path>
+      <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"></path>
+    </symbol>
+    <symbol id="nav-settings" viewBox="0 0 24 24">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </symbol>
+    <symbol id="nav-heart" viewBox="0 0 24 24">
+      <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path>
+    </symbol>
+    <symbol id="nav-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2"></path>
+      <path d="M12 20v2"></path>
+      <path d="m4.93 4.93 1.41 1.41"></path>
+      <path d="m17.66 17.66 1.41 1.41"></path>
+      <path d="M2 12h2"></path>
+      <path d="M20 12h2"></path>
+      <path d="m6.34 17.66-1.41 1.41"></path>
+      <path d="m19.07 4.93-1.41 1.41"></path>
+    </symbol>
+    <symbol id="nav-moon" viewBox="0 0 24 24">
+      <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+    </symbol>
+    <symbol id="nav-log-out" viewBox="0 0 24 24">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+      <polyline points="16 17 21 12 16 7"></polyline>
+      <line x1="21" x2="9" y1="12" y2="12"></line>
+    </symbol>
+    <symbol id="ui-chevron-up" viewBox="0 0 24 24">
+      <path d="m18 15-6-6-6 6"></path>
+    </symbol>
+    <symbol id="ui-chevron-down" viewBox="0 0 24 24">
+      <path d="m6 9 6 6 6-6"></path>
+    </symbol>
+    <symbol id="ui-trash-2" viewBox="0 0 24 24">
+      <path d="M3 6h18"></path>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <path d="M10 11v6"></path>
+      <path d="M14 11v6"></path>
+    </symbol>
+    <symbol id="ui-circle-arrow-up" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="m16 12-4-4-4 4"></path>
+      <path d="M12 16V8"></path>
+    </symbol>
+  </svg>
+  <!-- ===================== 登录视图 ===================== -->
+  <div class="login-view" id="loginView">
+    <div class="login-card" id="loginPanel">
+      <button class="theme-mini" id="loginThemeBtn" title="切换到亮色" aria-label="切换到亮色"><svg aria-hidden="true"><use data-theme-icon-use href="#nav-sun"></use></svg></button>
+      <div class="login-brand">
+        <div class="logo"></div>
+        <h1>Lucima<span>Tools</span></h1>
+        <div class="sub">璐茜玛的深层幻影</div>
+      </div>
+      <div class="field">
+        <label>账号</label>
+        <div class="acct-combo" id="acctCombo">
+          <input id="account" type="text" placeholder="邮箱账号" autocomplete="username">
+          <button type="button" class="acct-caret hidden" id="acctCaret" title="已保存的账号">▾</button>
+          <div class="acct-menu hidden" id="savedAccts"></div>
+        </div>
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+      </div>
+      <div class="login-status hint" id="loginStatus">
+        不再保存密码；登录成功后由系统安全存储登录token。
+      </div>
+      <button class="btn primary" id="loginBtn">登录</button>
+      <button class="btn ghost hidden" id="loginCancel">取消</button>
+    </div>
+  </div>
+
+  <!-- ===================== 应用视图 ===================== -->
+  <div class="app-view hidden" id="appView">
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="side-brand">
+        <div class="logo"></div>
+        <div>
+          <h1>Lucima<span>Tools</span></h1>
+          <div class="sub">璐茜玛的深层幻影</div>
+        </div>
+      </div>
+      <nav class="side-nav" id="sideNav">
+        <button class="nav-item active" data-section="info"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-layout-dashboard"></use></svg></span><span class="ni-label">基本信息</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="auto"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-refresh-cw"></use></svg></span><span class="ni-label">自动任务</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="manual"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-crosshair"></use></svg></span><span class="ni-label">主动任务</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="guild"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-users"></use></svg></span><span class="ni-label">工会</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="toolbox"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-wrench"></use></svg></span><span class="ni-label">工具箱</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="logs"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-scroll-text"></use></svg></span><span class="ni-label">运行日志</span><span class="ni-badge hidden" id="logBadge">0</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="settings"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-settings"></use></svg></span><span class="ni-label">系统设置</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="about"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-heart"></use></svg></span><span class="ni-label">关于我们</span><span class="ni-dot"></span></button>
+      </nav>
+      <div class="side-foot">
+        <!-- 多账号切换器（左下角）：当前账号胶囊，点击展开列表/添加账号 -->
+        <div class="acc-switcher" id="accSwitcher"></div>
+        <button class="side-btn" id="themeToggle"><span class="side-btn-icon"><svg aria-hidden="true"><use data-theme-icon-use href="#nav-sun"></use></svg></span>切换明暗</button>
+        <button class="side-btn danger" id="logoutBtn"><span class="side-btn-icon"><svg aria-hidden="true"><use href="#nav-log-out"></use></svg></span>退出当前账号</button>
+      </div>
+    </aside>
+
+    <!-- 抽屉遮罩（仅窄屏抽屉展开时显示，点击收起） -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+    <!-- 主内容区 -->
+    <main class="main">
+      <header class="topbar">
+        <button class="menu-btn" id="menuBtn">☰</button>
+        <div class="crumb" id="crumb">基本信息</div>
+        <div class="pill" id="connPill">● 未连接</div>
+      </header>
+
+      <div class="content" id="content">
+        <!-- 基本信息 -->
+        <section class="section active" id="section-info">
+          <div class="card">
+            <div class="card-title">
+              <span class="dot"></span>账号状态
+              <button class="mini" id="refreshBtn">刷新</button>
+            </div>
+            <!-- 顶行：头像 + 名字/UID/等级 + 能源/旗帜表盘 + 两列主要资源 -->
+            <div class="info-top">
+              <div class="avatar-wrap">
+                <div class="avatar" id="avatar">?</div>
+                <i class="avatar-ring"></i>
+              </div>
+              <div class="pinfo">
+                <div class="pname" id="pName">—</div>
+                <div class="puid" id="pUid">—</div>
+                <div class="pname-lv" id="pLv">—</div>
+              </div>
+              <!-- 能源 / 旗帜：表盘（左移，紧跟名字信息） -->
+              <div class="dial-row" id="gaugeRow"></div>
+              <!-- 两列资源：金币/钻石/能源电池 + 招募/神秘/银河契约 -->
+              <div class="asset-col" id="curBar"></div>
+            </div>
+          </div>
+
+          <!-- 团员 / 物品 -->
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>团员与物品</div>
+            <div class="roster-tabs">
+              <button class="rtab active" data-rtab="heroes">团员<span class="rtab-n" id="heroCount"></span></button>
+              <button class="rtab" data-rtab="items">物品<span class="rtab-n" id="itemCount"></span></button>
+            </div>
+            <div class="roster-body">
+              <div class="roster-pane active" id="rosterHeroes"><div class="roster-empty">登录后加载…</div></div>
+              <div class="roster-pane" id="rosterItems"><div class="roster-empty">登录后加载…</div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="section-guild">
+          <div class="guild-heading">
+            <div><span class="guild-eyebrow">GUILD CENTER</span><h2>工会事务，一处管理</h2><p>使用当前已登录账号，查看工会并处理每日事务。</p></div>
+            <span class="guild-account" id="guildAccount">未选择账号</span>
+          </div>
+          <div class="card guild-card">
+            <div class="guild-card-head"><span class="guild-card-icon" aria-hidden="true">01</span><div><h3>工会管理</h3><p>工会信息 · 每日签到 · 任务奖励</p></div></div>
+            <div class="guild-actions guild-manage-actions"><button class="primary" type="button" id="guildRefresh">查询工会</button><button type="button" id="guildCheckin">工会签到</button><button type="button" id="guildAttendance">领取日奖励</button></div>
+            <div class="guild-result" id="guildOverview" role="status" aria-live="polite" data-tone="idle">点击查询，查看当前账号的工会信息。</div>
+            <details class="guild-details hidden" id="guildOverviewDetails"><summary>查看服务器返回详情</summary><pre id="guildOverviewRaw"></pre></details>
+            <div class="guild-quests" id="guildQuestPanel">
+              <div class="guild-quest-heading"><div><span class="guild-eyebrow">QUEST REWARDS</span><h4>佣兵团黄票领取<span class="guild-quest-title-note">（默认30个任务，可点击一键完成）</span></h4></div><span class="guild-state" id="guildQuestBadge">待操作</span></div>
+              <p class="card-note">先查询当前工会任务，每轮按这份列表逐个提交领取。单项被拒绝时继续下一项，奖励以游戏实际返回为准。</p>
+              <div class="guild-fields guild-quest-fields">
+                <label for="guildQuestRounds">执行轮数<span>（一轮140分，20轮即可拿满）</span><input id="guildQuestRounds" type="number" inputmode="numeric" min="1" max="100" step="1" value="30"><small>1–100 轮；每轮逐项领取</small></label>
+                <div class="guild-quest-list-summary"><span>当前工会任务</span><strong id="guildQuestListText">尚未查询</strong><button type="button" id="guildQuestQuery">查询任务列表</button></div>
+              </div>
+              <details class="guild-details hidden" id="guildQuestListDetails"><summary>查看任务 ID</summary><ul class="guild-quest-id-list" id="guildQuestIds"></ul></details>
+              <div class="guild-actions guild-quest-actions"><button class="primary" type="button" id="guildQuestStart" disabled>一键完成</button><button type="button" id="guildQuestStop" disabled>停止任务</button><button class="guild-text-button" type="button" id="guildQuestRefresh">刷新进度</button></div>
+              <div class="guild-progress-row"><span id="guildQuestProgressText">尚未开始</span><span id="guildQuestProgressCount">已处理 0 项</span></div>
+              <div class="guild-progress" id="guildQuestProgress" role="progressbar" aria-label="佣兵团黄票领取进度" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><span id="guildQuestProgressBar"></span></div>
+              <div class="guild-quest-stats"><span>返回数据 <strong id="guildQuestSucceeded">0</strong></span><span>被拒绝 <strong id="guildQuestFailed">0</strong></span><span>无明细 <strong id="guildQuestNoDetails">0</strong></span><span>计划请求 <strong id="guildQuestRequested">0</strong></span></div>
+              <div class="guild-result" id="guildQuestResult" role="status" aria-live="polite" data-tone="idle">点击开始后，将显示每项任务的请求结果。</div>
+              <div class="guild-actions hidden" id="guildQuestRecoveryActions"><button type="button" id="guildQuestResolve">已核对游戏结果，解除待确认状态</button></div>
+              <details class="guild-details hidden" id="guildQuestResultsDetails" open><summary>逐项请求结果</summary><ol class="guild-quest-results" id="guildQuestResults"></ol></details>
+            </div>
+          </div>
+          <div class="card guild-card">
+            <div class="guild-card-head"><span class="guild-card-icon" aria-hidden="true">02</span><div><h3>会长管理</h3><p>团长商店 · 工会增益</p></div></div>
+            <p class="card-note">使用工会资源购买。身份、余额和限购次数以游戏返回为准。</p>
+            <div class="guild-captain-grid">
+              <button type="button" class="guild-buy" data-item="GuildBox"><strong>发放箱子</strong><span>工会箱子</span></button>
+              <button type="button" class="guild-buy" data-item="GuildHeroExp"><strong>知识祝福</strong><span>团员经验增益</span></button>
+              <button type="button" class="guild-buy" data-item="GuildMoneyBonus"><strong>富豪祝福</strong><span>金币增益</span></button>
+              <button type="button" class="guild-buy" data-item="GuildEnergy30"><strong>红币购体力</strong><span>使用荣誉金币</span></button>
+              <button type="button" class="guild-buy" data-item="GuildEnergy50"><strong>证明购体力</strong><span>使用英勇证明</span></button>
+            </div>
+            <div class="guild-result" id="guildCaptain" role="status" aria-live="polite" data-tone="idle">选择一项工会商品，购买后查看结果。</div>
+            <details class="guild-details hidden" id="guildCaptainDetails"><summary>查看服务器返回详情</summary><pre id="guildCaptainRaw"></pre></details>
+          </div>
+        </section>
+
+        <!-- 自动任务 -->
+        <section class="section" id="section-auto">
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>自动功能</div>
+            <p class="card-note">登录后按开关执行，可每小时自动重跑。月签到 / 活动签到 / 助战好友为登录必跑项，无需开关。</p>
+            <div class="auto-list" id="autoList"></div>
+          </div>
+        </section>
+
+        <!-- 主动任务 -->
+        <section class="section" id="section-manual">
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>主动任务</div>
+            <div class="task-list" id="taskList"></div>
+          </div>
+        </section>
+
+        <!-- 工具箱 -->
+        <section class="section" id="section-toolbox">
+          <div class="toolbox-home" id="toolboxHome">
+            <div class="tool-grid">
+              <button class="tool-tile tool-tile-primary" type="button" data-tool="equipment-filter">
+                <span class="tool-icon" aria-hidden="true"><img src="/assets/ui/equipment.png" alt=""></span>
+                <span class="tool-tile-copy"><strong>装备过滤器</strong><small>管理装备筛选方案</small></span>
+                <span class="tool-arrow" aria-hidden="true">→</span>
+              </button>
+              <div class="tool-tile tool-tile-muted" aria-disabled="true">
+                <span class="tool-icon" aria-hidden="true">✦</span>
+                <span class="tool-tile-copy"><strong>自动配装</strong><small>即将上线</small></span>
+                <span class="tool-status">SOON</span>
+              </div>
+              <div class="tool-tile tool-tile-muted" aria-disabled="true">
+                <span class="tool-icon" aria-hidden="true">◈</span>
+                <span class="tool-tile-copy"><strong>图鉴查询</strong><small>即将上线</small></span>
+                <span class="tool-status">SOON</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="tool-page hidden" id="equipmentFilterPage">
+            <div class="tool-page-head">
+              <button class="tool-back" type="button" id="toolboxBack">← <span>返回工具箱</span></button>
+              <div class="tool-page-title"><span class="tool-icon small" aria-hidden="true"><img src="/assets/ui/equipment.png" alt=""></span><h2>装备过滤器</h2></div>
+              <span class="preview-badge">预览</span>
+            </div>
+            <div class="filter-workspace">
+              <aside class="scheme-panel">
+                <div class="scheme-panel-head">
+                  <h3>筛选方案</h3>
+                  <button class="scheme-add" type="button" id="schemeAdd" title="新建方案" aria-label="新建方案">＋</button>
+                </div>
+                <div class="scheme-list" id="schemeList"></div>
+                <div class="scheme-panel-foot"><span id="schemeCount">0 个方案</span></div>
+              </aside>
+
+              <div class="rule-builder">
+                <div class="rule-builder-head">
+                  <h3 id="activeSchemeName">—</h3>
+                </div>
+
+                <div class="builder-section slot-section">
+                  <div class="slot-tabs" id="equipSlotTabs"></div>
+                </div>
+
+                <div class="builder-section condition-section">
+                  <div class="detail-rule-title">添加细则</div>
+                  <div class="detail-rule-nav">
+                    <div class="detail-rule-circles" id="detailRuleCircles"></div>
+                    <button class="detail-rule-add" type="button" id="detailRuleAdd" title="新增细分规则" aria-label="新增细分规则">+</button>
+                    <button class="detail-rule-duplicate" type="button" id="detailRuleDuplicate" title="复制当前细则" aria-label="复制当前细则">⧉</button>
+                    <button class="detail-rule-delete" type="button" id="detailRuleDelete" title="删除当前细分规则" aria-label="删除当前细分规则">−</button>
+                  </div>
+                  <div class="detail-rule-apply-row hidden" id="detailRuleApplyRow">
+                    <div class="apply-picker">
+                      <button class="apply-button" type="button" id="applySetButton" aria-expanded="false">应用于</button>
+                      <div class="apply-popover hidden" id="applySetPopover">
+                        <div class="apply-set-grid" id="applySetGrid"></div>
+                      </div>
+                    </div>
+                    <div class="apply-selected-sets" id="applySelectedSets"></div>
+                  </div>
+                  <div class="detail-rule-empty hidden" id="detailRuleEmpty">
+                    <button type="button" id="detailRuleEmptyAdd">＋ 新建细分规则</button>
+                  </div>
+                  <div class="detail-rule-editor" id="detailRuleEditor">
+                    <div class="main-rule-head score-rule-head"><span>副属性分</span></div>
+                    <div class="target-score-rows">
+                      <div class="target-score-row target-score-condition">
+                        <label class="target-score-toggle" title="启用低分自动过滤">
+                          <input id="targetScoreEnabled" type="checkbox" aria-label="启用低分自动过滤">
+                          <span class="target-score-switch" aria-hidden="true"></span>
+                        </label>
+                        <span>低于</span>
+                        <label class="target-score-number">
+                          <input id="targetSubScore" type="number" min="0" max="55" step="1" inputmode="numeric" aria-label="自动过滤副属性分">
+                        </label>
+                        <span>分自动过滤</span>
+                      </div>
+                      <div class="target-score-row target-score-condition target-force-score-row">
+                        <label class="target-score-toggle" title="启用高分强制命中">
+                          <input id="targetForceScoreEnabled" type="checkbox" aria-label="启用高分强制命中">
+                          <span class="target-score-switch" aria-hidden="true"></span>
+                        </label>
+                        <span>高于</span>
+                        <label class="target-score-number">
+                          <input id="targetForceSubScore" type="number" min="0" max="55" step="1" inputmode="numeric" aria-label="强制命中副属性分">
+                        </label>
+                        <span>分强制命中</span>
+                      </div>
+                      <div class="target-score-row target-score-copy-row">
+                        <button class="target-score-apply-all" id="targetScoreApplyAll" type="button" aria-live="polite">一键复制</button>
+                        <span>将此副属性分条件复制到该部位所有方案中</span>
+                      </div>
+                    </div>
+                    <div class="main-rule-head"><span>主属性</span></div>
+                    <div class="condition-main">
+                      <div class="stat-control main-stat-control" id="mainStatControl">
+                        <div class="dropdown filter-stat-dropdown" id="mainStatSelect" data-val=""></div>
+                      </div>
+                      <div class="main-stat-value" id="mainStatValue">—</div>
+                    </div>
+                    <div class="sub-rule-head"><span>副属性</span></div>
+                    <div class="sub-rule-list" id="subRuleList"></div>
+                  </div>
+                </div>
+
+                <div class="builder-section coverage-section">
+                  <div class="builder-section-head">
+                    <h4>覆盖套装预览</h4>
+                    <span class="section-meta" id="coverageCount">0 / 17</span>
+                  </div>
+                  <div class="coverage-grid" id="coverageGrid"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 运行日志 -->
+        <section class="section" id="section-logs">
+          <div class="card">
+            <div class="card-title">
+              <span class="dot"></span>运行日志
+              <button class="mini" id="clearLogBtn">清空</button>
+            </div>
+            <pre class="log" id="log"></pre>
+            <div class="log-dock-setting">
+              <span>底部日志</span>
+              <label class="log-dock-toggle">
+                <input type="checkbox" id="bottomLogEnabled" aria-label="启用底部日志">
+                <span class="log-dock-switch"></span>
+              </label>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              <span class="dot"></span>开发者日志
+              <button class="mini" id="copyDevLogBtn">复制开发者日志</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 系统设置 -->
+        <section class="section" id="section-settings">
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>主题色彩</div>
+            <p class="card-note">选择一个预设主题色，或自定义主色与辅色。设置会记住在本机。</p>
+            <div class="swatch-row" id="swatchRow"></div>
+            <div class="custom-color">
+              <label class="cc-item"><span>主色</span><input type="color" id="accentPick"></label>
+              <label class="cc-item"><span>辅色</span><input type="color" id="accent2Pick"></label>
+              <label class="cc-item mode"><span>明暗</span>
+                <div class="seg" id="modeSeg">
+                  <button data-mode="dark" class="active">暗色</button>
+                  <button data-mode="light">亮色</button>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>网络代理</div>
+            <p class="card-note">游戏服务器有地区限制，需经代理访问。推荐「跟随系统代理」：像浏览器一样自动使用代理软件（Clash 等）的设置，你只需开关代理软件，无需在这里配置。</p>
+            <div class="proxy-modes" id="proxyModes">
+              <label class="pm-opt"><input type="radio" name="proxyMode" value="system"><span class="pm-box"></span>
+                <span class="pm-txt"><b>跟随系统代理</b><small>自动使用系统/代理软件设置，兼容 Clash 系统代理与 TUN 模式</small></span></label>
+              <label class="pm-opt"><input type="radio" name="proxyMode" value="manual"><span class="pm-box"></span>
+                <span class="pm-txt"><b>手动指定</b><small>代理在其它机器或端口时使用</small></span></label>
+              <label class="pm-opt"><input type="radio" name="proxyMode" value="direct"><span class="pm-box"></span>
+                <span class="pm-txt"><b>直连</b><small>不经代理（仅在已全局翻墙时可用）</small></span></label>
+            </div>
+            <div class="field" id="proxyManualField">
+              <label>代理地址</label>
+              <input id="proxyInput" type="text" placeholder="http://127.0.0.1:7890" autocomplete="off">
+            </div>
+            <button class="btn primary" id="saveProxyBtn">保存代理设置</button>
+            <div id="proxyNotice"></div>
+          </div>
+          <!-- 开发者模式入口：一个没有任何标签/提示/按钮的输入框，输对口令才显出下面
+               的控制台卡片。故意不写 placeholder、不加说明文字。口令在后端校验
+               （backend/config.py DEV_PASSPHRASE），前端不写死。 -->
+          <div class="dev-gate"><input id="devGate" type="text" spellcheck="false"
+                 autocomplete="off" autocapitalize="off"></div>
+          <div class="card" id="devConsoleCard" style="display:none">
+            <div class="card-title"><span class="dot"></span>开发者模式 · 协议控制台</div>
+            <p class="card-note dev-warn">直接向游戏服务器发任意请求，用于抓协议、核对报文。
+              <b>请求会真实生效</b>：买东西真扣货币、卖装备真卖掉，不可撤销。响应原样显示，不做任何解析或写回。</p>
+            <div class="dev-history">
+              <div class="dev-history-head">
+                <span>后台请求历史</span>
+                <small>最近 5 条</small>
+              </div>
+              <div class="dev-history-list" id="devHistoryList">
+                <div class="dev-history-empty">等待请求记录</div>
+              </div>
+            </div>
+            <div class="dev-row">
+              <span class="dev-lbl">route</span>
+              <input id="devRoute" type="text" spellcheck="false" autocomplete="off"
+                     placeholder="StoreHandler.ResetRandomStore">
+              <div class="dd dev-preset" id="devPreset"></div>
+            </div>
+            <div class="dev-row col">
+              <span class="dev-lbl">data（JSON，AID / SessionID 自动补）</span>
+              <textarea id="devData" spellcheck="false" rows="6"
+                        placeholder='{"StoreID": "SecretShop", "IsUseGold": 0}'></textarea>
+              <div class="dev-hint" id="devHint"></div>
+            </div>
+            <div class="dev-row">
+              <label class="bt-opt"><input type="checkbox" id="devUseAuth" checked>
+                <span>自动补 AID / SessionID</span></label>
+              <button class="mini" id="devLoopAddBtn">加入循环</button>
+              <button class="btn primary" id="devSendBtn">发送请求</button>
+              <button class="mini" id="devCopyBtn">复制收发</button>
+            </div>
+            <section class="dev-loop-panel">
+              <div class="dev-loop-head">
+                <span>循环请求</span>
+                <small id="devLoopCountLabel">0 条请求</small>
+              </div>
+              <div class="dev-loop-list" id="devLoopList">
+                <div class="dev-loop-empty">从历史记录或当前发送区加入请求</div>
+              </div>
+              <div class="dev-loop-controls">
+                <label>
+                  <span>循环次数</span>
+                  <span class="dev-loop-number"><input id="devLoopRounds" type="text" inputmode="numeric" maxlength="4" value="1"><i>轮</i></span>
+                </label>
+                <label>
+                  <span>请求间隔</span>
+                  <span class="dev-loop-number interval"><input id="devLoopInterval" type="text" inputmode="numeric" value="1000"><i>毫秒</i></span>
+                </label>
+                <div class="dev-loop-buttons">
+                  <button class="btn primary" id="devLoopStartBtn">开始循环</button>
+                  <button class="btn ghost hidden" id="devLoopStopBtn">停止</button>
+                </div>
+              </div>
+              <div class="dev-loop-status" id="devLoopStatus"></div>
+            </section>
+            <div class="dev-meta" id="devMeta"></div>
+            <div class="dev-io">
+              <div class="dev-pane">
+                <div class="dev-pane-h">→ 请求</div>
+                <pre class="log" id="devReq"></pre>
+              </div>
+              <div class="dev-pane">
+                <div class="dev-pane-h">← 响应</div>
+                <pre class="log" id="devResp"></pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 关于我们 -->
+        <section class="section" id="section-about">
+          <div class="card about-hero">
+            <div class="about-logo"></div>
+            <h2 class="about-title">关于 <span>LucimaTools · 璐茜玛的深层幻影</span></h2>
+            <p class="about-tagline">原生、轻量、跨平台</p>
+            <!-- 版本号由 app.js 从 /api/config 注入（唯一真源 backend/version.py），勿写死 -->
+            <div class="about-version-row">
+              <span class="about-ver" id="aboutVer">v…</span>
+              <button class="about-update hidden" id="aboutUpdateBtn" type="button" title="查看可用更新" aria-label="查看可用更新">
+                <svg aria-hidden="true"><use href="#ui-circle-arrow-up"></use></svg>
+              </button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>项目简介</div>
+            <p class="about-intro">LucimaTools · 璐茜玛的深层幻影 是一个致力于降低星陨玩家日常肝度的开源项目。我们利用了游戏的底层交互，构建了一套无需 Client 自动执行任务的 Headless 框架。无论你在用哪个平台，LucimaTools 都能提供开箱即用的自动任务，告别繁琐的日常，将更多时间用于研究配队、水群，或者陪伴重要的人~❤</p>
+          </div>
+          <div class="card about-notice-card">
+            <div class="card-title"><span class="dot"></span>注意</div>
+            <p class="about-notice">⚠️注意该软件仅作技术学习交流使用，数据本地保存，请勿轻信可能含有恶意注入的第三方链接。请勿用于任何破坏游戏公平性、商业化或其他违反游戏条款的用途。使用软件造成的任何后果由使用者自负。若包含侵权内容请联系作者删除相关内容。</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>信息</div>
+            <div class="about-list">
+              <div class="about-row"><span class="about-k">开发者</span><span class="about-v">巧克力、花崎桜雪</span></div>
+              <div class="about-row"><span class="about-k">GitHub</span><span class="about-v">https://github.com/StardustChocolate/lucima-tools</span></div>
+              <div class="about-row"><span class="about-k">交流群</span><span class="about-v">1032070842</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="dot"></span>技术栈</div>
+            <div class="tech-tags">
+              <span class="tech-tag">Python</span>
+              <span class="tech-tag">httpx</span>
+              <span class="tech-tag">HTML / CSS / JS</span>
+              <span class="tech-tag">pywebview</span>
+              <span class="tech-tag">PyInstaller</span>
+              <span class="tech-tag">Kotlin</span>
+              <span class="tech-tag">Chaquopy</span>
+              <span class="tech-tag">Android WebView</span>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="bottom-log-dock hidden" id="bottomLogDock">
+        <button type="button" class="bottom-log-peek" id="bottomLogExpand" title="展开运行日志" aria-label="展开运行日志">
+          <svg class="bottom-log-icon" aria-hidden="true"><use href="#nav-scroll-text"></use></svg>
+          <span class="bottom-log-badge hidden" id="bottomLogBadge">0</span>
+          <svg class="bottom-log-arrow" aria-hidden="true"><use href="#ui-chevron-up"></use></svg>
+        </button>
+        <section class="bottom-log-panel" aria-label="运行日志">
+          <div class="bottom-log-resizer" id="bottomLogResizer" role="separator" aria-label="拖动调节日志高度" aria-orientation="horizontal" tabindex="0"></div>
+          <header class="bottom-log-head">
+            <svg aria-hidden="true"><use href="#nav-scroll-text"></use></svg>
+            <span>运行日志</span>
+            <button type="button" id="bottomLogCollapse" title="收起运行日志" aria-label="收起运行日志">
+              <svg aria-hidden="true"><use href="#ui-chevron-down"></use></svg>
+            </button>
+          </header>
+          <pre class="log bottom-log-view" id="bottomLog"></pre>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="scheme-import-modal hidden" id="schemeImportModal" role="dialog" aria-modal="true" aria-labelledby="schemeImportTitle">
+    <button class="scheme-import-backdrop" type="button" data-import-close aria-label="关闭导入窗口"></button>
+    <div class="scheme-import-dialog">
+      <div class="scheme-import-head">
+        <div>
+          <h3 id="schemeImportTitle">导入筛选方案</h3>
+          <span id="schemeImportTarget"></span>
+        </div>
+        <button class="scheme-import-close" type="button" data-import-close title="关闭" aria-label="关闭">×</button>
+      </div>
+      <textarea id="schemeImportText" spellcheck="false" placeholder="粘贴导出的方案 JSON" aria-label="方案 JSON"></textarea>
+      <div class="scheme-import-error" id="schemeImportError" role="alert"></div>
+      <div class="scheme-import-actions">
+        <button class="scheme-import-cancel" type="button" data-import-close>取消</button>
+        <button class="scheme-import-confirm" id="schemeImportConfirm" type="button">导入方案</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="confirm-modal hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+    <button class="confirm-backdrop" type="button" data-confirm-cancel aria-label="取消删除"></button>
+    <div class="confirm-dialog">
+      <div class="confirm-icon" aria-hidden="true"><svg><use href="#ui-trash-2"></use></svg></div>
+      <div class="confirm-copy">
+        <h3 id="confirmTitle">确认删除？</h3>
+        <p id="confirmMessage"></p>
+      </div>
+      <div class="confirm-actions">
+        <button class="confirm-cancel" type="button" data-confirm-cancel>取消</button>
+        <button class="confirm-danger" id="confirmAction" type="button">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="update-modal hidden" id="updateModal" role="dialog" aria-modal="true" aria-labelledby="updateTitle" aria-describedby="updateSummary">
+    <div class="update-backdrop"></div>
+    <div class="update-dialog">
+      <div class="update-mark" aria-hidden="true"><svg><use href="#ui-circle-arrow-up"></use></svg></div>
+      <div class="update-copy">
+        <span class="update-eyebrow" id="updateEyebrow">发现新版本</span>
+        <h3 id="updateTitle">LucimaTools 可以更新</h3>
+        <p id="updateSummary"></p>
+      </div>
+      <ul class="update-notes" id="updateNotes"></ul>
+      <div class="update-progress hidden" id="updateProgress">
+        <div class="update-progress-meta">
+          <span id="updateProgressLabel">正在下载更新</span>
+          <span id="updateProgressValue">0%</span>
+        </div>
+        <div class="update-progress-track" id="updateProgressTrack" role="progressbar" aria-label="更新下载进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span id="updateProgressBar"></span>
+        </div>
+      </div>
+      <div class="update-status" id="updateStatus" role="status"></div>
+      <div class="update-actions">
+        <button class="update-ignore" id="updateIgnoreBtn" type="button">忽略此版本</button>
+        <button class="update-install" id="updateInstallBtn" type="button">立即更新</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=172"></script>
+  <script src="/static/guild.js?v=172"></script>
+  <script src="/static/guild-quests.js?v=172"></script>
+</body>
+</html>

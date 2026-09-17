@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>LucimaTools · 璐茜玛的深层幻影</title>
   <link rel="icon" type="image/png" href="/static/assets/app-icon.png?v=76">
-  <link rel="stylesheet" href="/static/style.css?v=157">
+  <link rel="stylesheet" href="/static/style.css?v=173">
 </head>
 <body>
   <!-- Lucide interface icons (ISC): local sprite, colored through currentColor. -->
@@ -28,6 +28,12 @@
       <line x1="6" x2="2" y1="12" y2="12"></line>
       <line x1="12" x2="12" y1="6" y2="2"></line>
       <line x1="12" x2="12" y1="22" y2="18"></line>
+    </symbol>
+    <symbol id="nav-users" viewBox="0 0 24 24">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
     </symbol>
     <symbol id="nav-wrench" viewBox="0 0 24 24">
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
@@ -127,6 +133,7 @@
         <button class="nav-item active" data-section="info"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-layout-dashboard"></use></svg></span><span class="ni-label">基本信息</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="auto"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-refresh-cw"></use></svg></span><span class="ni-label">自动任务</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="manual"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-crosshair"></use></svg></span><span class="ni-label">主动任务</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="guild"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-users"></use></svg></span><span class="ni-label">工会</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="toolbox"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-wrench"></use></svg></span><span class="ni-label">工具箱</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="logs"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-scroll-text"></use></svg></span><span class="ni-label">运行日志</span><span class="ni-badge hidden" id="logBadge">0</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="settings"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-settings"></use></svg></span><span class="ni-label">系统设置</span><span class="ni-dot"></span></button>
@@ -188,6 +195,48 @@
               <div class="roster-pane active" id="rosterHeroes"><div class="roster-empty">登录后加载…</div></div>
               <div class="roster-pane" id="rosterItems"><div class="roster-empty">登录后加载…</div></div>
             </div>
+          </div>
+        </section>
+
+        <section class="section" id="section-guild">
+          <div class="guild-heading">
+            <div><span class="guild-eyebrow">GUILD CENTER</span><h2>工会事务，一处管理</h2><p>使用当前已登录账号，查看工会并处理每日事务。</p></div>
+            <span class="guild-account" id="guildAccount">未选择账号</span>
+          </div>
+          <div class="card guild-card">
+            <div class="guild-card-head"><span class="guild-card-icon" aria-hidden="true">01</span><div><h3>工会管理</h3><p>工会信息 · 每日签到 · 任务奖励</p></div></div>
+            <div class="guild-actions guild-manage-actions"><button class="primary" type="button" id="guildRefresh">查询工会</button><button type="button" id="guildCheckin">工会签到</button><button type="button" id="guildAttendance">领取日奖励</button></div>
+            <div class="guild-result" id="guildOverview" role="status" aria-live="polite" data-tone="idle">点击查询，查看当前账号的工会信息。</div>
+            <details class="guild-details hidden" id="guildOverviewDetails"><summary>查看服务器返回详情</summary><pre id="guildOverviewRaw"></pre></details>
+            <div class="guild-quests" id="guildQuestPanel">
+              <div class="guild-quest-heading"><div><span class="guild-eyebrow">QUEST REWARDS</span><h4>佣兵团黄票领取<span class="guild-quest-title-note">（默认30个任务，可点击一键完成）</span></h4></div><span class="guild-state" id="guildQuestBadge">待操作</span></div>
+              <p class="card-note">先查询当前工会任务，每轮按这份列表逐个提交领取。单项被拒绝时继续下一项，奖励以游戏实际返回为准。</p>
+              <div class="guild-fields guild-quest-fields">
+                <label for="guildQuestRounds">执行轮数<span>（一轮140分，20轮即可拿满）</span><input id="guildQuestRounds" type="number" inputmode="numeric" min="1" max="100" step="1" value="30"><small>1–100 轮；每轮逐项领取</small></label>
+                <div class="guild-quest-list-summary"><span>当前工会任务</span><strong id="guildQuestListText">尚未查询</strong><button type="button" id="guildQuestQuery">查询任务列表</button></div>
+              </div>
+              <details class="guild-details hidden" id="guildQuestListDetails"><summary>查看任务 ID</summary><ul class="guild-quest-id-list" id="guildQuestIds"></ul></details>
+              <div class="guild-actions guild-quest-actions"><button class="primary" type="button" id="guildQuestStart" disabled>一键完成</button><button type="button" id="guildQuestStop" disabled>停止任务</button><button class="guild-text-button" type="button" id="guildQuestRefresh">刷新进度</button></div>
+              <div class="guild-progress-row"><span id="guildQuestProgressText">尚未开始</span><span id="guildQuestProgressCount">已处理 0 项</span></div>
+              <div class="guild-progress" id="guildQuestProgress" role="progressbar" aria-label="佣兵团黄票领取进度" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><span id="guildQuestProgressBar"></span></div>
+              <div class="guild-quest-stats"><span>返回数据 <strong id="guildQuestSucceeded">0</strong></span><span>被拒绝 <strong id="guildQuestFailed">0</strong></span><span>无明细 <strong id="guildQuestNoDetails">0</strong></span><span>计划请求 <strong id="guildQuestRequested">0</strong></span></div>
+              <div class="guild-result" id="guildQuestResult" role="status" aria-live="polite" data-tone="idle">点击开始后，将显示每项任务的请求结果。</div>
+              <div class="guild-actions hidden" id="guildQuestRecoveryActions"><button type="button" id="guildQuestResolve">已核对游戏结果，解除待确认状态</button></div>
+              <details class="guild-details hidden" id="guildQuestResultsDetails" open><summary>逐项请求结果</summary><ol class="guild-quest-results" id="guildQuestResults"></ol></details>
+            </div>
+          </div>
+          <div class="card guild-card">
+            <div class="guild-card-head"><span class="guild-card-icon" aria-hidden="true">02</span><div><h3>会长管理</h3><p>团长商店 · 工会增益</p></div></div>
+            <p class="card-note">使用工会资源购买。身份、余额和限购次数以游戏返回为准。</p>
+            <div class="guild-captain-grid">
+              <button type="button" class="guild-buy" data-item="GuildBox"><strong>发放箱子</strong><span>工会箱子</span></button>
+              <button type="button" class="guild-buy" data-item="GuildHeroExp"><strong>知识祝福</strong><span>团员经验增益</span></button>
+              <button type="button" class="guild-buy" data-item="GuildMoneyBonus"><strong>富豪祝福</strong><span>金币增益</span></button>
+              <button type="button" class="guild-buy" data-item="GuildEnergy30"><strong>红币购体力</strong><span>使用荣誉金币</span></button>
+              <button type="button" class="guild-buy" data-item="GuildEnergy50"><strong>证明购体力</strong><span>使用英勇证明</span></button>
+            </div>
+            <div class="guild-result" id="guildCaptain" role="status" aria-live="polite" data-tone="idle">选择一项工会商品，购买后查看结果。</div>
+            <details class="guild-details hidden" id="guildCaptainDetails"><summary>查看服务器返回详情</summary><pre id="guildCaptainRaw"></pre></details>
           </div>
         </section>
 
@@ -590,6 +639,8 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=163"></script>
+  <script src="/static/app.js?v=173"></script>
+  <script src="/static/guild.js?v=173"></script>
+  <script src="/static/guild-quests.js?v=173"></script>
 </body>
 </html>

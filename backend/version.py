@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.8"
 
 # 版本号三段（Android versionCode 用；非法格式时回退 0，避免构建期炸掉）
 def version_tuple() -> tuple[int, int, int]:

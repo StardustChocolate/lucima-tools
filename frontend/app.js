@@ -9,7 +9,7 @@ const api = async (path, body) => {
   }
   // GET：非全局接口带上 ?account=
   let url = path;
-  if (!body && activeAccount && !_GLOBAL_PATHS.has(path)) {
+  if (!body && activeAccount && !_GLOBAL_PATHS.has(path) && !new URLSearchParams(path.split("?")[1] || "").has("account")) {
     url += (path.includes("?") ? "&" : "?") + "account=" + encodeURIComponent(activeAccount);
   }
   const opt = body
@@ -17,7 +17,7 @@ const api = async (path, body) => {
     : {};
   const res = await fetch(url, opt);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data.detail || `HTTP ${res.status}`), { httpStatus: res.status });
   return data;
 };
 
@@ -105,6 +105,7 @@ function showSection(id) {
     updateLogBadge();
     setBottomLogExpanded(false);
   }
+  window.dispatchEvent(new CustomEvent("lucima:section-change", { detail: { section: id } }));
   // 移动端选完自动收起侧栏 + 隐藏遮罩
   if (window.innerWidth <= 820) {
     $("sidebar").classList.add("collapsed");
@@ -389,6 +390,7 @@ function switchAccount(email) {
   renderAccountSwitcher();
   renderDevConsole();          // 控制台的 route/data 输入是按账号记的，切号要重载
   showSection("info");
+  window.dispatchEvent(new CustomEvent("lucima:account-change", { detail: { account: email } }));
 }
 
 // 下线（保留存档，可再连接）
@@ -414,6 +416,7 @@ function afterAccountGone(email) {
     switchAccount(rest[0]);
   } else {
     activeAccount = null;
+    window.dispatchEvent(new CustomEvent("lucima:account-change", { detail: { account: null } }));
     $("appView").classList.add("hidden");
     $("loginView").classList.remove("hidden");
     $("loginCancel") && $("loginCancel").classList.add("hidden");
@@ -5902,3 +5905,4 @@ initDevGate();
 initToolbox();
 initEquipCardShells();
 initUpdateUI();
+

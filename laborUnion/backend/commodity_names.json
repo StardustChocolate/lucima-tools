@@ -1,0 +1,175 @@
+{
+ "FriendShip1": {
+  "store": "FriendShip",
+  "name": "5张友情契约"
+ },
+ "FriendShip2": {
+  "store": "FriendShip",
+  "name": "50张友情契约"
+ },
+ "FriendShip3": {
+  "store": "FriendShip",
+  "name": "40点能源"
+ },
+ "FriendShip5": {
+  "store": "FriendShip",
+  "name": "上级成长药剂"
+ },
+ "FriendShip6": {
+  "store": "FriendShip",
+  "name": "20点调教点数"
+ },
+ "FriendShip7": {
+  "store": "FriendShip",
+  "name": "20点通讯电力"
+ },
+ "FriendShip8": {
+  "store": "FriendShip",
+  "name": "50点友情点数"
+ },
+ "FriendShip9": {
+  "store": "FriendShip",
+  "name": "80个星源粉末"
+ },
+ "FriendShip10": {
+  "store": "FriendShip",
+  "name": "10万金币"
+ },
+ "FriendShip11": {
+  "store": "FriendShip",
+  "name": "5张快速战斗券"
+ },
+ "MedalHonor3": {
+  "store": "MedalHonor",
+  "name": "下级武器强化芯片"
+ },
+ "MedalHonor4": {
+  "store": "MedalHonor",
+  "name": "上级武器强化芯片"
+ },
+ "MedalHonor5": {
+  "store": "MedalHonor",
+  "name": "下级头盔强化芯片"
+ },
+ "MedalHonor6": {
+  "store": "MedalHonor",
+  "name": "上级头盔强化芯片"
+ },
+ "MedalHonor7": {
+  "store": "MedalHonor",
+  "name": "下级铠甲强化芯片"
+ },
+ "MedalHonor8": {
+  "store": "MedalHonor",
+  "name": "上级铠甲强化芯片"
+ },
+ "MedalHonor9": {
+  "store": "MedalHonor",
+  "name": "下级鞋子强化芯片"
+ },
+ "MedalHonor10": {
+  "store": "MedalHonor",
+  "name": "上级鞋子强化芯片"
+ },
+ "VIPGIFTH055_1": {
+  "store": "VIPGift",
+  "name": "异变的使徒降临礼包1",
+  "tip": "此商品每个帐号只能购买1次。 异变的使徒无法于招募中获得。"
+ },
+ "VIPGIFTH055_2": {
+  "store": "VIPGift",
+  "name": "异变的使徒降临礼包2"
+ },
+ "VIPGIFTH055_3": {
+  "store": "VIPGift",
+  "name": "异变的使徒降临礼包3"
+ },
+ "VIPGIFTH055_4": {
+  "store": "VIPGift",
+  "name": "异变的使徒降临礼包4"
+ },
+ "VIPGIFTH055_5": {
+  "store": "VIPGift",
+  "name": "异变的使徒降临礼包5"
+ },
+ "VIPGIFTH055_6": {
+  "store": "VIPGift",
+  "name": "异变的使徒降临礼包6"
+ },
+ "VIPGIFTH128_1": {
+  "store": "VIPGift",
+  "name": "伊娃降临礼包1",
+  "tip": "此商品每个帐号只能购买1次。 伊娃无法于招募中获得。"
+ },
+ "VIPGIFTH128_2": {
+  "store": "VIPGift",
+  "name": "伊娃降临礼包2"
+ },
+ "VIPGIFTH128_3": {
+  "store": "VIPGift",
+  "name": "伊娃降临礼包3"
+ },
+ "VIPGIFTH128_4": {
+  "store": "VIPGift",
+  "name": "伊娃降临礼包4"
+ },
+ "VIPGIFTH128_5": {
+  "store": "VIPGift",
+  "name": "伊娃降临礼包5"
+ },
+ "VIPGIFTH128_6": {
+  "store": "VIPGift",
+  "name": "伊娃降临礼包6"
+ },
+ "VIPGIFT_VIP0": {
+  "store": "VIPGift",
+  "name": "VIP资源补给礼包"
+ },
+ "VIPGIFT_VIP2": {
+  "store": "VIPGift",
+  "name": "VIP催化剂礼包",
+  "tip": "每月可购买2次，每月1号购买次数将会重置。"
+ },
+ "VIPGIFT_VIP3": {
+  "store": "VIPGift",
+  "name": "VIP招募礼包"
+ },
+ "VIPGIFT_VIP4": {
+  "store": "VIPGift",
+  "name": "VIP每日招募礼包"
+ },
+ "VIPGIFT_VIP5": {
+  "store": "VIPGift",
+  "name": "VIP5星礼包"
+ },
+ "VIPGIFT_VIP6": {
+  "store": "VIPGift",
+  "name": "VIP技能模组特价礼包"
+ },
+ "VIPGIFT_VIP1_1": {
+  "store": "VIPGift",
+  "name": "VIP成长礼包"
+ },
+ "VIPGIFT_VIP2_1": {
+  "store": "VIPGift",
+  "name": "VIP冲刺礼包",
+  "tip": "此商品每周可购买2次。"
+ },
+ "VIPGIFT_VIPQuick1": {
+  "store": "VIPGift",
+  "name": "VIP快速战斗应援",
+  "tip": "此商品每日可购买1次。帐号等级35级以上的团长才能使用快速战斗功能。"
+ },
+ "VIPGIFT_VIPQuick2": {
+  "store": "VIPGift",
+  "name": "VIP快速战斗应援2"
+ },
+ "VIPGIFT_VIPQuick3": {
+  "store": "VIPGift",
+  "name": "VIP快速战斗应援3"
+ },
+ "VIPGIFT_VIPQuick4": {
+  "store": "VIPGift",
+  "name": "VIP快速战斗应援4"
+ }
+}

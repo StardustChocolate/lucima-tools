@@ -20,6 +20,7 @@ from . import appcore
 from . import config
 from .updater import UpdateError, service as update_service
 from .appcore import ApiError
+from .game_client import GameError, GameMessage
 from .logutil import setup as _setup_log
 
 log = _setup_log()
@@ -120,7 +121,19 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             return appcore.dev_call(body.get("account"), body.get("route"),
                                     body.get("data"), body.get("useAuth", True),
                                     body.get("pass"))
+        if path == "/api/guild/overview":
+            return appcore.guild_overview(body.get("account"))
+        if path == "/api/guild/action":
+            return appcore.guild_action(body.get("account"), body.get("action"), body)
+        if path == "/api/guild/quests/query":
+            return appcore.guild_quests_query(body.get("account"))
+        if path == "/api/guild/quests/start":
+            return appcore.guild_quests_start(body.get("account"), body)
+        if path == "/api/guild/quests/cancel":
+            return appcore.guild_quests_cancel(body.get("account"), body.get("id"))
     elif method == "GET":
+        if path == "/api/guild/quests":
+            return appcore.guild_quests_status(query.get("account"), query.get("id"))
         if path == "/api/accounts":
             return appcore.list_accounts()
         if path == "/api/status":
@@ -223,7 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result)
                 # 日志增量接口由每个在线页面持续轮询；正常响应没有诊断价值，
                 # 记录它只会刷屏并挤掉真正有用的开发者日志。异常仍走下方分支记录。
-                if path not in {"/api/logs/auto", "/api/dev/history", "/api/update/status"}:
+                if path not in {"/api/logs/auto", "/api/dev/history", "/api/update/status", "/api/guild/quests"}:
                     log.info("%s %s -> 200", method, path)
             except ApiError as e:
                 self._send_json({"detail": e.message}, e.status)
@@ -231,6 +244,11 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError as e:
                 self._send_json({"detail": f"缺少参数 {e}"}, 400)
                 log.warning("%s %s -> 400 缺少参数 %s", method, path, e)
+            except (GameError, GameMessage) as e:
+                # 游戏业务拒绝是可预期的（未加入工会、已签到、权限/限购等），
+                # 不应伪装成后端崩溃。
+                self._send_json({"detail": str(e), "gameError": True}, 400)
+                log.info("%s %s -> 400 游戏业务状态 %s", method, path, e)
             except Exception as e:
                 self._send_json({"detail": f"服务器错误：{e}"}, 500)
                 # 未预期异常：记完整 traceback 供排查

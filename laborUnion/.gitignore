@@ -1,0 +1,60 @@
+# ===================== 隐私 / 凭据（务必保持忽略）=====================
+# 账号注册表 + base64 保存的密码 + 各项设置
+settings.json
+settings.local.json
+# 浏览器登录态（Playwright profile，含 cookie/JWT）
+# ⚠️ 单数是旧的单账号目录，复数是多账号版——两条都要，早先只写了单数那条
+.browser_profile/
+.browser_profiles/
+# 运行日志（含账号名、请求路径、traceback）
+logs/
+*.log
+
+# ===================== 本地研究 / 预览 =====================
+# 协议逆向与抓包资料不属于 LucimaTools 发布源码。
+/capture/
+/recon/
+/capture_browser.bat
+/capture_proxy.bat
+
+# UI 预览、截图和临时样板统一放在 previews/；只跟踪目录说明。
+/previews/*
+!/previews/README.md
+
+# 本地测试与外部 Wiki 全量资源不进入发布仓库。
+/tests/
+/assets_full/
+
+# 本地更新服务清单与发布连接参数，禁止进入仓库。
+/deploy/update-server/stable.json
+/deploy/update-server/*.local
+/deploy/update-server/*.private
+
+# ===================== 构建产物 =====================
+build/
+dist/
+debug/
+*.spec.bak
+__pycache__/
+*.py[cod]
+
+# ---- Android ----
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+android/keystore.properties
+*.jks
+*.keystore
+# 构建时从项目根复制进来的共享源（单一真源在 backend/ frontend/ assets/）
+android/app/src/main/python/backend/
+android/app/src/main/assets/web/
+android/.idea/
+*.iml
+
+# ===================== 编辑器 / 系统 =====================
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

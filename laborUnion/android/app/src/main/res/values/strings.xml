@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">璐茜玛的深层幻影</string>
+
+    <!-- 前台服务常驻通知 -->
+    <string name="svc_channel_name">后台自动运行</string>
+    <string name="svc_channel_desc">保持自动任务在息屏/后台时持续运行</string>
+    <string name="svc_notif_title">璐茜玛的深层幻影</string>
+    <string name="svc_notif_text">自动任务后台运行中</string>
+</resources>
