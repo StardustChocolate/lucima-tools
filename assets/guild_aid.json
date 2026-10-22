@@ -1,0 +1,269 @@
+{
+ "schema": 1,
+ "source": {
+  "GuildAidItem": "a97b2f770850b3d4f0577674888e667eb68a8990c63f49e47c954b5bf39c7dff",
+  "Item": "71fcdf9783dd708c55ff2b3b39a7a79c4a078ba08ea6806234573cba9e0a12f9"
+ },
+ "rules": {
+  "CatalystRare": {
+   "group": "catalyst",
+   "max": 2,
+   "cost": 1,
+   "reward": 40
+  },
+  "Rune1": {
+   "group": "element",
+   "max": 20,
+   "cost": 4,
+   "reward": 10
+  },
+  "Rune2": {
+   "group": "element",
+   "max": 5,
+   "cost": 1,
+   "reward": 20
+  },
+  "Mat1": {
+   "group": "hunt",
+   "max": 20,
+   "cost": 4,
+   "reward": 10
+  },
+  "Mat2": {
+   "group": "hunt",
+   "max": 16,
+   "cost": 4,
+   "reward": 15
+  },
+  "Mat3": {
+   "group": "hunt",
+   "max": 12,
+   "cost": 3,
+   "reward": 20
+  },
+  "Mat4": {
+   "group": "hunt",
+   "max": 8,
+   "cost": 2,
+   "reward": 30
+  }
+ },
+ "items": {
+  "C001": {
+   "name": "暗影标志",
+   "rule": "CatalystRare"
+  },
+  "C002": {
+   "name": "混沌能量",
+   "rule": "CatalystRare"
+  },
+  "C004": {
+   "name": "神臂弓弦",
+   "rule": "CatalystRare"
+  },
+  "C005": {
+   "name": "狂热剑刃",
+   "rule": "CatalystRare"
+  },
+  "C007": {
+   "name": "源能护盾",
+   "rule": "CatalystRare"
+  },
+  "C008": {
+   "name": "超导转换器",
+   "rule": "CatalystRare"
+  },
+  "C010": {
+   "name": "动力控制回路",
+   "rule": "CatalystRare"
+  },
+  "C011": {
+   "name": "犄角头盔",
+   "rule": "CatalystRare"
+  },
+  "C013": {
+   "name": "坚硬甲壳",
+   "rule": "CatalystRare"
+  },
+  "C014": {
+   "name": "穿甲贯通弹",
+   "rule": "CatalystRare"
+  },
+  "C016": {
+   "name": "复合式枪刃",
+   "rule": "CatalystRare"
+  },
+  "C017": {
+   "name": "逻辑判断芯片",
+   "rule": "CatalystRare"
+  },
+  "C019": {
+   "name": "真理之心",
+   "rule": "CatalystRare"
+  },
+  "C020": {
+   "name": "高强度齿轮",
+   "rule": "CatalystRare"
+  },
+  "C022": {
+   "name": "免疫血清",
+   "rule": "CatalystRare"
+  },
+  "C023": {
+   "name": "高速运转组件",
+   "rule": "CatalystRare"
+  },
+  "C025": {
+   "name": "猎手镰刀",
+   "rule": "CatalystRare"
+  },
+  "C026": {
+   "name": "审判之眼",
+   "rule": "CatalystRare"
+  },
+  "C028": {
+   "name": "携带式发动机",
+   "rule": "CatalystRare"
+  },
+  "C029": {
+   "name": "异变犬齿",
+   "rule": "CatalystRare"
+  },
+  "C031": {
+   "name": "感知抑制器",
+   "rule": "CatalystRare"
+  },
+  "C032": {
+   "name": "伽玛突变细胞",
+   "rule": "CatalystRare"
+  },
+  "C034": {
+   "name": "数据纪录卡",
+   "rule": "CatalystRare"
+  },
+  "C035": {
+   "name": "液态金属",
+   "rule": "CatalystRare"
+  },
+  "CR11": {
+   "name": "烈焰晶石残液",
+   "rule": "Mat1"
+  },
+  "CR12": {
+   "name": "烈焰晶石碎片",
+   "rule": "Mat2"
+  },
+  "CR13": {
+   "name": "烈焰晶石组块",
+   "rule": "Mat3"
+  },
+  "CR14": {
+   "name": "烈焰晶石原石",
+   "rule": "Mat4"
+  },
+  "CR21": {
+   "name": "天然晶石残液",
+   "rule": "Mat1"
+  },
+  "CR22": {
+   "name": "天然晶石碎片",
+   "rule": "Mat2"
+  },
+  "CR23": {
+   "name": "天然晶石组块",
+   "rule": "Mat3"
+  },
+  "CR24": {
+   "name": "天然晶石原石",
+   "rule": "Mat4"
+  },
+  "CR31": {
+   "name": "寒冰晶石残液",
+   "rule": "Mat1"
+  },
+  "CR32": {
+   "name": "寒冰晶石碎片",
+   "rule": "Mat2"
+  },
+  "CR33": {
+   "name": "寒冰晶石组块",
+   "rule": "Mat3"
+  },
+  "CR34": {
+   "name": "寒冰晶石原石",
+   "rule": "Mat4"
+  },
+  "CR41": {
+   "name": "幽暗晶石残液",
+   "rule": "Mat1"
+  },
+  "CR42": {
+   "name": "幽暗晶石碎片",
+   "rule": "Mat2"
+  },
+  "CR43": {
+   "name": "幽暗晶石组块",
+   "rule": "Mat3"
+  },
+  "CR44": {
+   "name": "幽暗晶石原石",
+   "rule": "Mat4"
+  },
+  "CR51": {
+   "name": "灿烂晶石残液",
+   "rule": "Mat1"
+  },
+  "CR52": {
+   "name": "灿烂晶石碎片",
+   "rule": "Mat2"
+  },
+  "CR53": {
+   "name": "灿烂晶石组块",
+   "rule": "Mat3"
+  },
+  "CR54": {
+   "name": "灿烂晶石原石",
+   "rule": "Mat4"
+  },
+  "R001": {
+   "name": "下级火元素",
+   "rule": "Rune1"
+  },
+  "R002": {
+   "name": "中级火元素",
+   "rule": "Rune2"
+  },
+  "R004": {
+   "name": "下级水元素",
+   "rule": "Rune1"
+  },
+  "R005": {
+   "name": "中级水元素",
+   "rule": "Rune2"
+  },
+  "R007": {
+   "name": "下级木元素",
+   "rule": "Rune1"
+  },
+  "R008": {
+   "name": "中级木元素",
+   "rule": "Rune2"
+  },
+  "R010": {
+   "name": "下级光元素",
+   "rule": "Rune1"
+  },
+  "R011": {
+   "name": "中级光元素",
+   "rule": "Rune2"
+  },
+  "R013": {
+   "name": "下级暗元素",
+   "rule": "Rune1"
+  },
+  "R014": {
+   "name": "中级暗元素",
+   "rule": "Rune2"
+  }
+ }
+}

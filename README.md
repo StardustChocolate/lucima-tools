@@ -2,7 +2,7 @@
 
 # LucimaTools · 璐茜玛的深层幻影
 
-<img src="./frontend/assets/app-icon.png" width="200" alt="LucimaTools">
+<img src="./assets/app-icon.png" width="200" alt="LucimaTools">
 
 ✨原生、轻量、跨平台✨
 
@@ -13,6 +13,7 @@
 ![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84.svg?style=flat-square&logo=android&logoColor=white)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg?style=flat-square)](LICENSE)
 [![QQ Group](https://img.shields.io/badge/QQ%20Group-1032070842-5865F2.svg?style=flat-square)](https://qm.qq.com/q/YsvXane7Wq)
+[![Discord](https://img.shields.io/badge/Discord-NnTce6zvKY-5865F2.svg?style=flat-square&logo=discord&logoColor=white)](https://discord.com/invite/NnTce6zvKY)
 
 </div>
 
@@ -24,16 +25,20 @@ LucimaTools · 璐茜玛的深层幻影 是一个致力于降低星陨玩家日�
 
 **自动任务**
 - 基地领取（动力转换 / 成长药剂 / 升星水晶 / 技能模块）
+- 每日/周成就奖励领取（默认两项全选，可独立勾选；始终显示两类进度，按任务状态更新检测，不定时查询）
 - 派遣任务
 - 秘密商店刷新（免费）
 - 每日免费招募
 - 虚拟幻境
 - 竞技场NPC
+- 佣兵团签到、捐赠、援助、周任务及商店购买
+- 多账号状态灯与可配置的断线自动重登
 
 **主动任务**
 - 一键领取邮件
 - 秘密商店刷新（钻石）
 - 讨伐 / 元素 / 活动关卡
+- 活动关卡自动推图与实时战斗窗口
 - 商店购买
 
 > 更多任务开发中~
@@ -61,20 +66,21 @@ python -m pip install -r requirements.txt
 
 ```powershell
 python -m pip install pyinstaller==6.20.0
-.\build.bat win       # Windows 桌面端
-.\build.bat android   # Android 调试 APK
-.\build.bat all       # 同时构建两端
+.\build-debug.bat win       # Windows 桌面测试版
+.\build-debug.bat android   # Android 调试 APK
+.\build-debug.bat all       # 同时构建两端测试版
 ```
 
 构建产物位于：
 
-- Windows：`dist/LucimaTools/`
-- Android：`android/app/build/outputs/apk/debug/app-debug.apk`
+- Windows：`debug/<版本号>/LucimaTools-windows-x64-debug-<版本号>.zip`
+- Android：`debug/<版本号>/LucimaTools-android-debug-<版本号>.apk`
 
-Android 未配置签名时会使用 debug 签名；正式签名可从
-`android/keystore.properties.example` 创建本地 `keystore.properties`。应用版本号只修改
+测试构建使用独立测试配置；正式构建通过 `build.bat` 执行，需要本机更新配置及正式签名，
+缺失时会直接失败。正式签名可从 `android/keystore.properties.example` 创建本地
+`keystore.properties`，完整步骤见 [构建说明](BUILD.md)。应用版本号只修改
 `backend/version.py` 中的 `APP_VERSION`。更新外部资源后，执行
-`python tools/sync_assets.py` 生成实际进入仓库和安装包的 `assets/`。
+`python assets/sync_full.py`（或双击 `assets/sync_full.bat`）手动同步运行资源和精简数据表；编译不依赖 `assets_full/`。
 
 > Windows 重新打包会清理 `dist/LucimaTools/`，请先备份其中的 `settings.json` 等用户数据。
 

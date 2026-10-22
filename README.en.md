@@ -2,7 +2,7 @@
 
 # LucimaTools · Lucima's Deep Phantom
 
-<img src="./frontend/assets/app-icon.png" width="200" alt="LucimaTools">
+<img src="./assets/app-icon.png" width="200" alt="LucimaTools">
 
 ✨ Native, lightweight, cross-platform ✨
 
@@ -13,6 +13,7 @@
 ![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84.svg?style=flat-square&logo=android&logoColor=white)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg?style=flat-square)](LICENSE)
 [![QQ Group](https://img.shields.io/badge/QQ%20Group-1032070842-5865F2.svg?style=flat-square)](https://qm.qq.com/q/YsvXane7Wq)
+[![Discord](https://img.shields.io/badge/Discord-NnTce6zvKY-5865F2.svg?style=flat-square&logo=discord&logoColor=white)](https://discord.com/invite/NnTce6zvKY)
 
 </div>
 
@@ -24,16 +25,20 @@ LucimaTools is an open-source project built to reduce the daily grind for *Ark R
 
 **Automated tasks** (run on schedule)
 - Base rewards (power conversion / growth potions / star-up crystals / skill modules)
+- Daily/weekly achievement reward claims (both selected by default, independently selectable; both progress values stay visible, with checks on quest-state updates rather than polling)
 - Dispatch missions
 - Free Secret Shop refreshes
 - Daily free recruitment
 - Virtual Illusion
 - Arena NPC battles
+- Guild check-in, donations, aid, weekly quests, and shop purchases
+- Account status indicators and configurable reconnection
 
 **Manual tasks**
 - Claim all mail
 - Secret Shop refreshes using diamonds
 - Hunt / element / event stages
+- Automatic event-stage progression with a live battle window
 - Store purchases
 
 > More tasks are in development.
@@ -60,17 +65,17 @@ Install PyInstaller before packaging the Windows build. The scripts in the repos
 
 ```powershell
 python -m pip install pyinstaller==6.20.0
-.\build.bat win       # Windows desktop app
-.\build.bat android   # Android debug APK
-.\build.bat all       # Build both platforms
+.\build-debug.bat win       # Windows test build
+.\build-debug.bat android   # Android debug APK
+.\build-debug.bat all       # Build both test platforms
 ```
 
 Build outputs:
 
-- Windows: `dist/LucimaTools/`
-- Android: `android/app/build/outputs/apk/debug/app-debug.apk`
+- Windows: `debug/<version>/LucimaTools-windows-x64-debug-<version>.zip`
+- Android: `debug/<version>/LucimaTools-android-debug-<version>.apk`
 
-Android falls back to debug signing when no signing configuration is present. For a release signature, create a local `keystore.properties` from `android/keystore.properties.example`. Change the application version only through `APP_VERSION` in `backend/version.py`. After updating the external resource archive, run `python tools/sync_assets.py` to regenerate the `assets/` directory included in the repository and application packages.
+Test builds use a separate configuration. Release builds use `build.bat` and require local update settings and a release signing key; missing configuration causes the build to fail. Create a local `keystore.properties` from `android/keystore.properties.example` and follow [the build guide](BUILD.md). Change the application version only through `APP_VERSION` in `backend/version.py`. After updating the external resource archive, run `python assets/sync_full.py` (or double-click `assets/sync_full.bat`) to manually refresh runtime assets and compact data tables. Builds use the checked-in resources and do not require `assets_full/`.
 
 > Rebuilding the Windows package clears `dist/LucimaTools/`. Back up `settings.json` and other user data stored there first.
 

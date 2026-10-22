@@ -14,13 +14,14 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 
 from . import config
 from .logutil import setup as _setup_log
 from .update_security import UpdateSignatureError, verify_manifest_envelope
+from .update_delta import ANDROID_FORMAT, WINDOWS_FORMAT, DeltaError, apply_android, apply_windows
 
 
 log = _setup_log()
@@ -88,7 +89,7 @@ def _http_client(read_timeout: float = 30.0) -> httpx.Client:
     )
 
 
-def _validate_artifact(value: object, platform: str) -> dict | None:
+def _validate_artifact(value: object, platform: str, *, delta: bool = False) -> dict | None:
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -97,7 +98,7 @@ def _validate_artifact(value: object, platform: str) -> dict | None:
     if any(key not in value for key in required):
         raise UpdateError(f"{platform} 更新信息不完整")
     filename = str(value["fileName"])
-    if not filename or Path(filename).name != filename:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", filename):
         raise UpdateError("更新文件名无效")
     parsed = urlparse(str(value["url"]))
     if parsed.scheme not in ("http", "https") or not parsed.hostname \
@@ -112,13 +113,83 @@ def _validate_artifact(value: object, platform: str) -> dict | None:
     digest = str(value["sha256"]).lower()
     if not _SHA256_RE.fullmatch(digest):
         raise UpdateError("更新文件哈希无效")
-    return {
+    normalized = {
         "format": str(value["format"]),
         "fileName": filename,
         "url": str(value["url"]),
         "size": size,
         "sha256": digest,
     }
+    if delta:
+        _version_key(str(value.get("fromVersion") or ""))
+        normalized["fromVersion"] = value["fromVersion"]
+        if normalized["format"] not in {WINDOWS_FORMAT, ANDROID_FORMAT}:
+            raise UpdateError("不支持的增量格式")
+        if normalized["format"] == ANDROID_FORMAT:
+            if type(value.get("baseSize")) is not int or not 0 < value["baseSize"] <= MAX_ARTIFACT_SIZE \
+                    or not _SHA256_RE.fullmatch(str(value.get("baseSha256") or "")):
+                raise UpdateError("增量基准信息无效")
+            normalized.update(baseSize=value["baseSize"], baseSha256=value["baseSha256"])
+    else:
+        deltas = value.get("deltas", [])
+        if not isinstance(deltas, list) or len(deltas) > 8 or any(not isinstance(x, dict) for x in deltas):
+            raise UpdateError("增量更新列表无效")
+        normalized["deltas"] = [_validate_artifact(x, platform, delta=True) for x in deltas]
+    return normalized
+
+
+def _validate_resource_url(value: object, field: str) -> str:
+    url = str(value or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname \
+            or parsed.username or parsed.password:
+        raise UpdateError(f"图鉴资源{field}地址无效")
+    return url
+
+
+def _validate_resource_path(value: object, field: str) -> str:
+    path = str(value or "").strip()
+    if not path or len(path) > 1000 or "\x00" in path:
+        raise UpdateError(f"图鉴资源{field}路径无效")
+    parsed = urlparse(path)
+    if parsed.scheme and parsed.scheme not in ("http", "https"):
+        raise UpdateError(f"图鉴资源{field}路径无效")
+    return path
+
+
+def _validate_resources(value: object) -> dict | None:
+    """Validate the optional, independently versioned encyclopedia bundle."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise UpdateError("图鉴资源清单格式无效")
+    normalized: dict[str, object] = {}
+    for key in ("version", "dataVersion"):
+        if value.get(key) is not None:
+            text = str(value[key]).strip()
+            if not text or len(text) > 120:
+                raise UpdateError("图鉴资源版本无效")
+            normalized[key] = text
+    for key in ("baseUrl", "manifestUrl"):
+        if value.get(key):
+            normalized[key] = _validate_resource_url(value[key], key)
+    for key in (
+        "indexUrl", "detailBaseUrl", "staticPortraitBaseUrl", "dynamicBaseUrl",
+        "spineRuntimeUrl", "spinePlayerUrl",
+    ):
+        if value.get(key):
+            normalized[key] = _validate_resource_path(value[key], key)
+    portraits = value.get("dynamicPortraits")
+    if portraits is not None:
+        if not isinstance(portraits, dict) or len(portraits) > 1000:
+            raise UpdateError("图鉴动态立绘索引无效")
+        normalized["dynamicPortraits"] = {
+            str(key): _validate_resource_path(path, "dynamicPortrait")
+            for key, path in portraits.items()
+        }
+    if not normalized:
+        raise UpdateError("图鉴资源清单为空")
+    return normalized
 
 
 class UpdateService:
@@ -137,6 +208,7 @@ class UpdateService:
         self._progress_total = 0
         self._last_checked_at: int | None = None
         self._last_error = ""
+        self._channel = config.get_update_channel()
 
     def _set_progress(
         self, phase: str, *, downloaded: int | None = None, total: int | None = None,
@@ -149,6 +221,11 @@ class UpdateService:
                 self._progress_total = max(0, int(total))
 
     def start(self) -> None:
+        # start.bat is the source-based local test server. It intentionally has
+        # no published update manifest and must not start a noisy retry thread.
+        # Packaged desktop/Android builds do not set ARK_TEST_SERVER.
+        if config.TEST_SERVER:
+            return
         with self._lock:
             if self._started:
                 return
@@ -167,7 +244,7 @@ class UpdateService:
             )
 
     def _validated_payload(self, payload: dict) -> dict:
-        if payload.get("schema") != 1 or payload.get("channel") != "stable":
+        if payload.get("schema") != 1 or payload.get("channel") != self._channel:
             raise UpdateError("更新清单版本或通道无效")
         latest = str(payload.get("latestVersion") or "")
         minimum = str(payload.get("minSupportedVersion") or "")
@@ -187,16 +264,23 @@ class UpdateService:
             raise UpdateError("更新说明格式无效")
         return {
             "schema": 1,
-            "channel": "stable",
+            "channel": self._channel,
             "development": bool(payload.get("development")),
             "latestVersion": latest,
             "minSupportedVersion": minimum,
             "publishedAt": str(payload.get("publishedAt") or ""),
             "notes": notes[:20],
             "platforms": normalized_platforms,
+            "resources": _validate_resources(payload.get("resources")),
         }
 
     def check_now(self) -> bool:
+        # Keep /api/update/check harmless and silent in local test mode too.
+        # The frontend may still poll /api/update/status while testing.
+        if config.TEST_SERVER:
+            with self._lock:
+                self._last_error = ""
+            return True
         if not self._check_lock.acquire(blocking=False):
             return True
         with self._lock:
@@ -208,7 +292,7 @@ class UpdateService:
             if self._etag and self._payload is not None:
                 headers["If-None-Match"] = self._etag
             with _http_client() as client:
-                response = client.get(MANIFEST_URL, headers=headers)
+                response = client.get(self.manifest_url(), headers=headers)
             if response.status_code == 304 and self._payload is not None:
                 with self._lock:
                     self._last_checked_at = int(time.time() * 1000)
@@ -245,6 +329,30 @@ class UpdateService:
         self.check_now()
         return self.status()
 
+    def manifest_url(self) -> str:
+        parts = urlsplit(MANIFEST_URL)
+        if self._channel == "stable":
+            return MANIFEST_URL
+        path = parts.path.rsplit("/", 1)[0] + "/preview.json"
+        return urlunsplit(parts._replace(path=path, fragment=""))
+
+    def set_channel(self, channel: str) -> dict:
+        if channel not in {"stable", "preview"}:
+            raise UpdateError("无效的更新通道")
+        if not self._install_lock.acquire(blocking=False):
+            raise UpdateError("更新处理中，无法切换通道")
+        try:
+            with self._check_lock, self._lock:
+                config.set_update_channel(channel)
+                self._channel = channel
+                self._payload = None
+                self._etag = ""
+                self._last_error = ""
+                self._last_checked_at = None
+        finally:
+            self._install_lock.release()
+        return self.request_check()
+
     def status(self) -> dict:
         with self._lock:
             payload = dict(self._payload or {})
@@ -266,6 +374,12 @@ class UpdateService:
         install_supported = config.PLATFORM == "android" or bool(getattr(sys, "frozen", False))
         return {
             "checked": self._payload is not None,
+            # Source-based start.bat runs without a published update manifest.
+            # The frontend uses this explicit marker to bypass the production
+            # login gate in local test mode instead of guessing from an empty
+            # update payload.
+            "testServer": config.TEST_SERVER,
+            "channel": self._channel,
             "checking": checking,
             "available": available,
             "forced": forced,
@@ -284,6 +398,7 @@ class UpdateService:
             "minSupportedVersion": minimum,
             "publishedAt": payload.get("publishedAt"),
             "notes": payload.get("notes") or [],
+            "resources": payload.get("resources"),
             "platform": platform,
             "artifactAvailable": artifact is not None,
             "lastCheckedAt": last_checked,
@@ -411,28 +526,30 @@ class UpdateService:
         if not self._install_lock.acquire(blocking=False):
             raise UpdateError("更新正在处理中")
         keep_locked_until_exit = False
+        prepared_stage = None
         with self._lock:
             self._installing = True
             self._progress_phase = "preparing"
             self._progress_downloaded = 0
             self._progress_total = 0
         try:
-            state = self.status()
+            with self._lock:
+                state = self.status()
+                artifact = ((self._payload or {}).get("platforms") or {}).get(state["platform"])
             if not state["available"]:
                 raise UpdateError("当前没有可安装的更新")
             if not state["installSupported"]:
                 raise UpdateError("当前运行方式不支持自动覆盖更新")
             platform = state["platform"]
-            with self._lock:
-                payload = self._payload or {}
-                artifact = (payload.get("platforms") or {}).get(platform)
             if artifact is None:
                 raise UpdateError("服务器尚未提供当前平台的安装包")
             expected_format = "android-apk" if platform == "android" else "windows-portable-zip"
             if artifact["format"] != expected_format:
                 raise UpdateError("当前平台的更新包格式不受支持")
             version = str(state["latestVersion"])
-            downloaded = self._download(artifact, version)
+            prepared, is_stage = self._prepare_update(artifact, version, platform)
+            if is_stage:
+                prepared_stage = prepared
             self._set_progress("waiting")
             self._wait_for_account_safe_point()
             if platform == "android":
@@ -441,10 +558,11 @@ class UpdateService:
                     "ok": True,
                     "platform": "android",
                     "version": version,
-                    "installerPath": str(downloaded.resolve()),
+                    "installerPath": str(prepared.resolve()),
                 }
             self._set_progress("preparing-install")
-            stage_root = self._extract_windows(downloaded, version)
+            stage_root = prepared if is_stage else self._extract_windows(prepared, version)
+            prepared_stage = stage_root
             self._set_progress("restarting")
             self._launch_windows_helper(stage_root, version)
             # Keep requests blocked during the short hand-off to the helper.
@@ -452,10 +570,46 @@ class UpdateService:
             return {"ok": True, "platform": "windows", "version": version, "restarting": True}
         finally:
             if not keep_locked_until_exit:
+                if prepared_stage is not None:
+                    shutil.rmtree(prepared_stage, ignore_errors=True)
                 with self._lock:
                     self._installing = False
                     self._progress_phase = "idle"
                 self._install_lock.release()
+
+    def _prepare_update(self, artifact: dict, version: str, platform: str) -> tuple[Path, bool]:
+        kind = ANDROID_FORMAT if platform == "android" else WINDOWS_FORMAT
+        options = [x for x in artifact.get("deltas", []) if x["fromVersion"] == config.APP_VERSION
+                   and x["format"] == kind and x["size"] < artifact["size"]]
+        if options:
+            delta = min(options, key=lambda x: x["size"])
+            patch = None
+            output = None
+            try:
+                patch = self._download(delta, version)
+                self._set_progress("applying-delta", downloaded=0, total=0)
+                if platform == "android":
+                    output = patch.parent / f".{uuid.uuid4().hex}.apk.part"
+                    base = Path(os.environ.get("ARK_ANDROID_APK_PATH") or "missing-installed.apk")
+                    apply_android(patch, base, output, artifact, delta)
+                    final = patch.parent / artifact["fileName"]
+                    os.replace(output, final)
+                    return final, False
+                output = config.data_dir() / "updates" / "staging" / f"{version}-{uuid.uuid4().hex}"
+                apply_windows(patch, Path(sys.executable).resolve().parent, output, version)
+                return output, True
+            except (DeltaError, UpdateError, OSError, ValueError, KeyError, TypeError,
+                    zipfile.BadZipFile, RuntimeError, httpx.HTTPError) as exc:
+                if output is not None:
+                    if output.is_dir():
+                        shutil.rmtree(output, ignore_errors=True)
+                    else:
+                        output.unlink(missing_ok=True)
+                log.warning("增量更新不可用，改用完整包：%s", exc)
+            finally:
+                if patch is not None:
+                    patch.unlink(missing_ok=True)
+        return self._download(artifact, version), False
 
 
 _WINDOWS_HELPER = r'''param(

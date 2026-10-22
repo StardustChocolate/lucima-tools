@@ -2,7 +2,7 @@
 
 产物（本脚本是双端图标的唯一来源，改设计只动这里再重跑）：
 - desktop/app.ico            Windows exe / 窗口图标（多尺寸 ico）
-- frontend/assets/app-icon.png  网页 favicon（前端 index.html 引用）
+- assets/app-icon.png           网页 favicon（前端 index.html 引用）
 - android mipmap-*/ic_launcher.png + ic_launcher_round.png            各密度传统图标
 - android mipmap-*/ic_launcher_{foreground,background}.png            自适应图标（v26+）
   （mipmap-anydpi-v26/*.xml 已存在并正确引用两层，本脚本不改）
@@ -89,7 +89,7 @@ def main():
 
     master = make_logo(512)
     # --- 网页 favicon（登录页/WebView 标签用同一个标记）---
-    save(master, os.path.join(ROOT, "frontend", "assets", "app-icon.png"))
+    save(master, os.path.join(ROOT, "assets", "app-icon.png"))
 
     # --- Android 传统 mipmap（各密度，API<26）---
     res = os.path.join(ROOT, "android", "app", "src", "main", "res")

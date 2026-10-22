@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,10 @@ from typing import Any
 from . import config
 
 _LOG_DIR = Path(config._DATA_DIR) / "logs"
-LOG_FILE = _LOG_DIR / "app.log"
+# The source test server can run beside a preview/desktop process. Keep its
+# rotating file separate so Windows does not fail when another process holds
+# the normal app.log during rollover. Packaged builds continue using app.log.
+LOG_FILE = _LOG_DIR / ("app-test.log" if config.TEST_SERVER else "app.log")
 
 REDACTED = "[REDACTED]"
 
@@ -69,7 +73,7 @@ def setup() -> logging.Logger:
             LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
         )
         fh.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+            "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
         ))
         logger.addHandler(fh)
     except Exception:
@@ -87,3 +91,34 @@ def setup() -> logging.Logger:
 
 
 log = logging.getLogger("lucima")
+
+
+def read_retained_logs() -> str:
+    """Combine rotated files from oldest to newest into one export."""
+    paths = [Path(f"{LOG_FILE}.{index}") for index in range(3, 0, -1)] + [LOG_FILE]
+    chunks = []
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            continue
+        if text:
+            chunks.append(text.rstrip("\n"))
+    return "\n".join(chunks) + ("\n" if chunks else "")
+
+
+def developer_log_filename() -> str:
+    return f"LucimaTools-developer-log-{datetime.now():%Y%m%d-%H%M%S}.txt"
+
+
+def save_developer_logs() -> Path:
+    directory = config.get_download_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    base = directory / developer_log_filename()
+    target = base
+    suffix = 1
+    while target.exists():
+        target = directory / f"{base.stem}-{suffix}{base.suffix}"
+        suffix += 1
+    target.write_text(read_retained_logs() or "（暂无日志）\n", encoding="utf-8")
+    return target

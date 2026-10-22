@@ -22,7 +22,7 @@ object AppBootstrap {
 
     private val started = AtomicBoolean(false)
 
-    /** web 资源释放目标目录（frontend/assets），Python 标准库服务器 open() 从这里读。 */
+    /** web 资源释放目标目录（frontend/ 与 assets/），Python 标准库服务器 open() 从这里读。 */
     fun assetRoot(ctx: Context): File = File(ctx.filesDir, "web")
 
     /**
@@ -44,12 +44,13 @@ object AppBootstrap {
         AssetSync.syncWeb(app, assetRoot)
 
         // 3) 后台线程起标准库 HTTP 服务（serve_forever 永久阻塞）。
-        //    不强制传代理（传空）——由 Python 配置决定（默认"跟随系统"）。
+        //    代理参数保留为空，网络由系统 VPN/TUN 接管。
         thread(isDaemon = true, name = "ark-server") {
             try {
                 Python.getInstance()
                     .getModule("backend.android_entry")
-                    .callAttr("start", app.filesDir.absolutePath, assetRoot.absolutePath, "", PORT)
+                    .callAttr("start", app.filesDir.absolutePath, assetRoot.absolutePath, "", PORT,
+                        app.applicationInfo.sourceDir)
             } catch (e: Throwable) {
                 // 起服务失败：复位标志，允许后续重试引导
                 started.set(false)

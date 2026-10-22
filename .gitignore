@@ -16,6 +16,7 @@ logs/
 /recon/
 /capture_browser.bat
 /capture_proxy.bat
+/tmpstats.txt
 
 # UI 预览、截图和临时样板统一放在 previews/；只跟踪目录说明。
 /previews/*
@@ -25,15 +26,27 @@ logs/
 /tests/
 /assets_full/
 
-# 本地更新服务清单与发布连接参数，禁止进入仓库。
-/deploy/update-server/stable.json
-/deploy/update-server/*.local
-/deploy/update-server/*.private
+# 本机部署、运行服务配置和发布连接参数不进入软件源码仓库。
+/deploy/
+/tools/deploy_*.py
+/build.local.bat
+/publish.local.bat
+/publish-*.bat
+/publish.local.bat.example
+/setup-publish.bat
+/requirements-publish.local.txt
+/docs/release-publishing.md
+/tools/upload_release.py
+/tools/test_release_upload.py
+/encyclopedia-endpoint.json
+/redeem-codes-endpoint.json
 
 # ===================== 构建产物 =====================
 build/
 dist/
 debug/
+release/
+releases/
 *.spec.bak
 __pycache__/
 *.py[cod]
@@ -45,6 +58,7 @@ android/app/build/
 android/app/.cxx/
 android/local.properties
 android/keystore.properties
+/android/signing/
 *.jks
 *.keystore
 # 构建时从项目根复制进来的共享源（单一真源在 backend/ frontend/ assets/）

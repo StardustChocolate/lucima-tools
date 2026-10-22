@@ -1,25 +1,212 @@
 // LucimaTools 前端逻辑
 const $ = (id) => document.getElementById(id);
+
+// Shared visual mark for semantic multi-select checkboxes. The native input
+// remains in the DOM for keyboard/accessibility semantics while this inline
+// SVG supplies the themed check indicator.
+const checkboxUIHTML = () => `
+  <span class="check-box" aria-hidden="true">
+    <svg viewBox="0 0 24 24" focusable="false"><path d="M4 12 10 18 20 6"></path></svg>
+  </span>`;
 // 这些接口不绑定单个账号（全局或自带 account），api() 不自动注入 activeAccount
-const _GLOBAL_PATHS = new Set(["/api/config", "/api/logs", "/api/tasks", "/api/accounts", "/api/login", "/api/login/saved", "/api/accounts/logout", "/api/accounts/delete", "/api/accounts/restore", "/api/update/status", "/api/update/check", "/api/update/ignore", "/api/update/install"]);
-const api = async (path, body) => {
+const _GLOBAL_PATHS = new Set(["/api/config", "/api/preferences", "/api/logs", "/api/logs/save", "/api/equipment-filter/export", "/api/diagnostics/runtime", "/api/tasks", "/api/accounts", "/api/login", "/api/login/saved", "/api/accounts/logout", "/api/accounts/delete", "/api/accounts/restore", "/api/update/status", "/api/update/check", "/api/update/ignore", "/api/update/install", "/api/update/channel"]);
+_GLOBAL_PATHS.add("/api/encyclopedia/resources");
+_GLOBAL_PATHS.add("/api/encyclopedia/save-image");
+const _CONNECTION_BLOCKED_PATHS = new Set([
+  "/api/tasks/auto", "/api/tasks/run", "/api/shop/reset", "/api/shop/buy",
+  "/api/star-source/query", "/api/star-source/refresh", "/api/star-source/buy",
+  "/api/customized-equip/action", "/api/store/options", "/api/store/buy",
+  "/api/sweep/options", "/api/sweep/run", "/api/activity/options", "/api/activity/run",
+  "/api/activity/progress/run",
+  "/api/activity/urgent/clear", "/api/support/favorite", "/api/support/unfavorite",
+  "/api/arena/options", "/api/arena/config", "/api/dev/call",
+  "/api/abyss/options", "/api/abyss/config", "/api/abyss/run", "/api/abyss/cancel", "/api/abyss/rewards",
+  "/api/guild/overview", "/api/guild/action", "/api/guild/quests/query", "/api/guild/quests/start",
+]);
+
+// Request pacing is deliberately owned by repeated-task loops. Keeping this
+// state in the UI lets login, one-off actions, and developer-console calls
+// stay immediate while each batch waits only between its own iterations.
+const REQUEST_DELAY_DEFAULTS = Object.freeze({ enabled: true, ms: 300, jitter: 20 });
+let requestDelayRuntime = { ...REQUEST_DELAY_DEFAULTS };
+
+function waitRequestDelayBetweenIterations(iteration, shouldStop = null) {
+  if (Number(iteration) <= 1) return Promise.resolve();
+  const cfg = requestDelayRuntime || REQUEST_DELAY_DEFAULTS;
+  if (cfg.enabled === false) return Promise.resolve();
+  const ms = Math.max(0, Math.min(60000, Number(cfg.ms) || 0));
+  const jitter = Math.max(0, Math.min(100, Number(cfg.jitter) || 0)) / 100;
+  if (!ms) return Promise.resolve();
+  const target = ms * (1 - jitter + Math.random() * jitter * 2);
+  if (typeof shouldStop === "function" && shouldStop()) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    let poll = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer != null) window.clearTimeout(timer);
+      if (poll != null) window.clearInterval(poll);
+      resolve();
+    };
+    timer = window.setTimeout(finish, Math.round(target));
+    if (typeof shouldStop === "function") {
+      poll = window.setInterval(() => {
+        if (shouldStop()) finish();
+      }, 100);
+    }
+  });
+}
+
+const api = async (path, body, { signal } = {}) => {
+  const [apiPath, queryString = ""] = String(path || "").split("?", 2);
+  const queryAccount = new URLSearchParams(queryString).get("account");
+  const requestAccount = body?.account || queryAccount || (typeof activeAccount !== "undefined" ? activeAccount : null);
+  const localAccount = requestAccount && typeof ACCOUNTS !== "undefined" ? ACCOUNTS[requestAccount] : null;
+  if (_CONNECTION_BLOCKED_PATHS.has(apiPath) && localAccount?.connection?.connected === false) {
+    applyConnectionState(requestAccount, localAccount.connection, { notify: true });
+    throw new Error("[重复登录] 当前连接已断开");
+  }
   // POST：向 body 注入 account（未显式给且非全局接口时）
-  if (body && typeof body === "object" && !("account" in body) && activeAccount && !_GLOBAL_PATHS.has(path)) {
+  if (body && typeof body === "object" && !("account" in body) && activeAccount && !_GLOBAL_PATHS.has(apiPath)) {
     body = { ...body, account: activeAccount };
   }
   // GET：非全局接口带上 ?account=
   let url = path;
-  if (!body && activeAccount && !_GLOBAL_PATHS.has(path)) {
+  if (!body && activeAccount && !_GLOBAL_PATHS.has(apiPath) && !queryAccount) {
     url += (path.includes("?") ? "&" : "?") + "account=" + encodeURIComponent(activeAccount);
   }
   const opt = body
     ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
     : {};
-  const res = await fetch(url, opt);
+  const res = await fetch(url, { ...opt, signal });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  const responseAccount = data?.account || requestAccount;
+  if (data?.connection && responseAccount && typeof applyConnectionState === "function") {
+    // The first duplicate-login response is logged and reflected in the
+    // status pill. A task click after that is what shows the one-time toast.
+    applyConnectionState(responseAccount, data.connection, { notify: false });
+  }
+  // Every account response can advertise a new inventory version, including
+  // the background poll when a task batch has not produced a log yet.
+  if (localAccount && ACCOUNTS[responseAccount] === localAccount
+      && apiPath !== "/api/roster" && apiPath !== "/api/inventory") {
+    observeInventoryVersion(responseAccount, data);
+  }
+  if (!res.ok) throw Object.assign(new Error(data.detail || `HTTP ${res.status}`), { httpStatus: res.status });
+  if (data.guild && localAccount && ACCOUNTS[responseAccount] === localAccount
+      && typeof applyGuildSnapshot === "function") {
+    applyGuildSnapshot(responseAccount, data.guild);
+  }
   return data;
 };
+
+const LEGACY_FRONTEND_SETTINGS_PREFIX = "ark_";
+let FRONTEND_SETTINGS = readLegacyFrontendSettings();
+let frontendSettingsSaveTimer = null;
+let frontendSettingsSavePending = false;
+let frontendSettingsSaveInFlight = false;
+let frontendSettingsDirty = false;
+
+function readLegacyFrontendSettings() {
+  const output = {};
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.startsWith(LEGACY_FRONTEND_SETTINGS_PREFIX) || key === "ark_dev_pass") continue;
+      const value = localStorage.getItem(key);
+      if (value != null) output[key] = value;
+    }
+    localStorage.removeItem("ark_dev_pass");
+  } catch { /* localStorage 不可用时由后端设置或默认值接管 */ }
+  return output;
+}
+
+function frontendStorageGet(key) {
+  const value = FRONTEND_SETTINGS[key];
+  return typeof value === "string" ? value : null;
+}
+
+function frontendStorageSet(key, value) {
+  FRONTEND_SETTINGS[key] = String(value);
+  frontendSettingsDirty = true;
+  scheduleFrontendSettingsSave();
+}
+
+function frontendStorageRemove(key) {
+  if (!Object.prototype.hasOwnProperty.call(FRONTEND_SETTINGS, key)) return;
+  delete FRONTEND_SETTINGS[key];
+  frontendSettingsDirty = true;
+  scheduleFrontendSettingsSave();
+}
+
+function scheduleFrontendSettingsSave(delay = 350) {
+  frontendSettingsSavePending = true;
+  if (frontendSettingsSaveTimer) clearTimeout(frontendSettingsSaveTimer);
+  frontendSettingsSaveTimer = setTimeout(() => {
+    frontendSettingsSaveTimer = null;
+    flushFrontendSettings();
+  }, delay);
+}
+
+async function flushFrontendSettings() {
+  if (frontendSettingsSaveInFlight || !frontendSettingsSavePending) return;
+  frontendSettingsSavePending = false;
+  frontendSettingsSaveInFlight = true;
+  try {
+    await api("/api/preferences", { settings: { ...FRONTEND_SETTINGS } });
+    frontendSettingsDirty = false;
+  } catch (error) {
+    frontendSettingsSavePending = true;
+    console.warn("保存前端设置失败：", error);
+    if (!frontendSettingsSaveTimer) {
+      frontendSettingsSaveTimer = setTimeout(() => {
+        frontendSettingsSaveTimer = null;
+        flushFrontendSettings();
+      }, 1500);
+    }
+  } finally {
+    frontendSettingsSaveInFlight = false;
+  }
+}
+
+async function loadFrontendSettings() {
+  const legacy = { ...FRONTEND_SETTINGS };
+  let remote = {};
+  try {
+    const result = await api("/api/preferences");
+    if (result.settings && typeof result.settings === "object" && !Array.isArray(result.settings)) {
+      remote = Object.fromEntries(
+        Object.entries(result.settings).filter(([, value]) => typeof value === "string"),
+      );
+    }
+  } catch (error) {
+    console.warn("读取前端设置失败：", error);
+  }
+
+  const merged = { ...legacy, ...remote };
+  const needsMigration = Object.keys(legacy).some((key) => !Object.prototype.hasOwnProperty.call(remote, key));
+  FRONTEND_SETTINGS = merged;
+  if (needsMigration || (!Object.keys(remote).length && Object.keys(legacy).length)) {
+    frontendSettingsDirty = true;
+    frontendSettingsSavePending = true;
+    await flushFrontendSettings();
+  }
+  reloadEquipmentFilterSchemesFromSettings();
+}
+
+window.addEventListener("pagehide", () => {
+  if (!frontendSettingsDirty) return;
+  try {
+    fetch("/api/preferences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: { ...FRONTEND_SETTINGS } }),
+      keepalive: true,
+    });
+  } catch { /* 关闭窗口时尽力保存 */ }
+});
 
 // ---------- 主题引擎 ----------
 const THEME_LS = "ark_theme";
@@ -40,7 +227,7 @@ function hexToRgb(hex) {
 const DEFAULT_THEME = { accent: "#ff7fac", accent2: "#a06bff", mode: "dark" };
 function getTheme() {
   try {
-    const v = JSON.parse(localStorage.getItem(THEME_LS)) || {};
+    const v = JSON.parse(frontendStorageGet(THEME_LS)) || {};
     return {
       accent: v.accent || DEFAULT_THEME.accent,
       accent2: v.accent2 || DEFAULT_THEME.accent2,
@@ -55,7 +242,7 @@ function applyTheme(t) {
   root.style.setProperty("--accent-rgb", hexToRgb(t.accent).join(", "));
   root.style.setProperty("--accent2-rgb", hexToRgb(t.accent2).join(", "));
   root.setAttribute("data-theme", t.mode);
-  localStorage.setItem(THEME_LS, JSON.stringify(t));
+  frontendStorageSet(THEME_LS, JSON.stringify(t));
   syncThemeUI(t);
 }
 function setTheme(patch) { applyTheme({ ...getTheme(), ...patch }); }
@@ -91,12 +278,14 @@ function renderSwatches() {
 }
 
 // ---------- 板块导航 ----------
-const SECTION_TITLES = { info: "基本信息", auto: "自动任务", manual: "主动任务", toolbox: "工具箱", logs: "运行日志", settings: "系统设置", about: "关于我们" };
+const SECTION_TITLES = { info: "基本信息", auto: "自动任务", manual: "主动任务", guild: "佣兵团", toolbox: "工具箱", logs: "运行日志", settings: "系统设置", about: "关于我们" };
 let currentSection = "info";
 let logUnread = 0;
 function showSection(id) {
+  const leavingToolbox = currentSection === "toolbox" && id !== "toolbox";
   currentSection = id;
-  if (id === "toolbox" && typeof showToolboxHome === "function") showToolboxHome();
+  if ((id === "toolbox" || leavingToolbox) && typeof showToolboxHome === "function") showToolboxHome();
+  if (id !== "toolbox" && typeof stopBackgroundTestPolling === "function") stopBackgroundTestPolling();
   document.querySelectorAll(".section").forEach((s) => s.classList.toggle("active", s.id === `section-${id}`));
   document.querySelectorAll("#sideNav .nav-item").forEach((n) => n.classList.toggle("active", n.dataset.section === id));
   $("crumb").textContent = SECTION_TITLES[id] || "";
@@ -105,6 +294,7 @@ function showSection(id) {
     updateLogBadge();
     setBottomLogExpanded(false);
   }
+  window.dispatchEvent(new CustomEvent("lucima:section-change", { detail: { section: id } }));
   // 移动端选完自动收起侧栏 + 隐藏遮罩
   if (window.innerWidth <= 820) {
     $("sidebar").classList.add("collapsed");
@@ -163,7 +353,7 @@ function logTo(email, msg, cls = "info", ts = null) {
       if (currentSection !== "logs" && !isBottomLogExpanded()) { logUnread++; updateLogBadge(); }
     } else {
       a.logUnread = (a.logUnread || 0) + 1;
-      renderAccountSwitcher();
+      updateAccountSwitcherUnread(email);
     }
   } else {
     renderLogViews(($("log")?.innerHTML || "") + line);
@@ -202,7 +392,7 @@ function setBottomLogHeight(height, persist = false) {
   resizer?.setAttribute("aria-valuemax", String(limits.max));
   resizer?.setAttribute("aria-valuenow", String(value));
   if (persist) {
-    try { localStorage.setItem(BOTTOM_LOG_HEIGHT_LS, String(value)); } catch { /* optional */ }
+    frontendStorageSet(BOTTOM_LOG_HEIGHT_LS, String(value));
   }
 }
 
@@ -233,19 +423,15 @@ function setBottomLogEnabled(enabled, persist = true) {
   main?.classList.toggle("bottom-log-enabled", !!enabled);
   if (!enabled) setBottomLogExpanded(false);
   if (persist) {
-    try { localStorage.setItem(BOTTOM_LOG_LS, enabled ? "1" : "0"); } catch { /* optional */ }
+    frontendStorageSet(BOTTOM_LOG_LS, enabled ? "1" : "0");
   }
 }
 
 function initBottomLogDock() {
   let enabled = false;
-  try { enabled = localStorage.getItem(BOTTOM_LOG_LS) === "1"; } catch { /* optional */ }
-  try {
-    const savedHeight = Number(localStorage.getItem(BOTTOM_LOG_HEIGHT_LS));
-    bottomLogHeight = Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : defaultBottomLogHeight();
-  } catch {
-    bottomLogHeight = defaultBottomLogHeight();
-  }
+  enabled = frontendStorageGet(BOTTOM_LOG_LS) === "1";
+  const savedHeight = Number(frontendStorageGet(BOTTOM_LOG_HEIGHT_LS));
+  bottomLogHeight = Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : defaultBottomLogHeight();
   setBottomLogHeight(bottomLogHeight);
   setBottomLogEnabled(enabled, false);
   $("bottomLogEnabled")?.addEventListener("change", (event) => setBottomLogEnabled(event.target.checked));
@@ -308,6 +494,10 @@ function loginStatus(html, kind = "hint") {
 
 // 有密码时换取新 Token；从下拉框选中账号后留空密码即可恢复会话。
 async function doLogin() {
+  if (!updateStartupReady || updateStartupBlocked) {
+    loginStatus("正在完成版本检查，请稍候…", "pending");
+    return;
+  }
   const account = $("account").value.trim();
   const password = $("password").value;
   if (!account) return loginStatus("请填写账号", "err");
@@ -322,9 +512,9 @@ async function doLogin() {
       ? await api("/api/login/saved", { account })
       : await api("/api/login", { account, password });
     loginStatus("登录成功，正在加载账号信息…", "ok");
-    await new Promise((r) => setTimeout(r, 500));
     registerAccount(data);
-    log(`账号 ${data.account} 已连接`, "ok");
+    logTo(data.account, `账号 ${data.account} 已连接`, "ok");
+    ensureAccountStarted(data.account);
   } catch (e) {
     loginStatus(`登录失败：${e.message}`, "err");
   } finally {
@@ -344,13 +534,29 @@ function rememberAccount(data) {
     arena: null,                 // 展开竞技场面板时才拉（/api/arena/options）
     toggles: data.toggles || {},
     params: data.params || {},
+    guild: data.guild || null,
     name: (data.status || {}).name,
     avatar: (data.status || {}).avatar,
     logHtml: "",
-    logSeq: data.logSeq || 0,
+    logSeq: 0,
     logUnread: 0,
+    stateRevision: data.stateRevision || 1,
+    stateSyncedAt: data.stateSyncedAt || null,
+    stateSyncError: data.stateSyncError || null,
+    inventoryTargetEpoch: data.inventoryEpoch || null,
+    inventoryTargetRevision: data.inventoryRevision || 0,
+    inventoryEpoch: null,
+    inventoryRevision: 0,
+    inventoryRetiredEpochs: new Set(),
+    redeemCodes: data.redeemCodes || { codes: [], lastUpdated: null, refreshError: null },
+    connection: data.connection || { connected: true, reason: null, changedAt: null },
+    duplicateLoginLogged: false,
+    duplicateLoginNotified: false,
+    activationStarted: false,
+    activationPending: false,
+    activationRetryAt: 0,
+    activationError: "",
   };
-  (data.autoResults || []).forEach((r) => logResult(r, r.prefix || "自动·", email));
 }
 
 // 用户主动登录成功后登记账号并切换过去。
@@ -364,21 +570,105 @@ function registerAccount(data) {
   api("/api/accounts").then((r) => { SAVED_ACCTS = r.accounts || []; }).catch(() => {});
 }
 
+async function ensureAccountStarted(email) {
+  const account = ACCOUNTS[email];
+  if (!account || account.activationStarted || account.activationPending
+      || account.connection?.connected === false || Date.now() < account.activationRetryAt) return;
+  account.activationPending = true;
+  try {
+    // Let the main view paint before background startup can produce task logs.
+    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+    if (ACCOUNTS[email] !== account || account.connection?.connected === false) return;
+    await api("/api/accounts/start", { account: email });
+    if (ACCOUNTS[email] !== account) return;
+    account.activationStarted = true;
+    account.activationError = "";
+  } catch (error) {
+    if (ACCOUNTS[email] !== account) return;
+    account.activationRetryAt = Date.now() + 5000;
+    const message = error?.message || "未知错误";
+    if (account.activationError !== message) {
+      account.activationError = message;
+      logTo(email, `后台任务启动失败，将自动重试：${message}`, "err");
+    }
+  } finally {
+    account.activationPending = false;
+  }
+}
+
+function renderConnectionState(email = activeAccount) {
+  const pill = $("connPill");
+  if (!pill) return;
+  const account = ACCOUNTS[email];
+  const state = account?.connection || { connected: true };
+  const connected = state.connected !== false;
+  pill.classList.toggle("on", !!account && connected);
+  pill.classList.toggle("off", !!account && !connected);
+  $("connStatus").textContent = account ? (connected ? "已连接" : "已断开") : "未连接";
+  pill.title = !account ? "尚未登录" : connected ? "游戏会话正常"
+    : state.reason === "duplicate_login" ? "重复登录，当前会话已断开" : "游戏会话已断开";
+  const refreshing = !!account?.refreshPending;
+  const retry = $("reconnectBtn");
+  if (retry) {
+    retry.disabled = !account || refreshing;
+    retry.classList.toggle("loading", refreshing);
+    retry.setAttribute("aria-busy", String(refreshing));
+  }
+  const refresh = $("refreshBtn");
+  if (refresh) {
+    refresh.disabled = !account || refreshing;
+    refresh.classList.toggle("spinning", refreshing);
+  }
+}
+
+function applyConnectionState(email, state, { notify = false } = {}) {
+  const account = ACCOUNTS[email];
+  if (!account || !state) return;
+  const rawChangedAt = Number(state.changedAt);
+  const next = {
+    connected: state.connected !== false,
+    reason: state.reason || null,
+    changedAt: Number.isFinite(rawChangedAt) && rawChangedAt > 0 ? rawChangedAt : null,
+  };
+  const previous = account.connection || { connected: true };
+  account.connection = next;
+  updateAccountConnectionIndicator(email);
+  if (email === activeAccount) renderConnectionState(email);
+  const duplicate = !next.connected && next.reason === "duplicate_login";
+  if (duplicate) {
+    if (previous.connected !== false && !account.duplicateLoginLogged) {
+      account.duplicateLoginLogged = true;
+      // Android WebView may remain frozen in the background for a long time.
+      // Use the backend transition time instead of the foreground/poll time.
+      logTo(email, "[重复登录] 当前连接已断开", "err", next.changedAt);
+    }
+    if (notify && !account.duplicateLoginNotified) {
+      account.duplicateLoginNotified = true;
+      showMessageToast("[重复登录] 当前连接已断开", "err", 5200);
+    }
+  } else if (next.connected) {
+    account.duplicateLoginLogged = false;
+    account.duplicateLoginNotified = false;
+  }
+}
+
 // 从登录视图切到应用视图
 function enterApp() {
-  $("connPill").className = "pill on";
-  $("connPill").textContent = "● 已连接";
   $("loginView").classList.add("hidden");
   $("appView").classList.remove("hidden");
+  renderConnectionState();
 }
 
 // 切换当前查看的账号：刷新状态/开关/日志/切换器。
 function switchAccount(email) {
   if (!ACCOUNTS[email]) return;
+  closeAbyssPicker(false);
+  const preservePage = !!ACCOUNTS[activeAccount];
   activeAccount = email;
   try { sessionStorage.setItem(TEST_ACTIVE_ACCOUNT_SS, email); } catch { /* optional */ }
   const a = ACCOUNTS[email];
   a.logUnread = 0;
+  renderConnectionState(email);
   NEXT_CLAIMS = a.nextClaims || {};
   renderStatus(a.status || {});
   loadRoster(email);           // 团员/物品清单（按账号缓存，首次拉取）
@@ -388,7 +678,10 @@ function switchAccount(email) {
   logUnread = 0; updateLogBadge();
   renderAccountSwitcher();
   renderDevConsole();          // 控制台的 route/data 输入是按账号记的，切号要重载
-  showSection("info");
+  // 已登录账号间切换只更新账号数据，保留当前板块和工具箱子页面。
+  if (!preservePage) showSection("info");
+  else if (window.innerWidth <= 820) setDrawer(false);
+  window.dispatchEvent(new CustomEvent("lucima:account-change", { detail: { account: email } }));
 }
 
 // 下线（保留存档，可再连接）
@@ -414,11 +707,14 @@ function afterAccountGone(email) {
     switchAccount(rest[0]);
   } else {
     activeAccount = null;
+    window.dispatchEvent(new CustomEvent("lucima:account-change", { detail: { account: null } }));
     $("appView").classList.add("hidden");
     $("loginView").classList.remove("hidden");
     $("loginCancel") && $("loginCancel").classList.add("hidden");
     const el = $("log"); if (el) el.innerHTML = "";
     renderSavedAccounts();
+    // Returning to the login page starts a fresh update gate as well.
+    runStartupUpdateCheck();
   }
   renderAccountSwitcher();
 }
@@ -435,12 +731,14 @@ function logResult(r, prefix = "", email = activeAccount, ts = null) {
   const cls = r.ok ? "ok" : "err";
   const lines = r.lines && r.lines.length ? r.lines : [r.detail];
   lines.forEach((ln) => {
+    if (ln == null || (typeof ln === "string" && !ln.trim())) return;
     // 掉落行：道具文字 + 装备名，**合成一条**（装备名各自可点击展开详情卡片）
     if (ln && typeof ln === "object" && ln.type === "drop") {
       const links = (ln.equips || []).map((e) => {
         const key = `eqd${++equipDropSeq}`;
         EQUIP_DROPS[key] = e.card;
-        return `<a class="equip-link" data-eqd="${key}">${e.text} ▸</a>`;
+        const rarityClass = e.card?.is85Legendary === true ? " equip-link-legendary" : "";
+        return `<a class="equip-link${rarityClass}" data-eqd="${key}">${e.text} ▸</a>`;
       });
       // 道具和装备并成同一个"、"列表：获得 30500金币、18星源粉末、85级传说烈焰晶石爪 ▸
       const parts = ln.text ? [ln.text, ...links] : links;
@@ -458,17 +756,17 @@ function fmtNum(n) {
 
 // 表盘资源（随时间恢复型）：能源 / 旗帜（能源=游戏官方名，功能即旧称"体力"）
 const GAUGE_META = [
-  { key: "stamina", label: "能源", color: "#4ce68a", icon: "/static/assets/icons/stamina.png" },
-  { key: "flag", label: "旗帜", color: "#ff6b9d", icon: "/static/assets/icons/flag.png" },
+  { key: "stamina", label: "能源", color: "#4ce68a", icon: "/assets/icons/stamina.png" },
+  { key: "flag", label: "旗帜", color: "#ff6b9d", icon: "/assets/icons/flag.png" },
 ];
 // 平铺资产（图标 + 名称 + 数量）
 const CUR_META = [
-  { key: "gold", label: "金币", icon: "/static/assets/icons/gold.png" },
-  { key: "diamond", label: "钻石", icon: "/static/assets/icons/diamond.png" },
-  { key: "battery", label: "能源电池", icon: "/static/assets/items/37.png" },
-  { key: "recruit", label: "招募契约", icon: "/static/assets/icons/recruit.png" },
-  { key: "mystery", label: "神秘契约", icon: "/static/assets/icons/mystery.png" },
-  { key: "galaxy", label: "银河契约", icon: "/static/assets/icons/galaxy.png" },
+  { key: "gold", label: "金币", icon: "/assets/icons/gold.png" },
+  { key: "diamond", label: "钻石", icon: "/assets/icons/diamond.png" },
+  { key: "battery", label: "能源电池", icon: "/assets/items/37.png" },
+  { key: "recruit", label: "招募契约", icon: "/assets/icons/recruit.png" },
+  { key: "mystery", label: "神秘契约", icon: "/assets/icons/mystery.png" },
+  { key: "galaxy", label: "银河契约", icon: "/assets/icons/galaxy.png" },
 ];
 
 // 单个表盘：细环 + 刻度 + 进度端点光珠，中心放物品图标与数值
@@ -513,9 +811,10 @@ function renderStatus(s) {
 
 // ---------- 团员 / 物品清单 ----------
 // 潜能等级图标（ImprintLV→字形：D/C/B/A/S/SS/SSS）。素材已复制进本项目 assets。
-const GRADE_ICON = "/static/assets/potential/";
+const GRADE_ICON = "/assets/potential/";
 let rosterTab = "heroes";  // 当前 tab
 let heroElement = "all";
+let heroJob = "ALL";
 const HERO_ELEMENTS = [
   { id: "all", icon: "/assets/ui/hero-all.png", label: "全部" },
   { id: "Fire", icon: "/assets/attributes/fire.png", label: "火属性" },
@@ -558,21 +857,101 @@ async function enrichRosterElements(roster) {
   }
 }
 
-// 拉取某账号的团员/物品清单（按账号缓存，避免重复请求）。
+// Inventory versions are separate from full account-state refreshes. Only
+// settled item balances cross this channel; mail previews never enter it.
+function observeInventoryVersion(email, data, schedule = true) {
+  const a = ACCOUNTS[email];
+  const epoch = data?.inventoryEpoch, revision = data?.inventoryRevision;
+  if (!a || typeof epoch !== "string" || !epoch || !Number.isSafeInteger(revision) || revision < 0) return false;
+  a.inventoryRetiredEpochs ||= new Set();
+  if (a.inventoryRetiredEpochs.has(epoch)) return false;
+  if (a.inventoryTargetEpoch && a.inventoryTargetEpoch !== epoch) {
+    a.inventoryRetiredEpochs.add(a.inventoryTargetEpoch);
+    a.inventoryTargetRevision = 0;
+  }
+  a.inventoryTargetEpoch = epoch;
+  a.inventoryTargetRevision = Math.max(a.inventoryTargetRevision || 0, revision);
+  if (schedule) syncInventory(email);
+  return true;
+}
+
+function applyInventorySnapshot(email, snapshot) {
+  const a = ACCOUNTS[email];
+  if (!a?.roster || !snapshot || !Array.isArray(snapshot.items)
+      || !observeInventoryVersion(email, {
+        inventoryEpoch: snapshot.epoch, inventoryRevision: snapshot.revision,
+      }, false)) return false;
+  const sameEpoch = a.inventoryEpoch === snapshot.epoch;
+  if ((sameEpoch && snapshot.revision < a.inventoryRevision) || (!sameEpoch && !snapshot.full)) return false;
+  const byId = new Map((snapshot.full ? [] : a.roster.items || []).map(item => [String(item.id), item]));
+  for (const id of snapshot.removed || []) byId.delete(String(id));
+  for (const item of snapshot.items) {
+    if (item.count > 0) byId.set(String(item.id), item);
+    else byId.delete(String(item.id));
+  }
+  a.roster.items = [...byId.values()].sort((left, right) =>
+    (right.rank || 0) - (left.rank || 0)
+    || (String(left.id) < String(right.id) ? -1 : String(left.id) > String(right.id) ? 1 : 0));
+  a.inventoryEpoch = snapshot.epoch;
+  a.inventoryRevision = snapshot.revision;
+  if (email === activeAccount) updateRosterItems(a.roster.items);
+  return true;
+}
+
+function syncInventory(email) {
+  const a = ACCOUNTS[email];
+  if (!a?.roster || !a.inventoryTargetEpoch) return Promise.resolve();
+  if (a.inventoryPending) return a.inventoryPending;
+  if (a.inventoryEpoch === a.inventoryTargetEpoch && a.inventoryRevision >= a.inventoryTargetRevision) return Promise.resolve();
+  a.inventoryPending = (async () => {
+    try {
+      while (ACCOUNTS[email] === a && (a.inventoryEpoch !== a.inventoryTargetEpoch
+          || a.inventoryRevision < a.inventoryTargetRevision)) {
+        const query = new URLSearchParams({ account: email });
+        if (a.inventoryEpoch) {
+          query.set("epoch", a.inventoryEpoch);
+          query.set("since", String(a.inventoryRevision));
+        }
+        const data = await api(`/api/inventory?${query}`);
+        if (ACCOUNTS[email] !== a) return;
+        if (!applyInventorySnapshot(email, data.inventory)) return;
+        if (data.status) applyStatus(email, data.status);
+      }
+    } catch { /* Retry from the last applied version on the next poll. */ }
+    finally { a.inventoryPending = null; }
+  })();
+  return a.inventoryPending;
+}
+
+// 团员按需加载；物品从这次完整列表的版本继续同步。
 async function loadRoster(email, force = false) {
   const a = ACCOUNTS[email];
   if (!a) return;
   if (a.roster && !force) {
-    a.roster = await enrichRosterElements(a.roster);
+    const cachedRoster = a.roster;
+    const enriched = await enrichRosterElements(cachedRoster);
+    if (ACCOUNTS[email] !== a) return;
+    if (a.roster === cachedRoster) a.roster = { ...enriched, items: a.roster.items };
     if (email === activeAccount) renderRoster(a.roster);
+    syncInventory(email);
     return;
   }
+  const loadSeq = a.rosterLoadSeq = (a.rosterLoadSeq || 0) + 1;
   try {
-    const r = await enrichRosterElements(await api("/api/roster"));
-    a.roster = r;
-    if (email === activeAccount) renderRoster(r);
+    const r = await enrichRosterElements(await api(`/api/roster?account=${encodeURIComponent(email)}`));
+    if (ACCOUNTS[email] !== a || a.rosterLoadSeq !== loadSeq) return;
+    const previousItems = a.roster?.items || [];
+    a.roster = { ...r, items: previousItems };
+    if (r.inventoryEpoch) {
+      applyInventorySnapshot(email, {
+        epoch: r.inventoryEpoch, revision: r.inventoryRevision,
+        full: true, items: r.items || [], removed: [],
+      });
+    } else a.roster.items = r.items || [];
+    if (email === activeAccount) renderRoster(a.roster);
+    syncInventory(email);
   } catch (e) {
-    if (email === activeAccount) {
+    if (ACCOUNTS[email] === a && a.rosterLoadSeq === loadSeq && email === activeAccount) {
       $("rosterHeroes").innerHTML = `<div class="roster-empty">加载失败：${e.message}</div>`;
       $("rosterItems").innerHTML = `<div class="roster-empty">加载失败：${e.message}</div>`;
     }
@@ -595,34 +974,43 @@ function heroElementOf(hero) {
   return HERO_ELEMENT_IDS.has(hero.element) ? hero.element : "other";
 }
 
+function heroPortraitHTML(h) {
+  const initial = filterEscape(String(h.name || h.id || "?").slice(0, 1));
+  const avatar = h.avatar
+    ? `<img src="${filterEscape(h.avatar)}" alt="" loading="lazy" data-initial="${initial}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'hero-ph',textContent:this.dataset.initial}))">`
+    : `<span class="hero-ph">${initial}</span>`;
+  const grade = h.grade
+    ? `<img class="hero-grade" src="${GRADE_ICON}${filterEscape(h.grade)}.png" alt="${filterEscape(h.grade)}" title="潜能 ${filterEscape(h.grade)}">` : "";
+  const level = h.level != null ? `<span class="hero-lv">${filterEscape(h.level)}</span>` : "";
+  return `<span class="hero-pic">${avatar}${level}${grade}</span>`;
+}
+
 function heroCardHTML(h) {
-    const init = (h.name || h.id || "?").slice(0, 1);
-    const av = h.avatar
-      ? `<img src="${h.avatar}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'hero-ph',textContent:'${init}'}))">`
-      : `<span class="hero-ph">${init}</span>`;
-    const grade = h.grade
-      ? `<img class="hero-grade" src="${GRADE_ICON}${h.grade}.png" alt="${h.grade}" title="潜能 ${h.grade}">` : "";
-    const lv = h.level != null ? `<span class="hero-lv">${h.level}</span>` : "";
-    return `<div class="hero-card">
-      <div class="hero-pic">${av}${lv}${grade}</div>
-      <div class="hero-name">${h.name || h.id}</div>
-    </div>`;
+  return `<div class="hero-card">${heroPortraitHTML(h)}<div class="hero-name">${filterEscape(h.name || h.id)}</div></div>`;
 }
 
 function renderRosterHeroes(heroes) {
-  const selected = heroElement === "all"
-    ? heroes
-    : heroes.filter((hero) => heroElementOf(hero) === heroElement);
+  const selected = heroes.filter((hero) =>
+    (heroElement === "all" || heroElementOf(hero) === heroElement)
+    && (heroJob === "ALL" || hero.job === heroJob));
   const tabs = HERO_ELEMENTS.map(({ id, icon, label }) => `
     <button type="button" class="hero-element-tab ${id === heroElement ? "active" : ""}"
       data-hero-element="${id}" title="${label}" aria-label="${label}" aria-selected="${id === heroElement}" role="tab">
       <img src="${icon}" alt="">
     </button>`).join("");
+  const jobs = ENCYCLOPEDIA_JOBS.map(({ id, icon, label }) => `
+    <button type="button" class="hero-job-tab ${id === heroJob ? "active" : ""}"
+      data-hero-job="${id}" title="${id === "ALL" ? "全部职业" : label}" aria-label="${id === "ALL" ? "全部职业" : label}" aria-selected="${id === heroJob}" role="tab">
+      <img class="task-icon-light-invert" src="${icon}" alt="">
+    </button>`).join("");
   const grid = selected.length
     ? selected.map(heroCardHTML).join("")
-    : `<div class="roster-empty hero-element-empty">暂无此属性团员</div>`;
+    : `<div class="roster-empty hero-element-empty">暂无符合筛选条件的团员</div>`;
   $("rosterHeroes").innerHTML = `
-    <div class="hero-element-tabs" role="tablist" aria-label="团员属性">${tabs}</div>
+    <div class="hero-filters">
+      <div class="hero-filter-row"><span class="hero-filter-label">属性</span><div class="hero-element-tabs" role="tablist" aria-label="团员属性">${tabs}</div></div>
+      <div class="hero-filter-row"><span class="hero-filter-label">职业</span><div class="hero-job-tabs" role="tablist" aria-label="团员职业">${jobs}</div></div>
+    </div>
     <div class="hero-grid">${grid}</div>`;
   $("rosterHeroes").querySelectorAll(".hero-element-tab").forEach((button) => {
     button.addEventListener("click", () => {
@@ -630,14 +1018,12 @@ function renderRosterHeroes(heroes) {
       renderRosterHeroes(heroes);
     });
   });
-  centerActiveHeroElement();
-}
-
-function centerActiveHeroElement() {
-  const tabBar = $("rosterHeroes").querySelector(".hero-element-tabs");
-  if (!tabBar) return;
-  const activeTab = tabBar.querySelector(".hero-element-tab.active");
-  if (activeTab) tabBar.scrollLeft = activeTab.offsetLeft - (tabBar.clientWidth - activeTab.offsetWidth) / 2;
+  $("rosterHeroes").querySelectorAll(".hero-job-tab").forEach((button) => {
+    button.addEventListener("click", () => {
+      heroJob = button.dataset.heroJob;
+      renderRosterHeroes(heroes);
+    });
+  });
 }
 
 function itemCategoryOf(item) {
@@ -653,8 +1039,8 @@ function itemCategoryOf(item) {
 
 function itemTileHTML(it) {
   return `
-    <div class="item-tile r${it.rank || 0}" title="${it.name || it.id}">
-      <div class="item-ic"><img src="/static/assets/items/${it.id}.png" alt="" loading="lazy"
+    <div class="item-tile r${it.rank || 0}" data-item-id="${it.id}" title="${it.name || it.id}">
+      <div class="item-ic"><img src="/assets/items/${it.id}.png" alt="" loading="lazy"
         onerror="this.style.display='none';this.parentNode.classList.add('noimg');this.parentNode.dataset.t=('${(it.name || it.id)}').slice(0,2)"></div>
       <div class="item-cnt">${fmtNum(it.count)}</div>
     </div>`;
@@ -667,7 +1053,7 @@ function renderRosterItems(items) {
   const tabs = ITEM_CATEGORIES.map(({ id, label }) => `
     <button type="button" class="item-category-tab ${id === itemCategory ? "active" : ""}"
       data-item-category="${id}" role="tab" aria-selected="${id === itemCategory}">
-      <span>${label}</span><span class="item-category-count">${grouped[id].length}</span>
+      <span>${label}</span>
     </button>`).join("");
   const grid = selectedItems.length
     ? selectedItems.map(itemTileHTML).join("")
@@ -678,17 +1064,36 @@ function renderRosterItems(items) {
   $("rosterItems").querySelectorAll(".item-category-tab").forEach((button) => {
     button.addEventListener("click", () => {
       itemCategory = button.dataset.itemCategory;
-      renderRosterItems(items);
+      renderRosterItems(ACCOUNTS[activeAccount]?.roster?.items || items);
     });
   });
-  centerActiveItemCategory();
 }
 
-function centerActiveItemCategory() {
-  const tabBar = $("rosterItems").querySelector(".item-category-tabs");
-  if (!tabBar) return;
-  const activeTab = tabBar.querySelector(".item-category-tab.active");
-  if (activeTab) tabBar.scrollLeft = activeTab.offsetLeft - (tabBar.clientWidth - activeTab.offsetWidth) / 2;
+// Keep category controls, scroll position and unchanged image nodes in place
+// when a balance changes. A gain/loss of an item only rebuilds the item grid.
+function updateRosterItems(items) {
+  $("itemCount").textContent = items.length;
+  const root = $("rosterItems");
+  const grid = root.querySelector(".item-category-grid");
+  if (!grid) return renderRosterItems(items);
+  const grouped = Object.fromEntries(ITEM_CATEGORIES.map(({ id }) => [id, []]));
+  items.forEach(item => grouped[itemCategoryOf(item)].push(item));
+  const visible = grouped[itemCategory] || [];
+  const tiles = [...grid.querySelectorAll(".item-tile")];
+  if (tiles.length !== visible.length || tiles.some((tile, index) => tile.dataset.itemId !== String(visible[index].id))) {
+    const scrollTop = grid.scrollTop;
+    grid.innerHTML = visible.length ? visible.map(itemTileHTML).join("")
+      : `<div class="roster-empty item-category-empty">暂无此类物品</div>`;
+    grid.scrollTop = scrollTop;
+  } else {
+    tiles.forEach((tile, index) => {
+      const item = visible[index], count = tile.querySelector(".item-cnt");
+      const label = fmtNum(item.count);
+      if (count.textContent !== label) count.textContent = label;
+      tile.title = item.name || item.id;
+      tile.className = `item-tile r${item.rank || 0}`;
+    });
+  }
 }
 
 function applyRosterTab() {
@@ -696,8 +1101,6 @@ function applyRosterTab() {
     b.classList.toggle("active", b.dataset.rtab === rosterTab));
   $("rosterHeroes").classList.toggle("active", rosterTab === "heroes");
   $("rosterItems").classList.toggle("active", rosterTab === "items");
-  if (rosterTab === "heroes") requestAnimationFrame(centerActiveHeroElement);
-  if (rosterTab === "items") requestAnimationFrame(centerActiveItemCategory);
 }
 
 // ---------- 任务 ----------
@@ -705,7 +1108,7 @@ let TASKS = [];
 let TOGGLE_TASKS = [];
 const TEST_ACTIVE_ACCOUNT_SS = "ark_test_active_account";
 const TASK_ICONS = {
-  month_signin: "📅", week_signin: "🎁", claim_mail: "✉️", friend_support: "🤝",
+  month_signin: "📅", daily_achievement: "🎯", claim_mail: "✉️", friend_support: "🤝",
   reactor: "⚡", sf_potion: "🧪", sf_starforce: "⭐", sf_tesseract: "🔷",
   dispatch: "🎖️", shop_free: "🛒", shop_diamond: "💎", hunt_sweep: "⚔️", element_sweep: "🔮",
   activity_scene: "🎫", abyss_sweep: "🌌", free_summon: "🎰", store_buy: "🛍️",
@@ -714,14 +1117,17 @@ const TASK_ICONS = {
 // 部分任务改用游戏内物品图标（覆盖上面的 emoji）：动力转换=钻石、成长药剂=传说成长药剂、
 // 升星水晶=传说升星水晶、技能模块=技能模块、派遣任务=荣誉勋章、
 // 秘密商店刷新(免费)=金币、虚拟幻境=星源粉末、每日免费招募=招募契约、商店购买=荣誉勋章、
-// 竞技场NPC=旗帜（挑战就是扣旗帜，与基本信息页旗帜表盘同一个 StaticID 4）
+// 竞技场NPC=旗帜（挑战就是扣旗帜，与基本信息页旗帜表盘同一个 StaticID 4）、每日体力=体力
 const TASK_ICON_IMG = {
-  reactor: "2", sf_potion: "103", sf_starforce: "106",
+  send_meal: "3", reactor: "2", sf_potion: "103", sf_starforce: "106",
   sf_tesseract: "34", dispatch: "26", shop_free: "1",
   shop_diamond: "2", abyss_sweep: "25", free_summon: "5", store_buy: "26",
   arena_npc: "4", star_source_shop: "109",
 };
 const TASK_ICON_UI = {
+  month_signin: "UI05_Icon_Monthly.png",
+  daily_achievement: "DailyPoint.png",
+  redeem_code: "GiftPack.png",
   claim_mail: "mail.png",
   hunt_sweep: "hunt.png",
   element_sweep: "element.png",
@@ -729,15 +1135,16 @@ const TASK_ICON_UI = {
   store_buy: "store.png",
   customized_equip: "customized-equip.png",
 };
-// 生成任务图标 HTML：指定的界面图标优先，其次物品图标，最后回退 emoji/◆。
+// 生成任务图标 HTML：指定的 SVG 和界面图标优先，其次物品图标，最后回退 emoji/◆。
 function taskIconHTML(id, fallback = "◆") {
+  if (id === "abyss_auto") return '<svg class="ticon-svg" aria-hidden="true"><use href="#ui-mysterious-realm"></use></svg>';
   const uiIcon = TASK_ICON_UI[id];
-  const lightThemeClass = ["claim_mail", "hunt_sweep", "element_sweep", "activity_scene", "store_buy"].includes(id)
+  const lightThemeClass = ["month_signin", "claim_mail", "hunt_sweep", "element_sweep", "activity_scene", "store_buy"].includes(id)
     ? " task-icon-light-invert"
     : "";
   if (uiIcon) return `<img class="ticon-img${lightThemeClass}" src="/assets/ui/${uiIcon}" alt="" loading="lazy">`;
   const sid = TASK_ICON_IMG[id];
-  if (sid) return `<img class="ticon-img" src="/static/assets/items/${sid}.png" alt="" loading="lazy">`;
+  if (sid) return `<img class="ticon-img" src="/assets/items/${sid}.png" alt="" loading="lazy">`;
   return TASK_ICONS[id] || fallback;
 }
 // 自动购买目标可选项
@@ -783,17 +1190,26 @@ function fmtRemain(diff) {
 }
 
 // 下次产出档期文案：可领取 / 下次领取时间: 07-29 8:00 (10小时20分)
-// blocked（条件不满足，开关置灰）/ note（非计时型任务的状态说明）优先于时间文案
+// blocked（条件不满足，开关置灰）优先；失败重试展示倒计时，其余 note 仍优先于时间文案
 // 免费刷商店说"刷新"而不是"领取"（它不是产出型任务）。档期来自货架
-// LastResetTime + 1h，见 backend/tasks.secret_shop_next_free。
+// LastResetTime + 1h1s，见 backend/tasks.secret_shop_next_free。
 const NEXT_WORDS = {
+  month_signin: { ready: "可签到", next: "下次签到时间" },
+  send_meal: { ready: "可发放至邮箱", next: "下次发放时间" },
   shop_free: { ready: "可免费刷新", next: "下次免费刷新" },
 };
 function fmtNextClaim(nc, taskId = "") {
   if (!nc) return "";
   if (nc.blocked) return nc.blocked;
-  if (nc.note) return nc.note;
-  const w = NEXT_WORDS[taskId] || { ready: "可领取", next: "下次领取时间" };
+  if (nc.note && !nc.retrying) return nc.note;
+  let w = NEXT_WORDS[taskId] || { ready: "可领取", next: "下次领取时间" };
+  if (taskId === "send_meal" && nc.confirming) {
+    w = { ready: "待确认体力邮件", next: "下次邮件检查" };
+  } else if (taskId === "send_meal" && nc.retrying) {
+    w = { ...w, next: "下次检查" };
+  } else if (nc.retrying) {
+    w = { ready: "可重试", next: "下次重试" };
+  }
   if (nc.nextMs == null) return nc.ready ? w.ready : "";
   const diff = nc.nextMs - Date.now();
   if (diff <= 0) return w.ready;
@@ -804,6 +1220,8 @@ function fmtNextClaim(nc, taskId = "") {
 function fmtCharge(c) {
   const q = `已用 ${c.used}/${c.max}`;
   if (c.exhausted) return `加速已用完 ${c.used}/${c.max}`;
+  if (c.note) return `${c.note} · ${q}`;
+  if (c.retrying) return `加速等待重试 · ${q}`;
   const diff = c.nextMs == null ? 0 : c.nextMs - Date.now();
   if (diff <= 0) return `可加速 · ${q}`;
   return `下次加速时间: ${fmtClock(c.nextMs)} (${fmtRemain(diff)}) · ${q}`;
@@ -822,7 +1240,10 @@ function renderNextClaims() {
     if (!slot) return;
     if (!nc) { slot.innerHTML = ""; return; }
     const cls = blocked ? " warn" : (nc.ready ? " ready" : "");
-    const rows = [`<span class="nc-row${cls}">${fmtNextClaim(nc, el.dataset.id)}</span>`];
+    const note = el.dataset.id === "daily_achievement" && !blocked && !nc.retrying && Array.isArray(nc.noteParts)
+      ? nc.noteParts.map((part) => `<span class="achievement-note-part">${filterEscape(part)}</span>`).join("")
+      : fmtNextClaim(nc, el.dataset.id);
+    const rows = [`<span class="nc-row${cls}">${note}</span>`];
     if (nc.charge) {
       const on = !nc.charge.exhausted && nc.charge.ready;
       rows.push(`<span class="nc-row${on ? " ready" : ""}">${fmtCharge(nc.charge)}</span>`);
@@ -896,17 +1317,19 @@ function renderAutoPanel(toggle) {
       // 带展开页的开关：外层必须是 div 而不是 label
       // ——<button>（"选项 ▸"）不能放在 <label> 里，点它会连带触发开关。
       // 开关本体单独包一层 <label> 保持点击区。
-      if (t.ui === "arena") {
+      if (t.ui === "arena" || t.ui === "achievement" || t.ui === "redeem_code") {
+        const achievement = t.ui === "achievement";
+        const redeemCode = t.ui === "redeem_code";
         return `<div class="auto-item has-body ${on ? "on" : ""}" data-id="${t.id}" id="auto-${t.id}">
           <div class="auto-head">
             ${inner}
-            <button type="button" class="mini arena-toggle">选项 ▸</button>
+            <button type="button" class="mini ${achievement ? "achievement-toggle" : (redeemCode ? "redeem-code-toggle" : "arena-toggle")}">选项 ▸</button>
             <label class="switch-wrap">
               <input type="checkbox" class="switch-in" ${on ? "checked" : ""}>
               <div class="switch"></div>
             </label>
           </div>
-          <div class="auto-body hidden">${renderArenaBody(t)}</div>
+          <div class="auto-body hidden">${achievement ? renderAchievementOptions() : (redeemCode ? renderRedeemCodeOptions() : renderArenaBody(t))}</div>
         </div>`;
       }
       if (t.wantsBuyTargets) {
@@ -919,7 +1342,7 @@ function renderAutoPanel(toggle) {
               <div class="switch"></div>
             </label>
           </div>
-          <div class="auto-body hidden">${renderShopFreeOptions()}</div>
+          <div class="auto-body hidden">${renderShopFreeOptions(t.id)}</div>
         </div>`;
       }
       return `<label class="auto-item ${on ? "on" : ""}" data-id="${t.id}">
@@ -940,19 +1363,166 @@ function renderAutoPanel(toggle) {
   });
   // 带展开页的开关：绑定各自的"选项"按钮和内部交互。
   toggle.forEach((t) => { if (t.ui === "arena") bindArenaWidget(t.id); });
+  toggle.forEach((t) => { if (t.ui === "achievement") bindAchievementOptions(t.id); });
+  toggle.forEach((t) => { if (t.ui === "redeem_code") bindRedeemCodeOptions(t.id); });
   toggle.forEach((t) => { if (t.wantsBuyTargets) bindShopFreeOptions(t.id); });
   renderNextClaims();
 }
 
-function renderShopFreeOptions() {
+function redeemCodeState(email = activeAccount) {
+  return ACCOUNTS[email]?.redeemCodes || { codes: [], lastUpdated: null, refreshError: null };
+}
+
+function redeemCodeStatus(status) {
+  if (status === "redeemed" || status === "already_redeemed") return "redeemed";
+  if (status === "invalid") return "invalid";
+  return status === "expired" ? "expired" : "pending";
+}
+
+function renderRedeemCodeOptions() {
+  const state = redeemCodeState();
+  const lastUpdated = Date.parse(state.lastUpdated || "");
+  const updatedText = Number.isFinite(lastUpdated) ? fmtClock(lastUpdated) : "尚未更新";
+  const rows = (state.codes || []).map((entry) => {
+    const accountState = ACCOUNTS[activeAccount]?.params?.redeem_code?.codes?.[entry.code] || {};
+    const status = redeemCodeStatus(entry.status ?? accountState.status);
+    const statusText = { pending: "待兑换", redeemed: "已兑换", expired: "已过期", invalid: "无效" }[status];
+    const record = entry.status != null ? entry : accountState;
+    const content = status === "redeemed" ? record.detail || "" : "";
+    return `<div class="redeem-code-row"><code>${filterEscape(entry.code || "")}</code><span>${filterEscape(entry.validUntil || "未注明")}</span><strong class="redeem-${status}">${statusText}</strong><span>${filterEscape(content)}</span></div>`;
+  }).join("");
+  return `<div class="redeem-code-wrap"><div class="tdesc">最后更新日期：${filterEscape(updatedText)}</div>${state.refreshError ? `<div class="notice err">同步失败：${filterEscape(state.refreshError)}</div>` : ""}${state.sourceError ? `<div class="notice err">来源网页更新失败：${filterEscape(state.sourceError)}</div>` : ""}<div class="redeem-code-table"><div class="redeem-code-head"><span>兑换码</span><span>有效期</span><span>状态</span><span>内容</span></div>${rows || `<div class="tdesc">当前没有可用兑换码</div>`}</div></div>`;
+}
+
+function bindRedeemCodeOptions(id) {
+  const root = $(`auto-${id}`);
+  if (!root) return;
+  const body = root.querySelector(".auto-body");
+  const toggle = root.querySelector(".redeem-code-toggle");
+  toggle.addEventListener("click", () => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+  });
+}
+
+function achievementCfg(email = activeAccount) {
+  const cfg = ACCOUNTS[email]?.params?.daily_achievement || {};
+  return { daily: cfg.daily ?? true, weekly: cfg.weekly ?? true };
+}
+
+function renderAchievementOptions() {
+  const cfg = achievementCfg();
+  return `<div class="arena-wrap">
+    <div class="bt-opts">
+      <label class="bt-opt"><input type="checkbox" value="daily" ${cfg.daily ? "checked" : ""}>${checkboxUIHTML()}<span>每日成就</span></label>
+      <label class="bt-opt"><input type="checkbox" value="weekly" ${cfg.weekly ? "checked" : ""}>${checkboxUIHTML()}<span>每周成就</span></label>
+    </div>
+    <div class="tdesc">可单选或同时勾选；均不勾选时不领取。仅在任务状态更新或更改选项时检测，不定时查询。</div>
+  </div>`;
+}
+
+function bindAchievementOptions(id) {
+  const root = $(`auto-${id}`);
+  if (!root) return;
+  const email = activeAccount;
+  const body = root.querySelector(".auto-body");
+  const toggle = root.querySelector(".achievement-toggle");
+  toggle.addEventListener("click", () => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+  });
+  const inputs = [...body.querySelectorAll('input[type="checkbox"]')];
+  inputs.forEach((input) => input.addEventListener("change", async () => {
+    const account = ACCOUNTS[email];
+    if (!account) return;
+    const previous = { ...(account.params?.[id] || {}) };
+    const selected = Object.fromEntries(inputs.map((entry) => [entry.value, entry.checked]));
+    account.params = { ...account.params, [id]: { ...previous, ...selected } };
+    inputs.forEach((entry) => { entry.disabled = true; });
+    try {
+      await api("/api/toggles", {
+        account: email, toggles: account.toggles, params: { [id]: account.params[id] },
+      });
+      await refreshAccountStatus(email);
+    } catch (error) {
+      account.params = { ...account.params, [id]: previous };
+      const restored = achievementCfg(email);
+      inputs.forEach((entry) => { entry.checked = restored[entry.value]; });
+      logTo(email, `保存成就选项失败：${error.message}`, "err");
+    } finally {
+      inputs.forEach((entry) => { entry.disabled = false; });
+    }
+  }));
+}
+
+function shopFreeEquipCfg(email = activeAccount) {
+  const schemes = EQUIP_FILTER_SCHEMES_DATA;
+  const fallbackId = schemes.find((scheme) => scheme.id === "plan-star-shop")?.id || schemes[0]?.id || "";
+  const cfg = ACCOUNTS[email]?.params?.shop_free || {};
+  const schemeId = schemes.some((scheme) => scheme.id === cfg.equipmentSchemeId)
+    ? cfg.equipmentSchemeId : fallbackId;
+  const storedScheme = cfg.equipmentScheme && cfg.equipmentScheme.id === schemeId
+    ? cfg.equipmentScheme : null;
+  return {
+    legOn: !!cfg.equipmentEnabled,
+    mode: cfg.equipmentMode === "auto" ? "auto" : "display",
+    schemeId,
+    scheme: storedScheme || schemes.find((scheme) => scheme.id === schemeId) || null,
+  };
+}
+
+function setShopFreeEquipCfg(patch) {
+  const a = activeAcc(); if (!a) return;
+  const current = shopFreeEquipCfg();
+  const nextSchemeId = patch.equipmentSchemeId || current.schemeId;
+  const nextScheme = EQUIP_FILTER_SCHEMES_DATA.find((scheme) => scheme.id === nextSchemeId);
+  a.params = {
+    ...a.params,
+    shop_free: {
+      ...(a.params.shop_free || {}), ...patch,
+      equipmentSchemeId: nextSchemeId,
+      equipmentScheme: nextScheme ? JSON.parse(JSON.stringify(nextScheme)) : null,
+    },
+  };
+  syncToggles();
+}
+
+function renderShopFreeOptions(id) {
   const wantedKeys = getWantedKeys();
+  const equipCfg = shopFreeEquipCfg();
   const options = BUY_TARGETS.map((target) => `<label class="bt-opt">
     <input type="checkbox" value="${target.key}" ${wantedKeys.includes(target.key) ? "checked" : ""}>
+    ${checkboxUIHTML()}
     <span>${target.label}</span>
   </label>`).join("");
-  return `<div class="auto-buy-targets">
-    <div class="bt-label">自动购买目标</div>
-    <div class="bt-opts">${options}</div>
+  return `<div class="shop-grid shop-free-grid">
+    <div class="shop-left">
+      <div class="shop-row col">
+        <span class="shop-lbl">自动购买目标</span>
+        <div class="bt-opts col">${options}</div>
+      </div>
+      <div class="shop-row col shop-free-equip-options">
+        <label class="bt-opt shop-free-equip-toggle">
+          <input type="checkbox" class="free-equip-on" ${equipCfg.legOn ? "checked" : ""}>
+          ${checkboxUIHTML()}
+          <span>85级传说装备</span>
+        </label>
+        <div class="shop-free-equip-controls ${equipCfg.legOn ? "" : "hidden"}">
+          <div class="shop-equip-scheme-wrap">
+            ${dropdownHTML("shop-free-equip-scheme", starSourceSchemeOptions(), equipCfg.schemeId, "暂无筛选方案")}
+          </div>
+          <div class="shop-free-equip-modes" role="radiogroup" aria-label="85级传说装备处理方式">
+            <label class="bt-opt"><input type="radio" name="shop-free-equip-mode-${id}" value="display" ${equipCfg.mode === "display" ? "checked" : ""}><span class="radio-box" aria-hidden="true"></span><span>仅显示</span></label>
+            <label class="bt-opt"><input type="radio" name="shop-free-equip-mode-${id}" value="auto" ${equipCfg.mode === "auto" ? "checked" : ""}><span class="radio-box" aria-hidden="true"></span><span>自动购买</span></label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="shop-right">
+      <div class="card-area star-source-card-area shop-free-results" id="shop-free-results-${id}">
+        ${freeShopResultHTML()}
+      </div>
+    </div>
   </div>`;
 }
 
@@ -966,12 +1536,103 @@ function bindShopFreeOptions(id) {
     toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
   });
   body.querySelectorAll('.bt-opt input[type="checkbox"]').forEach((input) => {
+    if (input.classList.contains("free-equip-on")) return;
     input.addEventListener("change", () => {
       const keys = [...body.querySelectorAll('.bt-opt input[type="checkbox"]:checked')]
         .map((entry) => entry.value);
       setWantedKeys(keys);
     });
   });
+  const equipToggle = body.querySelector(".free-equip-on");
+  const equipControls = body.querySelector(".shop-free-equip-controls");
+  equipToggle?.addEventListener("change", () => {
+    equipControls?.classList.toggle("hidden", !equipToggle.checked);
+    setShopFreeEquipCfg({ equipmentEnabled: equipToggle.checked });
+  });
+  const schemeSlot = body.querySelector(".shop-free-equip-scheme");
+  if (schemeSlot) bindDropdown(schemeSlot, (schemeId) => setShopFreeEquipCfg({ equipmentSchemeId: schemeId }));
+  body.querySelectorAll('input[name^="shop-free-equip-mode-"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.checked) setShopFreeEquipCfg({ equipmentMode: input.value });
+    });
+  });
+  const previous = activeAcc()?.freeShopResult;
+  if (previous?.id === id) renderFreeShopResult(id, previous);
+}
+
+const SHOP_FREE_TAG = "[秘密商店刷新(免费)]";
+
+function freeShopResultHTML(state) {
+  const cards = state?.legendaryMatches || [];
+  if (!cards.length) {
+    return `<div class="card-empty">
+      <img class="star-source-empty-icon" src="/assets/ui/equipment.png" alt="">
+      <div class="ce-text">命中筛选方案的<b>85级传说装备</b><br>会显示在这里</div>
+    </div>`;
+  }
+  const cardStates = state.cardStates || {};
+  return `<div class="shop-free-result-head"><span>命中筛选方案的85级传说装备</span><b>${cards.length} 件</b></div>
+    <div class="shop-free-card-grid">${cards.map((card, cardIndex) => {
+      const index = Number.isInteger(card.index) ? card.index : cardIndex;
+      const status = cardStates[index] || "";
+      const error = (state.cardErrors || {})[index];
+      const label = status === "buying" ? "购买中…" : status === "bought" ? "已购买" : "购买";
+      const tag = status === "bought" ? '<span class="eq-flag buy">已购买</span>' : "";
+      return `<div class="shop-free-card-item">${equipCardHTML(card, tag)}
+        <div class="shop-free-card-actions"><button type="button" class="btn primary shop-free-buy" data-shelf-index="${index}"${status === "buying" || status === "bought" ? " disabled" : ""}>${label}</button></div>
+        ${error ? `<div class="shop-free-card-error">${filterEscape(error)}</div>` : ""}</div>`;
+    }).join("")}</div>`;
+}
+
+function renderFreeShopResult(id, state, email = activeAccount) {
+  const account = ACCOUNTS[email];
+  if (account) account.freeShopResult = { id, ...state };
+  if (email !== activeAccount) return;
+  const area = $(`shop-free-results-${id}`);
+  if (!area) return;
+  area.classList.toggle("has-results", !!state?.legendaryMatches?.length);
+  area.innerHTML = freeShopResultHTML(state);
+  area.querySelectorAll(".shop-free-buy").forEach((button) => button.addEventListener("click", async () => {
+    const shelfIndex = Number(button.dataset.shelfIndex);
+    const current = account?.freeShopResult;
+    if (!account || !Number.isInteger(shelfIndex) || !current?.legendaryMatches?.length) return;
+    const cardStates = { ...(current.cardStates || {}), [shelfIndex]: "buying" };
+    const cardErrors = { ...(current.cardErrors || {}) };
+    delete cardErrors[shelfIndex];
+    renderFreeShopResult(id, { ...current, cardStates, cardErrors }, email);
+    try {
+      const result = await api("/api/shop/buy", { account: email, index: shelfIndex });
+      if (result.status) applyStatus(email, result.status, result.nextClaims);
+      const latest = account.freeShopResult || current;
+      const nextStates = { ...(latest.cardStates || {}) };
+      const nextErrors = { ...(latest.cardErrors || {}) };
+      if (result.ok) {
+        nextStates[shelfIndex] = "bought";
+        delete nextErrors[shelfIndex];
+        logTo(email, `${SHOP_FREE_TAG} 已购买目标装备`, "ok");
+      } else {
+        delete nextStates[shelfIndex];
+        nextErrors[shelfIndex] = result.detail || "购买失败";
+        logTo(email, `${SHOP_FREE_TAG} ${nextErrors[shelfIndex]}`, "err");
+      }
+      renderFreeShopResult(id, { ...latest, cardStates: nextStates, cardErrors: nextErrors }, email);
+    } catch (error) {
+      const latest = account.freeShopResult || current;
+      const nextStates = { ...(latest.cardStates || {}) };
+      const nextErrors = { ...(latest.cardErrors || {}), [shelfIndex]: error.message };
+      delete nextStates[shelfIndex];
+      renderFreeShopResult(id, { ...latest, cardStates: nextStates, cardErrors: nextErrors }, email);
+      logTo(email, `${SHOP_FREE_TAG} 购买出错：${error.message}`, "err");
+    }
+  }));
+}
+
+function handleAutoTaskResult(result, prefix = "自动·", email = activeAccount, ts = null) {
+  if (result?.id === "shop_free" && result.equipmentMode
+      && Array.isArray(result.legendaryMatches)) {
+    renderFreeShopResult("shop_free", result, email);
+  }
+  logResult(result, prefix, email, ts);
 }
 
 // ---------- 竞技场 NPC 展开页 ----------
@@ -987,7 +1648,7 @@ function renderArenaBody(t) {
     </div>
     <label class="arena-row arena-all" id="arenaAll-${t.id}">
       <input type="checkbox" class="arena-pick-all">
-      <span class="sp-box"></span>
+      ${checkboxUIHTML()}
       <span class="arena-name">全选</span>
       <span class="arena-when arena-count"></span>
     </label>
@@ -999,6 +1660,7 @@ function renderArenaBody(t) {
 
 // 单个 NPC 行的档期文案（沿用自动任务面板的时间格式：绝对时刻在前、倒计时在括号内）
 function arenaWhen(npc) {
+  if (npc.waitingForLogin) return { txt: "等待登录同步刷新", cls: "" };
   const gate = Math.max(npc.nextMs || 0, npc.retryMs || 0);
   if (!gate) return { txt: "可挑战", cls: "ready" };
   const diff = gate - Date.now();
@@ -1018,7 +1680,7 @@ function renderArenaList(taskId) {
       const w = arenaWhen(n);
       return `<label class="arena-row ${n.picked ? "on" : ""}" data-n="${n.n}">
         <input type="checkbox" class="arena-pick" ${n.picked ? "checked" : ""}>
-        <span class="sp-box"></span>
+        ${checkboxUIHTML()}
         <span class="arena-name"><span class="arena-tier">地狱级 · </span>${n.name}</span>
         <span class="arena-when ${w.cls}">${w.txt}</span>
       </label>`;
@@ -1152,7 +1814,16 @@ function toggleParams(ids) {
   const p = {};
   ids.forEach((id) => {
     const meta = TOGGLE_TASKS.find((x) => x.id === id);
-    if (meta && meta.wantsBuyTargets) p[id] = { wanted: wantedIds() };
+    if (meta?.ui === "achievement") p[id] = achievementCfg();
+    if (meta && meta.wantsBuyTargets) {
+      const equipCfg = shopFreeEquipCfg();
+      const scheme = equipCfg.scheme;
+      p[id] = {
+        wanted: wantedIds(),
+        equipmentScheme: equipCfg.legOn ? (scheme ? JSON.parse(JSON.stringify(scheme)) : null) : null,
+        equipmentMode: equipCfg.mode,
+      };
+    }
   });
   return p;
 }
@@ -1162,15 +1833,15 @@ function toggleParams(ids) {
 // 供每小时巡检用，避免每次刷一堆"还需 N 小时，跳过"的噪音。
 async function runToggleTasks(ids, prefix = "自动·", quiet = false) {
   if (!ids || !ids.length) return;
-  // 竞技场由后端逐场写日志；运行期间加快拉取，让每场结束后立即出现在界面上。
-  const streamsArena = ids.includes("arena_npc");
-  const liveLogTimer = streamsArena ? setInterval(pollAutoLogs, 700) : null;
+  // 竞技场和兑换码由后端逐项写日志，运行期间持续拉取已完成的结果。
+  const streamsResults = ids.includes("arena_npc") || ids.includes("redeem_code");
+  const liveLogTimer = streamsResults ? setInterval(pollAutoLogs, 700) : null;
   try {
     const { results } = await api("/api/tasks/auto", { taskIds: ids, params: toggleParams(ids) });
     results.forEach((r) => {
       if (quiet && r.skipped) return;
       if (r.liveLogged) return;
-      logResult(r, prefix);
+      handleAutoTaskResult(r, prefix);
     });
   } catch (e) {
     log(`自动任务执行失败：${e.message}`, "err");
@@ -1210,6 +1881,7 @@ function renderManualPanel(tasks) {
       if (t.ui === "customizedequip") return renderCustomizedEquipWidget(t);
       if (t.ui === "sweep") return renderSweepWidget(t);
       if (t.ui === "activity") return renderActivityWidget(t);
+      if (t.ui === "abyss") return renderAbyssWidget(t);
       if (t.ui === "storebuy") return renderStoreWidget(t);
       // 普通任务：名称+描述在左，启动按钮在右（不再多选+统一执行）
       return `<div class="task-row">
@@ -1229,6 +1901,7 @@ function renderManualPanel(tasks) {
     if (t.ui === "customizedequip") bindCustomizedEquipWidget(t.id);
     if (t.ui === "sweep") bindSweepWidget(t.id);
     if (t.ui === "activity") bindActivityWidget(t.id);
+    if (t.ui === "abyss") bindAbyssWidget(t.id);
     if (t.ui === "storebuy") bindStoreWidget(t.id);
   });
 }
@@ -1266,7 +1939,7 @@ function getShopCfg() {
   const schemes = EQUIP_FILTER_SCHEMES_DATA;
   const fallbackId = schemes.find((scheme) => scheme.id === "plan-star-shop")?.id || schemes[0]?.id || "";
   try {
-    const v = JSON.parse(localStorage.getItem(shopLsKey())) || {};
+    const v = JSON.parse(frontendStorageGet(shopLsKey())) || {};
     return {
       count: v.count || 10,
       wanted: Array.isArray(v.wanted) ? v.wanted : allTargetKeys(),
@@ -1278,7 +1951,7 @@ function getShopCfg() {
   }
 }
 function setShopCfg(patch) {
-  localStorage.setItem(shopLsKey(), JSON.stringify({ ...getShopCfg(), ...patch }));
+  frontendStorageSet(shopLsKey(), JSON.stringify({ ...getShopCfg(), ...patch }));
 }
 function shopWantedIds() {
   const keys = getShopCfg().wanted;
@@ -1290,7 +1963,7 @@ function shopWantedIds() {
 function renderShopWidget(t) {
   const cfg = getShopCfg();
   const opts = BUY_TARGETS.map(
-    (b) => `<label class="bt-opt"><input type="checkbox" data-wkey="${b.key}" ${cfg.wanted.includes(b.key) ? "checked" : ""}><span>${b.label}</span></label>`
+    (b) => `<label class="bt-opt"><input type="checkbox" data-wkey="${b.key}" ${cfg.wanted.includes(b.key) ? "checked" : ""}>${checkboxUIHTML()}<span>${b.label}</span></label>`
   ).join("");
   return `<div class="shop-widget" id="shop-${t.id}">
     <div class="shop-head">
@@ -1315,7 +1988,7 @@ function renderShopWidget(t) {
             <div class="bt-opts col">${opts}</div>
           </div>
           <div class="shop-row col">
-            <label class="bt-opt bold"><input type="checkbox" class="leg-on" ${cfg.legOn ? "checked" : ""}><span>85级传说装备</span></label>
+            <label class="bt-opt"><input type="checkbox" class="leg-on" ${cfg.legOn ? "checked" : ""}>${checkboxUIHTML()}<span>85级传说装备</span></label>
             <div class="shop-equip-scheme-wrap ${cfg.legOn ? "" : "hidden"}">
               ${dropdownHTML("shop-equip-scheme", starSourceSchemeOptions(), cfg.schemeId, "暂无筛选方案")}
             </div>
@@ -1362,11 +2035,15 @@ function bindShopWidget(id) {
     setShopCfg({ legOn: legOn.checked });
   });
   bindDropdown(root.querySelector(".shop-equip-scheme"), (schemeId) => setShopCfg({ schemeId }));
-  root.querySelector(".shop-start").addEventListener("click", () => runShopDiamond(id));
+  root.querySelector(".shop-start").addEventListener("click", () => {
+    if (shopRunning[activeAccount]) requestSecretShopStop(id, activeAccount);
+    else runShopDiamond(id);
+  });
   const saved = activeAcc()?.secretShopResult;
   if (saved?.id === id) renderSecretShopState(id, saved);
   if (shopRunning[activeAccount]) {
-    setSecretShopStartState(id, activeAccount, activeAcc()?.secretShopPending ? "matched" : "running");
+    setSecretShopStartState(id, activeAccount,
+      shopStopRequested[activeAccount] ? "stopping" : (activeAcc()?.secretShopPending ? "matched" : "running"));
   }
 }
 
@@ -1399,6 +2076,7 @@ const SHOP_TAG = "[秘密商店刷新(钻石)]";   // 该功能所有日志的�
 // ⚠️ 账号在循环期间锁定为发起时的账号：所有请求显式带 email、日志写该账号缓冲，
 // 即使用户中途切到别的账号，请求与日志也不会串（之前读全局 activeAccount 会串账号）。
 const shopRunning = {};  // email -> bool，改为按账号，切账号后仍可各自刷
+const shopStopRequested = {};
 
 function secretShopStateHTML(state) {
   if (state?.cards?.length) {
@@ -1454,8 +2132,11 @@ function setSecretShopStartState(id, email, mode) {
   if (email !== activeAccount) return;
   const button = $(`shop-${id}`)?.querySelector(".shop-start");
   if (!button) return;
-  button.disabled = mode !== "idle";
-  button.textContent = mode === "matched" ? "等待选择…" : mode === "running" ? "刷新中…" : "▶ 开始刷新";
+  const stopping = mode === "stopping";
+  const active = mode === "running" || mode === "matched" || stopping;
+  button.disabled = stopping;
+  button.classList.toggle("task-stop-button", active);
+  button.textContent = stopping ? "停止中…" : active ? "停止" : "▶ 开始刷新";
 }
 
 function resolveSecretShopPending(id, email, decision) {
@@ -1463,9 +2144,21 @@ function resolveSecretShopPending(id, email, decision) {
   const pending = account?.secretShopPending;
   if (!pending || pending.id !== id) return false;
   account.secretShopPending = null;
-  setSecretShopStartState(id, email, "running");
+  setSecretShopStartState(id, email, shopStopRequested[email] ? "stopping" : "running");
   pending.resolve(decision);
   return true;
+}
+
+function requestSecretShopStop(id, email) {
+  if (!email || !shopRunning[email]) return;
+  shopStopRequested[email] = true;
+  const account = ACCOUNTS[email];
+  const buying = Object.values(account?.secretShopResult?.cardStates || {}).includes("buying");
+  if (!buying && account?.secretShopPending) {
+    resolveSecretShopPending(id, email, { action: "stop", count: 0 });
+  } else {
+    setSecretShopStartState(id, email, "stopping");
+  }
 }
 
 function bindSecretShopResultActions(id, email) {
@@ -1527,6 +2220,9 @@ function bindSecretShopResultActions(id, email) {
       renderSecretShopState(id, { ...current, cardStates: nextStates, cardErrors: nextErrors }, email);
       logTo(email, `${SHOP_TAG} 购买出错：${error.message}`, "err");
     }
+    if (shopStopRequested[email] && account.secretShopPending) {
+      resolveSecretShopPending(id, email, { action: "stop", count: 0 });
+    }
   }));
 }
 
@@ -1557,6 +2253,7 @@ async function runShopDiamond(id) {
   }
   const schemeSnapshot = scheme ? JSON.parse(JSON.stringify(scheme)) : null;
   shopRunning[email] = true;
+  shopStopRequested[email] = false;
   setSecretShopStartState(id, email, "running");
   const wanted = shopWantedIds();
   const gained = {};   // 本次整轮的目标道具产出累计，结束后并进收尾那一条日志
@@ -1566,9 +2263,17 @@ async function runShopDiamond(id) {
   let endText = "刷新完成";   // 收尾文案：正常跑完/出错两种，与统计合成一句
   let endLv = "ok";
   let failed = false;
+  let stopped = false;
   logTo(email, `${SHOP_TAG} 开始刷新：${cfg.count} 次${scheme ? `，装备方案“${scheme.name}”` : ""}`);
   try {
     for (let i = 1; i <= cfg.count; i++) {
+      await waitRequestDelayBetweenIterations(i, () => shopStopRequested[email]);
+      if (shopStopRequested[email]) {
+        endText = "已停止";
+        endLv = "warn";
+        stopped = true;
+        break;
+      }
       renderSecretShopState(id, { kind: "running", round: i, total: cfg.count }, email);
       const r = await api("/api/shop/reset", {
         account: email, useGold: true, autoBuy: wanted,
@@ -1577,6 +2282,7 @@ async function runShopDiamond(id) {
       completed = i;
       if (r.status) applyStatus(email, r.status, r.nextClaims);  // 每次刷新/购买后即时更新主页资产
       addShopGain(gained, r.bought);   // 失败中止的那次也可能已买到东西，先累加再判 ok
+      const stopAfterRequest = !!shopStopRequested[email];
       if (!r.ok) {
         const message = r.error || "未知错误";
         renderSecretShopState(id, { kind: "error", message }, email);
@@ -1591,6 +2297,16 @@ async function runShopDiamond(id) {
       buyErrs.forEach((ln) => logTo(email, `${SHOP_TAG} 第 ${i} 次：${ln}`, "err"));
       const legendaryMatches = r.legendaryMatches || [];
       if (legendaryMatches.length) {
+        if (stopAfterRequest) {
+          renderSecretShopState(id, {
+            kind: "matched", cards: legendaryMatches, round: i, total: cfg.count,
+            schemeName: scheme?.name || "",
+          }, email);
+          endText = "已停止";
+          endLv = "warn";
+          stopped = true;
+          break;
+        }
         logTo(email, `${SHOP_TAG} 第 ${i} 次命中 ${legendaryMatches.length} 件装备，等待选择`, "ok");
         const decision = await waitForSecretShopDecision(id, {
           cards: legendaryMatches,
@@ -1599,12 +2315,24 @@ async function runShopDiamond(id) {
           schemeName: scheme?.name || "",
         }, email);
         purchasedMatches += Number(decision?.count) || 0;
+        if (shopStopRequested[email]) {
+          endText = "已停止";
+          endLv = "warn";
+          stopped = true;
+          break;
+        }
         if (decision?.action === "bought") {
           if (i < cfg.count && !buyErrs.length) logTo(email, `${SHOP_TAG} 本轮命中装备已全部购买，继续刷新`, "ok");
         } else {
           skippedMatches += 1;
           if (i < cfg.count && !buyErrs.length) logTo(email, `${SHOP_TAG} 已跳过本轮剩余命中装备，继续刷新`);
         }
+      }
+      if (shopStopRequested[email]) {
+        endText = "已停止";
+        endLv = "warn";
+        stopped = true;
+        break;
       }
       // 普通自动购买目标没买成时继续刷新只会白耗钻石，因此仍按原逻辑停止；若同轮
       // 也命中装备，先让用户看完并处理卡片，再执行停止逻辑。
@@ -1621,7 +2349,7 @@ async function runShopDiamond(id) {
         logTo(email, `${SHOP_TAG} 第 ${i} 次：无目标道具`);
       }
     }
-    if (!failed) {
+    if (!failed && !stopped) {
       renderSecretShopState(id, {
         kind: "empty",
         total: completed,
@@ -1640,6 +2368,7 @@ async function runShopDiamond(id) {
     const summary = shopGainSummary(gained);
     logTo(email, `${SHOP_TAG} ${endText}${summary ? "，" + summary : ""}`, endLv);
     shopRunning[email] = false;
+    delete shopStopRequested[email];
     if (ACCOUNTS[email]) ACCOUNTS[email].secretShopPending = null;
     setSecretShopStartState(id, email, "idle");
     refreshAccountStatus(email);
@@ -1846,6 +2575,7 @@ function pickNext(email) {
 const STAR_SOURCE_SHOP_LS = "ark_star_source_shop_cfg";
 const starSourceShopLsKey = () => STAR_SOURCE_SHOP_LS + "::" + (activeAccount || "_");
 const starSourceRunning = {};
+const starSourceStopRequested = {};
 
 function starSourceSchemeOptions() {
   return EQUIP_FILTER_SCHEMES_DATA.map((scheme) => ({
@@ -1858,7 +2588,7 @@ function getStarSourceShopCfg() {
   const schemes = EQUIP_FILTER_SCHEMES_DATA;
   const fallbackId = schemes.find((scheme) => scheme.id === "plan-star-shop")?.id || schemes[0]?.id || "";
   try {
-    const value = JSON.parse(localStorage.getItem(starSourceShopLsKey())) || {};
+    const value = JSON.parse(frontendStorageGet(starSourceShopLsKey())) || {};
     const schemeId = schemes.some((scheme) => scheme.id === value.schemeId) ? value.schemeId : fallbackId;
     return { count: clampCount(value.count || 10), schemeId };
   } catch {
@@ -1867,7 +2597,7 @@ function getStarSourceShopCfg() {
 }
 
 function setStarSourceShopCfg(patch) {
-  localStorage.setItem(
+  frontendStorageSet(
     starSourceShopLsKey(),
     JSON.stringify({ ...getStarSourceShopCfg(), ...patch }),
   );
@@ -1898,7 +2628,7 @@ function starSourceStateHTML(state) {
       }).join("")
       + '</div>';
   }
-  const icon = '<img class="star-source-empty-icon" src="/static/assets/items/109.png" alt="">';
+  const icon = '<img class="star-source-empty-icon" src="/assets/items/109.png" alt="">';
   if (state?.kind === "querying") {
     return '<div class="card-empty">' + icon + '<div class="ce-text">正在同步商店状态</div></div>';
   }
@@ -1937,8 +2667,11 @@ function setStarSourceStartState(id, email, mode) {
   if (email !== activeAccount) return;
   const button = $("starshop-" + id)?.querySelector(".star-source-start");
   if (!button) return;
-  button.disabled = mode !== "idle";
-  button.textContent = mode === "matched" ? "等待选择…" : mode === "running" ? "刷新中…" : "▶ 开始刷新";
+  const stopping = mode === "stopping";
+  const active = mode === "running" || mode === "matched" || stopping;
+  button.disabled = stopping;
+  button.classList.toggle("task-stop-button", active);
+  button.textContent = stopping ? "停止中…" : active ? "停止" : "▶ 开始刷新";
 }
 
 function resolveStarSourcePending(id, email, decision) {
@@ -1946,9 +2679,21 @@ function resolveStarSourcePending(id, email, decision) {
   const pending = account?.starSourcePending;
   if (!pending || pending.id !== id) return false;
   account.starSourcePending = null;
-  setStarSourceStartState(id, email, "running");
+  setStarSourceStartState(id, email, starSourceStopRequested[email] ? "stopping" : "running");
   pending.resolve(decision);
   return true;
+}
+
+function requestStarSourceStop(id, email) {
+  if (!email || !starSourceRunning[email]) return;
+  starSourceStopRequested[email] = true;
+  const account = ACCOUNTS[email];
+  const buying = Object.values(account?.starSourceResult?.cardStates || {}).includes("buying");
+  if (!buying && account?.starSourcePending) {
+    resolveStarSourcePending(id, email, { action: "stop" });
+  } else {
+    setStarSourceStartState(id, email, "stopping");
+  }
 }
 
 function bindStarSourceResultActions(id, email) {
@@ -2008,6 +2753,9 @@ function bindStarSourceResultActions(id, email) {
       delete nextStates[shopIndex];
       renderStarSourceState(id, { ...current, cardStates: nextStates, cardErrors: nextErrors }, email);
       logTo(email, "[星源商店刷新] 购买出错：" + error.message, "err");
+    }
+    if (starSourceStopRequested[email] && account.starSourcePending) {
+      resolveStarSourcePending(id, email, { action: "stop" });
     }
   }));
 }
@@ -2077,6 +2825,10 @@ function bindStarSourceShopWidget(id) {
     setStarSourceShopCfg({ schemeId });
   });
   root.querySelector(".star-source-start").addEventListener("click", () => {
+    if (starSourceRunning[activeAccount]) {
+      requestStarSourceStop(id, activeAccount);
+      return;
+    }
     countInput.value = clampCount(countInput.value);
     setStarSourceShopCfg({ count: parseInt(countInput.value) });
     runStarSourceShop(id);
@@ -2084,7 +2836,8 @@ function bindStarSourceShopWidget(id) {
   const saved = activeAcc()?.starSourceResult;
   if (saved?.id === id) renderStarSourceState(id, saved);
   if (starSourceRunning[activeAccount]) {
-    setStarSourceStartState(id, activeAccount, activeAcc()?.starSourcePending ? "matched" : "running");
+    setStarSourceStartState(id, activeAccount,
+      starSourceStopRequested[activeAccount] ? "stopping" : (activeAcc()?.starSourcePending ? "matched" : "running"));
   }
 }
 
@@ -2109,12 +2862,14 @@ async function runStarSourceShop(id) {
 
   const schemeSnapshot = JSON.parse(JSON.stringify(scheme));
   starSourceRunning[email] = true;
+  starSourceStopRequested[email] = false;
   setStarSourceStartState(id, email, "running");
   logTo(email, "[星源商店刷新] 开始刷新：" + cfg.count + " 次，方案“" + scheme.name + "”");
   let completed = 0;
   let skippedMatches = 0;
   let purchasedMatches = 0;
   let failed = false;
+  let stopped = false;
   try {
     renderStarSourceState(id, { kind: "querying" }, email);
     const initial = await api("/api/star-source/query", {
@@ -2129,6 +2884,11 @@ async function runStarSourceShop(id) {
     }
     for (let round = 1; round <= cfg.count; round++) {
       if (failed) break;
+      await waitRequestDelayBetweenIterations(round, () => starSourceStopRequested[email]);
+      if (starSourceStopRequested[email]) {
+        stopped = true;
+        break;
+      }
       renderStarSourceState(id, { kind: "running", round, total: cfg.count }, email);
       const result = await api("/api/star-source/refresh", {
         account: email,
@@ -2145,6 +2905,14 @@ async function runStarSourceShop(id) {
       }
       const matches = result.matches || [];
       if (matches.length) {
+        if (starSourceStopRequested[email]) {
+          renderStarSourceState(id, {
+            kind: "matched", cards: matches, round, total: cfg.count,
+            schemeName: scheme.name,
+          }, email);
+          stopped = true;
+          break;
+        }
         logTo(email, "[星源商店刷新] 第 " + round + " 次命中 " + matches.length + " 件装备，等待选择", "ok");
         const decision = await waitForStarSourceSkip(id, {
           cards: matches,
@@ -2152,6 +2920,10 @@ async function runStarSourceShop(id) {
           total: cfg.count,
           schemeName: scheme.name,
         }, email);
+        if (starSourceStopRequested[email]) {
+          stopped = true;
+          break;
+        }
         if (decision?.action === "bought") {
           purchasedMatches += Number(decision.count) || matches.length;
           if (round < cfg.count) {
@@ -2164,8 +2936,12 @@ async function runStarSourceShop(id) {
           logTo(email, "[星源商店刷新] 已跳过本轮命中，继续刷新");
         }
       }
+      if (starSourceStopRequested[email]) {
+        stopped = true;
+        break;
+      }
     }
-    if (!failed) {
+    if (!failed && !stopped) {
       renderStarSourceState(id, {
         kind: "empty",
         total: completed,
@@ -2182,6 +2958,7 @@ async function runStarSourceShop(id) {
     logTo(email, "[星源商店刷新] 刷新出错：" + error.message, "err");
   } finally {
     starSourceRunning[email] = false;
+    delete starSourceStopRequested[email];
     if (ACCOUNTS[email]) ACCOUNTS[email].starSourcePending = null;
     setStarSourceStartState(id, email, "idle");
     refreshAccountStatus(email);
@@ -2192,6 +2969,7 @@ async function runStarSourceShop(id) {
 const CUSTOMIZED_EQUIP_LS = "ark_customized_equip_cfg";
 const customizedEquipLsKey = () => `${CUSTOMIZED_EQUIP_LS}::${activeAccount || "_"}`;
 const customizedEquipRunning = {};
+const customizedEquipStopRequested = {};
 
 const CUSTOMIZED_EQUIP_PARTS = Object.freeze([
   { val: "Weapon", slot: "weapon", label: "武器" },
@@ -2206,7 +2984,7 @@ function getCustomizedEquipCfg() {
   const schemes = EQUIP_FILTER_SCHEMES_DATA;
   const fallbackId = schemes.find((scheme) => scheme.id === "plan-star-shop")?.id || schemes[0]?.id || "";
   try {
-    const saved = JSON.parse(localStorage.getItem(customizedEquipLsKey())) || {};
+    const saved = JSON.parse(frontendStorageGet(customizedEquipLsKey())) || {};
     return {
       count: clampCount(saved.count || 20),
       schemeId: schemes.some((scheme) => scheme.id === saved.schemeId) ? saved.schemeId : fallbackId,
@@ -2217,7 +2995,7 @@ function getCustomizedEquipCfg() {
 }
 
 function setCustomizedEquipCfg(patch) {
-  localStorage.setItem(customizedEquipLsKey(), JSON.stringify({ ...getCustomizedEquipCfg(), ...patch }));
+  frontendStorageSet(customizedEquipLsKey(), JSON.stringify({ ...getCustomizedEquipCfg(), ...patch }));
 }
 
 function customizedEquipSchemeOptions() {
@@ -2278,6 +3056,18 @@ function refreshFilterSchemeDropdowns() {
     );
     if (!replacement) return;
     bindDropdown(replacement, (schemeId) => setShopCfg({ schemeId }));
+  });
+
+  document.querySelectorAll('[id^="auto-"]').forEach((root) => {
+    const slot = root.querySelector(".shop-free-equip-scheme");
+    if (!slot) return;
+    const cfg = shopFreeEquipCfg();
+    const replacement = replaceDropdown(
+      slot,
+      dropdownHTML("shop-free-equip-scheme", starSourceSchemeOptions(), cfg.schemeId, "暂无筛选方案"),
+    );
+    if (!replacement) return;
+    bindDropdown(replacement, (schemeId) => setShopFreeEquipCfg({ equipmentSchemeId: schemeId }));
   });
 }
 
@@ -2380,10 +3170,10 @@ function renderCustomizedEquipWidget(task) {
         <div class="customized-set-anchor">${customizedEquipSetButtonHTML()}
           <div class="customized-set-popover hidden">${CUSTOMIZED_EQUIP_SETS.map((set) => `<button type="button" data-customized-set="${set.id}" title="${set.label}"><img src="/assets/sets/${set.icon}.png" alt="${set.label}"></button>`).join("")}</div>
         </div>
-        <button type="button" class="customized-reset" data-customized-reset="set" title="重置套装" aria-label="重置套装">↺</button>
+        <button type="button" class="customized-reset" data-customized-reset="set" title="重置套装" aria-label="重置套装"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-ccw"></use></svg></button>
       </div>
-      <div class="customized-field"><span class="customized-label">部位</span><div class="customized-control customized-part-slot"></div><button type="button" class="customized-reset" data-customized-reset="part" title="重置部位" aria-label="重置部位">↺</button></div>
-      <div class="customized-field"><span class="customized-label">主属性</span><div class="customized-control customized-main-slot"></div><button type="button" class="customized-reset" data-customized-reset="main" title="重置主属性" aria-label="重置主属性">↺</button></div>
+      <div class="customized-field"><span class="customized-label">部位</span><div class="customized-control customized-part-slot"></div><button type="button" class="customized-reset" data-customized-reset="part" title="重置部位" aria-label="重置部位"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-ccw"></use></svg></button></div>
+      <div class="customized-field"><span class="customized-label">主属性</span><div class="customized-control customized-main-slot"></div><button type="button" class="customized-reset" data-customized-reset="main" title="重置主属性" aria-label="重置主属性"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-ccw"></use></svg></button></div>
       <div class="customized-field customized-scheme-field"><span class="customized-label">副属性方案</span><div class="customized-control">${dropdownHTML("customized-scheme", customizedEquipSchemeOptions(), cfg.schemeId, "暂无筛选方案")}</div></div>
       <div class="customized-rule-hint"></div>
       <div class="customized-start-row"><button type="button" class="btn primary customized-equip-start">▶ 开始刷新</button><div class="count-box"><input type="text" inputmode="numeric" class="count-in customized-equip-count" value="${cfg.count}"><span class="count-unit">次</span></div><button type="button" class="btn ghost customized-equip-reward">领取</button></div>
@@ -2400,12 +3190,20 @@ function syncCustomizedEquipControls(root) {
   const stage = String(state?.stage || "");
   const busy = root.classList.contains("busy");
   const rewarded = customizedEquipIsRewarded(state);
+  const running = !!customizedEquipRunning[activeAccount];
+  const stopping = !!customizedEquipStopRequested[activeAccount];
   const actionSelector = ".customized-set-button, .customized-set-popover button, .customized-reset, "
     + ".customized-part-slot button, .customized-main-slot button, .customized-scheme button, "
-    + ".customized-equip-start, .customized-equip-count, .customized-choice-btn, .customized-equip-reward";
+    + ".customized-equip-count, .customized-choice-btn, .customized-equip-reward";
   root.querySelectorAll(actionSelector).forEach((control) => {
     control.disabled = busy || rewarded;
   });
+  const start = root.querySelector(".customized-equip-start");
+  if (start) {
+    start.classList.toggle("task-stop-button", running);
+    start.textContent = running ? (stopping ? "停止中…" : "停止") : "▶ 开始刷新";
+    start.disabled = running ? stopping : busy || rewarded;
+  }
   const reward = root.querySelector(".customized-equip-reward");
   if (reward) {
     reward.textContent = rewarded ? "已领取" : "领取";
@@ -2420,8 +3218,7 @@ function syncCustomizedEquipControls(root) {
   });
   root.querySelector(".customized-part .dd-btn").disabled = stage !== "ChoosePart";
   root.querySelector(".customized-main .dd-btn").disabled = stage !== "ChooseProp";
-  root.querySelector(".customized-equip-start").disabled =
-    stage !== "RefreshSubProp" || !customizedEquipRuleStatus(state).valid;
+  if (start) start.disabled = stage !== "RefreshSubProp" || !customizedEquipRuleStatus(state).valid;
   root.querySelectorAll(".customized-choice-btn").forEach((control) => {
     control.disabled = stage !== "ChooseSubProp";
   });
@@ -2533,7 +3330,10 @@ function bindCustomizedEquipWidget(id) {
     count.value = clampCount(count.value);
     setCustomizedEquipCfg({ count: Number(count.value) });
   });
-  root.querySelector(".customized-equip-start").addEventListener("click", () => runCustomizedEquip(id));
+  root.querySelector(".customized-equip-start").addEventListener("click", () => {
+    if (customizedEquipRunning[activeAccount]) requestCustomizedEquipStop(id, activeAccount);
+    else runCustomizedEquip(id);
+  });
   root.querySelector(".customized-equip-reward").addEventListener("click", () => customizedEquipAction(id, "reward"));
   updateCustomizedEquipWidget(id, {});
 }
@@ -2551,14 +3351,19 @@ async function runCustomizedEquip(id) {
     return;
   }
   customizedEquipRunning[email] = true;
+  customizedEquipStopRequested[email] = false;
   setCustomizedEquipBusy(root, true);
-  const start = root.querySelector(".customized-equip-start");
-  start.textContent = "刷新中…";
   const schemeSnapshot = JSON.parse(JSON.stringify(scheme));
   logTo(email, `[装备活动刷新] 开始刷新：${cfg.count} 次，方案“${scheme.name}”`);
   try {
     let completed = 0;
+    let stopped = false;
     for (let round = 1; round <= cfg.count; round++) {
+      await waitRequestDelayBetweenIterations(round, () => customizedEquipStopRequested[email]);
+      if (customizedEquipStopRequested[email]) {
+        stopped = true;
+        break;
+      }
       const result = await api("/api/customized-equip/action", {
         account: email, action: "refresh", scheme: schemeSnapshot,
       });
@@ -2567,6 +3372,11 @@ async function runCustomizedEquip(id) {
       completed = round;
       state = result;
       updateCustomizedEquipWidget(id, state, `第 ${round} / ${cfg.count} 次刷新${state.matches ? "，已命中" : ""}`);
+      if (customizedEquipStopRequested[email]) {
+        stopped = true;
+        updateCustomizedEquipWidget(id, state, state.hasCandidate ? "已停止，保留当前与候选装备" : "已停止，保留当前副属性");
+        break;
+      }
       const last = round === cfg.count;
       if (!state.hasCandidate) {
         if (state.matches) {
@@ -2596,15 +3406,23 @@ async function runCustomizedEquip(id) {
       if (!rejected.ok) throw new Error(rejected.error || "放弃副属性失败");
       state = rejected;
     }
+    if (stopped) logTo(email, "[装备活动刷新] 已停止，未继续后续请求", "warn");
   } catch (error) {
     updateCustomizedEquipWidget(id, state, error.message);
     logTo(email, `[装备活动刷新] ${error.message}`, "err");
   } finally {
     customizedEquipRunning[email] = false;
+    delete customizedEquipStopRequested[email];
     setCustomizedEquipBusy(root, false);
-    start.textContent = "▶ 开始刷新";
     refreshAccountStatus(email);
   }
+}
+
+function requestCustomizedEquipStop(id, email) {
+  if (!email || !customizedEquipRunning[email]) return;
+  customizedEquipStopRequested[email] = true;
+  const root = $(`customizedequip-${id}`);
+  if (root) syncCustomizedEquipControls(root);
 }
 
 // ---------- 扫荡自定义控件（讨伐扫荡 / 元素扫荡共用） ----------
@@ -2613,7 +3431,7 @@ const SWEEP_LS = "ark_sweep_cfg"; // {count, element, sceneId, teamId, quick}
 const sweepLsKey = (id) => `${SWEEP_LS}::${id}::${activeAccount || "_"}`;
 function getSweepCfg(id) {
   try {
-    const v = JSON.parse(localStorage.getItem(sweepLsKey(id))) || {};
+    const v = JSON.parse(frontendStorageGet(sweepLsKey(id))) || {};
     return {
       count: v.count || 5, element: v.element || "", sceneId: v.sceneId || "", teamId: v.teamId || "",
       quick: v.quick !== false,  // 默认勾选：使用快速战斗券
@@ -2623,7 +3441,7 @@ function getSweepCfg(id) {
   }
 }
 function setSweepCfg(id, patch) {
-  localStorage.setItem(sweepLsKey(id), JSON.stringify({ ...getSweepCfg(id), ...patch }));
+  frontendStorageSet(sweepLsKey(id), JSON.stringify({ ...getSweepCfg(id), ...patch }));
 }
 // 元素 -> 主题色（讨伐与元素探索属性下拉的色点）
 const ELEMENT_COLOR = {
@@ -2638,13 +3456,42 @@ function dropdownHTML(cls, options, curVal, placeholder = "请选择") {
   const curLabel = cur ? `${dot(cur.element)}${cur.label}` : placeholder;
   const opts = options
     .map(
-      (o) => `<div class="dd-opt ${o.val === curVal ? "sel" : ""}" data-val="${o.val}">${dot(o.element)}<span>${o.label}</span></div>`
+      (o) => `<div class="dd-opt ${o.val === curVal ? "sel" : ""}" data-val="${filterEscape(o.val)}">${dot(o.element)}<span>${o.label}</span></div>`
     )
     .join("");
-  return `<div class="dropdown ${cls}" data-val="${cur ? cur.val : ""}">
+  return `<div class="dropdown ${cls}" data-val="${filterEscape(cur ? cur.val : "")}">
     <button type="button" class="dd-btn" ${disabled ? "disabled" : ""}><span class="dd-cur">${curLabel}</span><span class="dd-caret">▾</span></button>
     <div class="dd-menu hidden">${opts}</div>
   </div>`;
+}
+
+// 根据视口和祖先裁剪区域选择展开方向，避免菜单超出选项卡片或滚动页。
+function positionDropdown(root) {
+  const btn = root.querySelector(".dd-btn"), menu = root.querySelector(".dd-menu");
+  if (!btn || !menu || menu.classList.contains("hidden")) return;
+  const viewport = window.visualViewport;
+  let top = (viewport?.offsetTop || 0) + 8;
+  let bottom = (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight) - 8;
+  for (let parent = root.parentElement; parent; parent = parent.parentElement) {
+    if (!/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(parent).overflowY)) continue;
+    const rect = parent.getBoundingClientRect();
+    top = Math.max(top, rect.top + parent.clientTop + 8);
+    bottom = Math.min(bottom, rect.top + parent.clientTop + parent.clientHeight - 8);
+  }
+  const rect = btn.getBoundingClientRect();
+  if (rect.bottom <= top || rect.top >= bottom) {
+    menu.classList.add("hidden");
+    root.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+    return;
+  }
+  const above = Math.max(0, rect.top - top - 6), below = Math.max(0, bottom - rect.bottom - 6);
+  menu.style.maxHeight = "260px";
+  const desired = Math.min(260, menu.scrollHeight + 2);
+  const upward = below < desired && above > below;
+  menu.style.top = upward ? "auto" : "";
+  menu.style.bottom = upward ? "calc(100% + 6px)" : "";
+  menu.style.maxHeight = `${Math.floor(Math.min(260, upward ? above : below))}px`;
 }
 
 // 绑定一个下拉的交互：onPick(val) 回调
@@ -2671,6 +3518,12 @@ function bindDropdown(root, onPick) {
     const open = menu.classList.toggle("hidden");
     root.classList.toggle("open", !open);
     btn.setAttribute("aria-expanded", String(!open));
+    if (!open) {
+      positionDropdown(root);
+      const selected = menu.querySelector(".dd-opt.sel");
+      // 只滚动菜单本身，避免 scrollIntoView 将整个任务页带走。
+      if (selected) menu.scrollTop = selected.offsetTop - (menu.clientHeight - selected.offsetHeight) / 2;
+    }
   };
   btn.addEventListener("click", root._ddButtonHandler);
   btn.setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
@@ -2692,10 +3545,21 @@ function bindDropdown(root, onPick) {
   );
 }
 
+function repositionDropdowns(event) {
+  document.querySelectorAll(".dropdown.open").forEach((root) => {
+    // 菜单内部滚动不影响它的展开位置。
+    if (!(event.target instanceof Node && root.querySelector(".dd-menu")?.contains(event.target))) positionDropdown(root);
+  });
+}
+document.addEventListener("scroll", repositionDropdowns, { capture: true, passive: true });
+window.addEventListener("resize", repositionDropdowns);
+window.visualViewport?.addEventListener("resize", repositionDropdowns);
+window.visualViewport?.addEventListener("scroll", repositionDropdowns);
+
 function renderSweepWidget(t) {
   const cfg = getSweepCfg(t.id);
   const sceneFields = `<div class="shop-row col">
-      <span class="shop-lbl">选择属性</span>
+      <div class="act-option-head"><span class="shop-lbl">选择属性</span><button type="button" class="act-options-refresh sweep-options-refresh" title="重新加载${t.name}选项" aria-label="重新加载${t.name}选项"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button></div>
       <div class="dd-slot sweep-element-slot"><div class="dd-loading">加载中…</div></div>
     </div>
     <div class="shop-row col">
@@ -2723,10 +3587,10 @@ function renderSweepWidget(t) {
           <button type="button" class="count-btn" data-d="1">+</button>
         </div>
       </div>
-      <label class="save-pwd sweep-quick-row">
-        <input type="checkbox" class="sweep-quick" ${cfg.quick ? "checked" : ""}>
-        <span class="sp-box"></span>
-        <span class="sp-txt">使用快速战斗券</span>
+      <label class="quick-ticket-toggle target-score-toggle sweep-quick-row">
+        <input type="checkbox" role="switch" class="sweep-quick" ${cfg.quick ? "checked" : ""}>
+        <span class="target-score-switch" aria-hidden="true"></span>
+        <span>使用快速战斗券</span>
       </label>
       <button type="button" class="btn primary sweep-start">▶ 开始扫荡</button>
       <div class="sweep-summary" id="sweepSummary-${t.id}"></div>
@@ -2744,9 +3608,9 @@ async function bindSweepWidget(id) {
     toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
     if (!body.classList.contains("hidden") && !root.dataset.loaded) {
       await loadSweepOptions(id);
-      root.dataset.loaded = "1";
     }
   });
+  root.querySelector(".sweep-options-refresh").addEventListener("click", () => loadSweepOptions(id));
 
   const cntIn = root.querySelector(".sweep-count");
   cntIn.addEventListener("input", () => { cntIn.value = cntIn.value.replace(/[^0-9]/g, "").slice(0, 3); });
@@ -2761,15 +3625,33 @@ async function bindSweepWidget(id) {
   const quick = root.querySelector(".sweep-quick");
   if (quick) quick.addEventListener("change", () => setSweepCfg(id, { quick: quick.checked }));
 
-  root.querySelector(".sweep-start").addEventListener("click", () => runSweep(id));
+  root.querySelector(".sweep-start").addEventListener("click", () => {
+    if (sweepRunning[activeAccount]) {
+      if (sweepRunningTask[activeAccount] === id) requestSweepStop(id, activeAccount);
+      return;
+    }
+    else runSweep(id);
+  });
+  if (sweepRunning[activeAccount] && sweepRunningTask[activeAccount] === id) {
+    const button = root.querySelector(".sweep-start");
+    const stopping = !!sweepStopRequested[activeAccount];
+    button.disabled = stopping;
+    button.classList.add("task-stop-button");
+    button.textContent = stopping ? "停止中…" : "停止";
+  }
 }
 
 async function loadSweepOptions(id) {
   const root = $(`sweep-${id}`);
+  if (!root || root.dataset.loading === "1") return;
   const kind = root.dataset.kind || "hunt";
   const elementSlot = root.querySelector(".sweep-element-slot");
   const sceneSlot = root.querySelector(".sweep-scene-slot");
   const teamSlot = root.querySelector(".sweep-team-slot");
+  const refreshButton = root.querySelector(".sweep-options-refresh");
+  root.dataset.loading = "1";
+  refreshButton.disabled = true;
+  refreshButton.classList.add("loading");
   try {
     const { elements = [], scenes, teams } = await api(`/api/sweep/options?kind=${encodeURIComponent(kind)}`);
     const cfg = getSweepCfg(id);
@@ -2810,16 +3692,24 @@ async function loadSweepOptions(id) {
     setSweepCfg(id, { teamId: teamVal });
     teamSlot.innerHTML = dropdownHTML("sweep-team", teamOpts, teamVal);
     bindDropdown(teamSlot.querySelector(".dropdown"), (v) => setSweepCfg(id, { teamId: v }));
+    root.dataset.loaded = "1";
   } catch (e) {
+    delete root.dataset.loaded;
     if (elementSlot) elementSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     sceneSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     teamSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     log(`加载扫荡选项失败：${e.message}`, "err");
+  } finally {
+    delete root.dataset.loading;
+    refreshButton.disabled = false;
+    refreshButton.classList.remove("loading");
   }
 }
 
 // 同商店：账号锁定为发起时的账号，请求显式带 email、日志写该账号缓冲，切账号不串。
 const sweepRunning = {};  // email -> bool
+const sweepRunningTask = {};  // email -> 当前运行的扫荡任务 id
+const sweepStopRequested = {};
 async function runSweep(id) {
   const email = activeAccount;
   if (sweepRunning[email]) return;
@@ -2830,49 +3720,709 @@ async function runSweep(id) {
   const startBtn = root.querySelector(".sweep-start");
   const summary = $(`sweepSummary-${id}`);
   sweepRunning[email] = true;
-  startBtn.disabled = true;
-  startBtn.textContent = "扫荡中…";
+  sweepRunningTask[email] = id;
+  sweepStopRequested[email] = false;
+  startBtn.disabled = false;
+  startBtn.classList.add("task-stop-button");
+  startBtn.textContent = "停止";
   const sceneName = (root.querySelector(".sweep-scene .dd-cur")?.textContent || cfg.sceneId).trim();
   logTo(email, `开始${taskName}：${sceneName} × ${cfg.count} 次`);
   let done = 0;
+  let stopped = false;
   try {
     for (let i = 1; i <= cfg.count; i++) {
+      await waitRequestDelayBetweenIterations(i, () => sweepStopRequested[email]);
+      if (sweepStopRequested[email]) {
+        stopped = true;
+        break;
+      }
       const r = await api("/api/sweep/run", { account: email, sceneId: cfg.sceneId, teamId: cfg.teamId, quick: cfg.quick });
       if (r.status) applyStatus(email, r.status, r.nextClaims);
       logResult({ ...r, name: taskName }, `第${i}次·`, email);
+      if (sweepStopRequested[email]) {
+        stopped = true;
+        break;
+      }
       if (!r.ok) { logTo(email, `第 ${i} 次未获得掉落，停止扫荡`, "err"); break; }
       done++;
     }
+    if (stopped) logTo(email, `[${taskName}] 已停止，未继续后续请求`, "warn");
     if (summary && email === activeAccount) summary.textContent = `完成 ${done}/${cfg.count} 次`;
   } catch (e) {
     logTo(email, `扫荡出错：${e.message}`, "err");
   } finally {
     sweepRunning[email] = false;
+    delete sweepRunningTask[email];
+    delete sweepStopRequested[email];
     if (email === activeAccount && startBtn.isConnected) {
       startBtn.disabled = false;
+      startBtn.classList.remove("task-stop-button");
       startBtn.textContent = "▶ 开始扫荡";
     }
     refreshAccountStatus(email);
   }
 }
 
+function requestSweepStop(id, email) {
+  if (!email || !sweepRunning[email]) return;
+  if (sweepRunningTask[email] && sweepRunningTask[email] !== id) return;
+  sweepStopRequested[email] = true;
+  const root = $(`sweep-${id}`);
+  const button = root?.querySelector(".sweep-start");
+  if (button) {
+    button.disabled = true;
+    button.classList.add("task-stop-button");
+    button.textContent = "停止中…";
+  }
+}
+
+// ---------- 虚构深渊：两波自由配队 ----------
+// 这里只保存角色引用；开始时由后端按当前登录快照补齐装备/神器等战斗字段。
+const ABYSS_LS = "ark_abyss_cfg";
+const abyssLsKey = () => `${ABYSS_LS}::${activeAccount || "_"}`;
+const abyssRunning = {};
+const abyssCancelling = {};
+const abyssBattleState = {};
+const abyssRequests = {};
+const abyssRewarding = {};
+const abyssState = {};
+const abyssPickerFilters = new Map();
+let abyssPickerState = null;
+
+function getAbyssCfg() {
+  try {
+    const value = JSON.parse(frontendStorageGet(abyssLsKey())) || {};
+    const wave = (key) => {
+      const input = value[key];
+      if (Array.isArray(input)) return Array.from({ length: 4 }, (_, i) => input[i] || null);
+      if (input && typeof input === "object") return Array.from({ length: 4 }, (_, i) => input[String(i)] || null);
+      return [null, null, null, null];
+    };
+    return { sceneId: value.sceneId || "", upper: wave("upper"), lower: wave("lower"), autoAdvance: value.autoAdvance === true };
+  } catch {
+    return { sceneId: "", upper: [null, null, null, null], lower: [null, null, null, null], autoAdvance: false };
+  }
+}
+function setAbyssCfg(patch) {
+  const current = getAbyssCfg();
+  frontendStorageSet(abyssLsKey(), JSON.stringify({ ...current, ...patch }));
+}
+function abyssRoleId(role) {
+  const raw = role?.roleId ?? role?._id ?? role?.id ?? role?.RoleID ?? "";
+  if (raw && typeof raw === "object") return String(raw.$oid ?? raw.oid ?? raw.id ?? "");
+  return String(raw);
+}
+function abyssRoleName(role) { return role?.name || role?.Name || role?.id || role?._id || "未知角色"; }
+function abyssRoleAvatar(role) { return role?.avatar || role?.Avatar || role?.icon || role?.Icon || ""; }
+function abyssRoleList(data) {
+  const source = data?.roles || data?.heroes || data?.characters || data?.roster?.heroes || [];
+  return Array.isArray(source) ? source.filter((role) => abyssRoleId(role)) : [];
+}
+function abyssRoleCard(role, selected, disabled, position = "") {
+  const id = abyssRoleId(role), name = abyssRoleName(role), avatar = abyssRoleAvatar(role);
+  const wave = position ? (position.startsWith("上") ? "upper" : "lower") : "";
+  const label = [name, role.level != null ? `等级 ${role.level}` : "", role.grade ? `潜能 ${role.grade}` : "", position ? `已编入${position}，再次点击移除` : "", disabled ? "暂不可选择" : ""].filter(Boolean).join("，");
+  return `<button type="button" class="hero-card abyss-role-option${selected ? " selected" : ""}" data-role-id="${filterEscape(id)}" data-abyss-wave="${wave}" aria-label="${filterEscape(label)}" title="${filterEscape(label)}" aria-pressed="${selected}" ${disabled ? "disabled" : ""}>
+    ${heroPortraitHTML({ ...role, id, name, avatar })}${selected ? `<span class="abyss-role-check${position ? " has-position" : ""}" aria-hidden="true">${filterEscape(position || "✓")}</span>` : ''}
+  </button>`;
+}
+function renderAbyssWidget(t) {
+  const cfg = getAbyssCfg();
+  const running = abyssRunning[activeAccount], cancelling = abyssCancelling[activeAccount], rewarding = abyssRewarding[activeAccount];
+  return `<div class="shop-widget abyss-widget" id="abyss-${t.id}">
+    <div class="shop-head"><div class="ticon">${taskIconHTML(t.id, "🌌")}</div>
+      <div class="tinfo"><div class="tname">${t.name}</div><div class="tdesc">${t.desc}</div></div>
+      <button type="button" class="mini abyss-toggle">选项 ▸</button></div>
+    <div class="shop-body hidden">
+      <div class="shop-row col"><div class="act-option-head"><span class="shop-lbl">深渊关卡</span><button type="button" class="act-options-refresh abyss-options-refresh" title="重新加载深渊选项" aria-label="重新加载深渊选项"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button></div>
+        <div class="dd-slot abyss-scene-slot"><div class="dd-loading">展开时加载…</div></div></div>
+      <details class="abyss-effects hidden" ${window.innerWidth > 680 ? "open" : ""}>
+        <summary><span>关卡特殊效果</span><span class="abyss-effects-scene"></span><svg class="abyss-effects-chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-chevron-down"></use></svg></summary>
+        <div class="abyss-effects-content" aria-live="polite"></div>
+      </details>
+      <div class="abyss-team-grid">
+        ${abyssWaveHTML(t.id, "upper", "上半", cfg.upper)}
+        ${abyssWaveHTML(t.id, "lower", "下半", cfg.lower)}
+      </div>
+      <label class="quick-ticket-toggle target-score-toggle abyss-auto-row">
+        <input type="checkbox" role="switch" class="abyss-auto-advance" ${cfg.autoAdvance ? "checked" : ""} ${running || rewarding ? "disabled" : ""}>
+        <span class="target-score-switch" aria-hidden="true"></span><span>自动推关</span>
+      </label>
+      <div class="abyss-actions">
+        <button type="button" class="btn abyss-rewards" ${running || rewarding ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-gift"></use></svg><span>${rewarding ? "领取中…" : "奖励领取"}</span></button>
+        <button type="button" class="btn primary abyss-start${running ? " task-stop-button" : ""}" ${cancelling || rewarding ? "disabled" : ""}>${cancelling ? "中止中…" : running ? "中止挑战" : "▶ 开始挑战"}</button>
+      </div>
+      <div class="sweep-summary abyss-summary" id="abyssSummary-${t.id}"></div>
+      <div class="abyss-battle-progress${abyssBattleState[activeAccount] ? "" : " hidden"}" aria-label="战斗进度">${abyssBattleHTML(abyssBattleState[activeAccount])}</div>
+    </div>
+  </div>`;
+}
+function renderAbyssEffects(id) {
+  const root = $(`abyss-${id}`);
+  const host = root?.querySelector(".abyss-effects");
+  if (!host) return;
+  const state = abyssState[id];
+  const scene = state?.account === activeAccount
+    ? state.scenes?.find((item) => item.id === getAbyssCfg().sceneId) : null;
+  host.classList.toggle("hidden", !scene);
+  const content = host.querySelector(".abyss-effects-content");
+  host.querySelector(".abyss-effects-scene").textContent = scene?.name || "";
+  if (!scene) { content.innerHTML = ""; return; }
+  if (!scene.effects) {
+    content.innerHTML = '<p class="abyss-effect-empty">关卡效果暂未提供</p>';
+    return;
+  }
+  content.innerHTML = [ ["upper", "上半"], ["lower", "下半"] ].map(([wave, label]) => {
+    const groups = scene.effects[wave] || {};
+    return `<section class="abyss-effect-wave" aria-label="${label}特殊效果"><h4>${label}</h4>
+      ${[ ["bonuses", "增益"], ["restrictions", "限制"] ].map(([group, title]) => {
+        const effects = groups[group] || [];
+        return `<div class="abyss-effect-group ${group}" role="group" aria-label="${title}">
+          ${effects.length ? `<ul>${effects.map((effect) => `<li${effect.descriptionMissing ? ` class="abyss-effect-missing" title="效果编号：${filterEscape(effect.id)}"` : ""}>${filterEscape(effect.description)}</li>`).join("")}</ul>` : '<p class="abyss-effect-empty">无</p>'}
+        </div>`;
+      }).join("")}</section>`;
+  }).join("");
+}
+function abyssBattleHTML(progress, labels = {}) {
+  if (!progress) return "";
+  const cards = (members) => (members || []).map((member) => {
+    const value = Number(member.hpPercent);
+    const percent = member.dead || !Number.isFinite(value) ? 0 : Math.max(0, Math.min(100, value));
+    const name = member.name || member.staticId || "未知角色";
+    const label = `${name}，生命 ${percent}%${member.dead ? "，已死亡" : ""}`;
+    return `<div class="abyss-battle-member${member.dead ? " dead" : ""}" data-unit-id="${filterEscape(member.id)}" title="${filterEscape(label)}">
+      ${heroPortraitHTML({ name: member.avatar ? name : "?", avatar: member.avatar })}
+      <div class="abyss-hp-bar" role="progressbar" aria-label="${filterEscape(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div>
+      <span class="abyss-hp-percent">${percent}%</span>
+    </div>`;
+  }).join("");
+  const stage = /^MysteriousRealm_(\d+)$/.exec(String(progress.sceneId || ""));
+  const sceneLabel = labels.sceneLabel ?? (stage ? `第 ${Number(stage[1])} 关` : "");
+  const waveLabel = labels.waveLabel ?? (Number(progress.wave) === 1 ? "下半" : "上半");
+  return `${sceneLabel ? `<div class="abyss-battle-scene">${filterEscape(sceneLabel)}</div>` : ""}<div class="abyss-battle-wave" aria-live="polite">${filterEscape(waveLabel)}</div>
+    <div class="abyss-battle-side enemies"><span class="abyss-battle-label">敌方</span><div class="abyss-battle-members">${cards(progress.enemies)}</div></div>
+    <div class="abyss-battle-side allies"><span class="abyss-battle-label">我方</span><div class="abyss-battle-members">${cards(progress.allies)}</div></div>`;
+}
+function renderAbyssBattle(id) {
+  const root = $(`abyss-${id}`);
+  if (!root) return;
+  const progress = abyssBattleState[activeAccount];
+  const host = root.querySelector(".abyss-battle-progress");
+  const html = abyssBattleHTML(progress);
+  if (host && host._battleHTML !== html) {
+    host.innerHTML = html;
+    host._battleHTML = html;
+    host.classList.toggle("hidden", !progress);
+  }
+  const button = root.querySelector(".abyss-start");
+  if (button) {
+    button.disabled = !!(abyssCancelling[activeAccount] || abyssRewarding[activeAccount]);
+    button.classList.toggle("task-stop-button", !!abyssRunning[activeAccount]);
+    button.textContent = abyssCancelling[activeAccount] ? "中止中…" : abyssRunning[activeAccount] ? "中止挑战" : "▶ 开始挑战";
+  }
+  const rewards = root.querySelector(".abyss-rewards");
+  if (rewards) {
+    rewards.disabled = !!(abyssRunning[activeAccount] || abyssRewarding[activeAccount]);
+    rewards.querySelector("span").textContent = abyssRewarding[activeAccount] ? "领取中…" : "奖励领取";
+  }
+  const autoAdvance = root.querySelector(".abyss-auto-advance");
+  if (autoAdvance) {
+    autoAdvance.checked = getAbyssCfg().autoAdvance;
+    autoAdvance.disabled = !!(abyssRunning[activeAccount] || abyssRewarding[activeAccount]);
+  }
+}
+function applyAbyssBattle(email, battle) {
+  if (!battle || typeof battle.running !== "boolean") return;
+  abyssRunning[email] = !!(battle.running || abyssRequests[email]);
+  if (!abyssRunning[email]) abyssCancelling[email] = false;
+  if (battle.running && battle.progress) abyssBattleState[email] = battle.progress;
+  else delete abyssBattleState[email];
+  if (email === activeAccount) document.querySelectorAll(".abyss-widget").forEach((root) => renderAbyssBattle(root.id.slice(6)));
+}
+function abyssSceneStarsHTML(scene) {
+  const stars = Array.isArray(scene?.stars) ? scene.stars : [];
+  const earned = Array.from({ length: 4 }, (_, index) => stars[index] === true || Number(stars[index]) > 0);
+  const count = earned.filter(Boolean).length;
+  return `<span class="abyss-scene-stars" aria-label="通关星级 ${count} / 4">${earned.map((hasStar) => `<span class="${hasStar ? "earned" : "unearned"}" aria-hidden="true">${hasStar ? "★" : "☆"}</span>`).join("")}</span>`;
+}
+function abyssSlotHTML(id, wave, index, roleId) {
+  const role = roleId ? (abyssState[id]?.roleMap?.[roleId]
+    || activeAcc()?.roster?.heroes?.find((item) => abyssRoleId(item) === roleId)) : null;
+  const name = role ? abyssRoleName(role) : roleId || "空槽";
+  const roleMarkup = roleId
+    ? heroPortraitHTML({ ...role, id: roleId, name: role ? name : "?", avatar: abyssRoleAvatar(role) })
+    : '<span class="abyss-slot-plus">＋</span>';
+  const detail = role ? [role.level != null ? `等级 ${role.level}` : "", role.grade ? `潜能 ${role.grade}` : ""].filter(Boolean).join("，") : "";
+  const label = `${wave === "upper" ? "上半" : "下半"}位置 ${index + 1}：${name}${detail ? `，${detail}` : ""}`;
+  return `<button type="button" class="abyss-slot${roleId ? " filled" : ""}" data-wave="${wave}" data-index="${index}" data-role-id="${filterEscape(roleId || "")}" aria-label="${filterEscape(label)}" title="${filterEscape(label)}">${roleMarkup}</button>`;
+}
+function abyssWaveHTML(id, wave, label, picks) {
+  return `<section class="abyss-wave" data-wave="${wave}"><div class="abyss-wave-title"><span>${label}</span></div><div class="abyss-slots">${picks.map((roleId, index) => abyssSlotHTML(id, wave, index, roleId)).join("")}</div></section>`;
+}
+function abyssPicks(cfg) { return [...cfg.upper, ...cfg.lower].filter(Boolean); }
+function abyssPayload(cfg) {
+  return { sceneId: cfg.sceneId, scene_id: cfg.sceneId, upper: cfg.upper, lower: cfg.lower,
+    waves: { upper: cfg.upper, lower: cfg.lower }, autoAdvance: cfg.autoAdvance };
+}
+function abyssEnsurePicker() {
+  let modal = $("abyssRolePicker");
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.id = "abyssRolePicker";
+  modal.className = "abyss-picker-modal hidden";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-labelledby", "abyssPickerTitle");
+  modal.innerHTML = `<button type="button" class="abyss-picker-backdrop" data-abyss-close tabindex="-1" aria-label="关闭角色选择"></button>
+    <div class="abyss-picker-dialog">
+      <div class="abyss-picker-head"><h3 id="abyssPickerTitle">编辑深渊队伍</h3><button type="button" class="scheme-import-close" data-abyss-close title="关闭" aria-label="关闭角色选择"><svg aria-hidden="true"><use href="#ui-x"></use></svg></button></div>
+      <div class="abyss-picker-top">
+      <div class="abyss-picker-teams" aria-label="上下半队伍"></div>
+      <div class="encyclopedia-filter-panel abyss-picker-filters" aria-label="角色筛选器">
+        <div class="encyclopedia-filter-group"><span class="encyclopedia-filter-label">属性</span><div class="encyclopedia-filter-options" data-abyss-filter-options="element"></div></div>
+        <div class="encyclopedia-filter-group"><span class="encyclopedia-filter-label">职业</span><div class="encyclopedia-filter-options" data-abyss-filter-options="job"></div></div>
+        <div class="encyclopedia-filter-group encyclopedia-status-filter-group"><span class="encyclopedia-filter-label">状态</span><div class="encyclopedia-status-filter-controls">
+          <button type="button" class="encyclopedia-status-filter-button" data-abyss-status-filter aria-haspopup="dialog" aria-expanded="false" aria-controls="encyclopediaStatusModal"><span>选择状态</span><svg aria-hidden="true"><use href="#ui-chevron-down"></use></svg></button>
+          <div class="encyclopedia-status-selected-icons" data-abyss-status-icons role="list" aria-label="已选状态"></div>
+        </div></div>
+        <button type="button" class="mini hidden" data-abyss-filter-retry>重试加载筛选</button>
+      </div>
+      </div>
+      <div class="abyss-picker-list"></div>
+      <div class="abyss-picker-footer"><p class="abyss-picker-hint" role="status" aria-live="polite"></p><div class="abyss-picker-actions"><button type="button" class="btn primary" data-abyss-close>完成</button></div></div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click", (event) => {
+    if (Date.now() < (abyssPickerState?.suppressClickUntil || 0)) { event.preventDefault(); return; }
+    if (event.target.closest("[data-abyss-close]")) return closeAbyssPicker();
+    const context = abyssPickerState;
+    if (!context || context.account !== activeAccount) return closeAbyssPicker(false);
+    const remove = event.target.closest("[data-abyss-remove-slot]");
+    if (remove) {
+      const cfg = getAbyssCfg();
+      cfg[remove.dataset.wave][Number(remove.dataset.index)] = null;
+      context.wave = remove.dataset.wave;
+      context.index = Number(remove.dataset.index);
+      commitAbyssPicker(cfg);
+      return;
+    }
+    const slot = event.target.closest("[data-abyss-team-slot]");
+    if (slot) {
+      const target = { wave: slot.dataset.wave, index: Number(slot.dataset.index) };
+      context.wave = target.wave;
+      context.index = target.index;
+      renderAbyssPicker();
+      modal.querySelector(`[data-abyss-team-slot][data-wave="${target.wave}"][data-index="${target.index}"]`)?.focus();
+      return;
+    }
+    const filter = event.target.closest("[data-abyss-filter]");
+    if (filter && !filter.disabled) {
+      context.filters[filter.dataset.abyssFilter] = filter.dataset.value || "ALL";
+      renderAbyssPicker();
+      modal.querySelector(`[data-abyss-filter="${filter.dataset.abyssFilter}"][data-value="${filter.dataset.value}"]`)?.focus();
+      return;
+    }
+    if (event.target.closest("[data-abyss-filter-retry]")) return void loadAbyssPickerFilters(context);
+    const status = event.target.closest("[data-abyss-status-filter]");
+    if (status && !status.disabled) {
+      openCharacterStatusFilter({ trigger: status, statuses: context.filters.statuses, onApply: (statuses) => {
+        if (abyssPickerState !== context || context.account !== activeAccount) return;
+        context.filters.statuses = statuses;
+        renderAbyssPicker();
+      } });
+      return;
+    }
+    const button = event.target.closest(".abyss-role-option[data-role-id]");
+    if (!button || button.disabled || !$(`abyss-${context.id}`)?.isConnected) return;
+    const next = button.dataset.roleId;
+    if (!(abyssState[context.id]?.roles || []).some((role) => abyssRoleId(role) === next)) return;
+    const updated = getAbyssCfg();
+    const occupied = ["upper", "lower"].find((wave) => updated[wave].includes(next));
+    if (occupied) {
+      context.wave = occupied;
+      context.index = updated[occupied].indexOf(next);
+      updated[context.wave][context.index] = null;
+    } else {
+      if (context.index == null) return;
+      updated[context.wave][context.index] = next;
+      advanceAbyssPickerSlot(context, updated);
+    }
+    commitAbyssPicker(updated);
+    modal.querySelector(`.abyss-role-option[data-role-id="${next}"]`)?.focus({ preventScroll: true });
+  });
+  modal.addEventListener("dragstart", (event) => event.preventDefault());
+  modal.addEventListener("pointerdown", (event) => {
+    const context = abyssPickerState;
+    if (!context || context.account !== activeAccount || !event.isPrimary || event.button !== 0 || context.drag
+      || event.target.closest("[data-abyss-remove-slot]")) return;
+    const slot = event.target.closest("[data-abyss-team-slot]");
+    if (!slot || !getAbyssCfg()[slot.dataset.wave][Number(slot.dataset.index)]) return;
+    context.drag = { source: { wave: slot.dataset.wave, index: Number(slot.dataset.index) }, slot,
+      pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect: slot.getBoundingClientRect() };
+    slot.setPointerCapture(event.pointerId);
+  });
+  modal.addEventListener("pointermove", (event) => {
+    const context = abyssPickerState, drag = context?.drag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag.preview && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 8) return;
+    event.preventDefault();
+    if (!drag.preview) {
+      const preview = drag.preview = drag.slot.cloneNode(true);
+      preview.classList.add("abyss-drag-preview");
+      preview.removeAttribute("data-abyss-team-slot");
+      preview.removeAttribute("aria-pressed");
+      preview.setAttribute("aria-hidden", "true");
+      preview.tabIndex = -1;
+      preview.style.width = `${drag.rect.width}px`;
+      preview.style.height = `${drag.rect.height}px`;
+      modal.appendChild(preview);
+      drag.slot.classList.add("dragging");
+    }
+    drag.preview.style.left = `${event.clientX - (drag.startX - drag.rect.left)}px`;
+    drag.preview.style.top = `${event.clientY - (drag.startY - drag.rect.top)}px`;
+    const hit = document.elementFromPoint(event.clientX, event.clientY);
+    const slot = hit?.closest(".abyss-editor-cell")?.querySelector("[data-abyss-team-slot]");
+    modal.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+    drag.target = slot && modal.contains(slot) ? { wave: slot.dataset.wave, index: Number(slot.dataset.index) } : null;
+    slot?.classList.add("drag-over");
+  });
+  modal.addEventListener("pointerup", (event) => {
+    const context = abyssPickerState, drag = context?.drag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const moved = !!drag.preview, target = drag.target;
+    cancelAbyssPickerDrag(context);
+    if (!moved) return;
+    event.preventDefault();
+    context.suppressClickUntil = Date.now() + 250;
+    if (target) moveAbyssPickerSlot(drag.source, target);
+  });
+  for (const type of ["pointercancel", "lostpointercapture"]) modal.addEventListener(type, (event) => {
+    if (abyssPickerState?.drag?.pointerId === event.pointerId) cancelAbyssPickerDrag();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (modal.classList.contains("hidden") || !$("encyclopediaStatusModal")?.classList.contains("hidden")) return;
+    if (event.key === "Escape") { event.preventDefault(); closeAbyssPicker(); }
+    else if (event.key === "Tab") {
+      const controls = [...modal.querySelectorAll(".abyss-picker-dialog button:not(:disabled)")].filter((el) => el.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if ((!event.shiftKey && document.activeElement === last) || !modal.contains(document.activeElement)) { event.preventDefault(); first?.focus(); }
+    }
+  });
+  return modal;
+}
+function openAbyssPicker(id, wave, index) {
+  const modal = abyssEnsurePicker();
+  if (!abyssPickerFilters.has(activeAccount)) abyssPickerFilters.set(activeAccount, { element: "ALL", job: "ALL", statuses: [] });
+  const context = abyssPickerState = { id, wave, index, originWave: wave, originIndex: index, account: activeAccount, filters: abyssPickerFilters.get(activeAccount), returnFocus: document.activeElement, loading: !ENCYCLOPEDIA_STATE.index, metadata: new Map((ENCYCLOPEDIA_STATE.index || []).map((entry) => [entry.id, entry])) };
+  renderAbyssPicker();
+  modal.classList.remove("hidden");
+  document.body.classList.add("abyss-picker-open");
+  modal.querySelector(".scheme-import-close")?.focus();
+  void loadAbyssPickerFilters(context);
+}
+function closeAbyssPicker(restoreFocus = true) {
+  const context = abyssPickerState;
+  cancelAbyssPickerDrag(context);
+  if (ENCYCLOPEDIA_STATE.statusContext?.trigger?.closest("#abyssRolePicker")) closeEncyclopediaStatusFilter(false);
+  $("abyssRolePicker")?.classList.add("hidden");
+  document.body.classList.remove("abyss-picker-open");
+  abyssPickerState = null;
+  if (restoreFocus && context) {
+    const slot = $(`abyss-${context.id}`)?.querySelector(`.abyss-slot[data-wave="${context.originWave}"][data-index="${context.originIndex}"]`);
+    (slot || (context.returnFocus?.isConnected ? context.returnFocus : null))?.focus();
+  }
+}
+async function loadAbyssPickerFilters(context) {
+  context.loading = true;
+  context.error = false;
+  renderAbyssPicker();
+  try {
+    const index = await loadEncyclopediaIndex({ resources: false });
+    context.metadata = new Map(index.map((entry) => [entry.id, entry]));
+  } catch (error) {
+    context.error = true;
+    console.warn("读取深渊角色筛选资料失败：", error);
+  } finally {
+    context.loading = false;
+    if (abyssPickerState === context && context.account === activeAccount) renderAbyssPicker();
+  }
+}
+function renderAbyssPicker() {
+  const context = abyssPickerState, modal = $("abyssRolePicker");
+  if (!context || !modal || context.account !== activeAccount) return;
+  cancelAbyssPickerDrag(context);
+  const { id, filters, metadata } = context;
+  const roles = abyssState[id]?.roles || [];
+  const cfg = getAbyssCfg(), positions = new Map();
+  for (const wave of ["upper", "lower"]) cfg[wave].forEach((roleId, index) => {
+    if (roleId) positions.set(roleId, `${wave === "upper" ? "上" : "下"}${index + 1}`);
+  });
+  renderAbyssPickerTeams();
+  for (const [type, options] of [["element", ENCYCLOPEDIA_ELEMENTS], ["job", ENCYCLOPEDIA_JOBS]]) {
+    const host = modal.querySelector(`[data-abyss-filter-options="${type}"]`);
+    host.innerHTML = options.map((option) => encyclopediaFilterButtonHTML(option, type, filters[type] === option.id, "abyss")).join("");
+    host.querySelectorAll("button").forEach((button) => { button.disabled = context.loading || context.error; });
+  }
+  const statusButton = modal.querySelector("[data-abyss-status-filter]"), statusOptions = encyclopediaStatusOptions();
+  statusButton.disabled = context.loading || context.error || !(statusOptions.buff.length + statusOptions.debuff.length);
+  statusButton.classList.toggle("active", filters.statuses.length > 0);
+  statusButton.setAttribute("aria-label", filters.statuses.length ? `状态筛选，已选 ${filters.statuses.length} 种状态` : "选择状态，不限状态");
+  modal.querySelector("[data-abyss-status-icons]").innerHTML = characterStatusIconsHTML(filters.statuses);
+  const filtered = context.loading || context.error ? roles : roles.filter((role) => characterMatchesFilters(metadata.get(role.staticId || role.StaticID || role.id) || role, filters));
+  modal.querySelector(".abyss-picker-list").innerHTML = filtered.length
+    ? filtered.map((role) => abyssRoleCard(role, positions.has(abyssRoleId(role)), context.index == null && !positions.has(abyssRoleId(role)), positions.get(abyssRoleId(role)))).join("")
+    : `<div class="roster-empty abyss-picker-empty">${roles.length ? "暂无符合筛选条件的角色" : "暂无可用角色，请先刷新账号数据"}</div>`;
+  modal.querySelector("[data-abyss-filter-retry]").classList.toggle("hidden", !context.error);
+}
+
+function advanceAbyssPickerSlot(context, cfg) {
+  const next = Array.from({ length: 4 }, (_, offset) => (context.index + 1 + offset) % 4).find((index) => !cfg[context.wave][index]);
+  if (next != null) { context.index = next; return; }
+  const other = context.wave === "upper" ? "lower" : "upper";
+  const otherIndex = cfg[other].findIndex((roleId) => !roleId);
+  if (otherIndex >= 0) { context.wave = other; context.index = otherIndex; }
+  else context.index = null;
+}
+
+function commitAbyssPicker(cfg) {
+  const context = abyssPickerState;
+  if (!context || context.account !== activeAccount) return;
+  setAbyssCfg({ upper: cfg.upper, lower: cfg.lower });
+  renderAbyssSlots(context.id);
+  renderAbyssPicker();
+}
+
+function moveAbyssPickerSlot(source, target) {
+  const context = abyssPickerState;
+  if (!context || context.account !== activeAccount) return;
+  const cfg = getAbyssCfg();
+  const roleId = cfg[source.wave][source.index];
+  if (!roleId) return;
+  cfg[source.wave][source.index] = cfg[target.wave][target.index];
+  cfg[target.wave][target.index] = roleId;
+  context.wave = target.wave;
+  context.index = target.index;
+  commitAbyssPicker(cfg);
+}
+
+function cancelAbyssPickerDrag(context = abyssPickerState) {
+  const drag = context?.drag;
+  if (!drag) return;
+  context.drag = null;
+  drag.preview?.remove();
+  drag.slot.classList.remove("dragging");
+  $("abyssRolePicker")?.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+  if (drag.slot.hasPointerCapture(drag.pointerId)) drag.slot.releasePointerCapture(drag.pointerId);
+}
+
+function renderAbyssPickerTeams() {
+  const context = abyssPickerState, modal = $("abyssRolePicker");
+  if (!context || !modal || context.account !== activeAccount) return;
+  const cfg = getAbyssCfg();
+  modal.querySelector(".abyss-picker-teams").innerHTML = ["upper", "lower"].map((wave) => {
+    const label = wave === "upper" ? "上半" : "下半";
+    return `<section class="abyss-editor-wave" data-abyss-wave="${wave}"><div class="abyss-editor-wave-title"><strong>${label}</strong><small>${cfg[wave].filter(Boolean).length} / 4</small></div><div class="abyss-editor-slots">${cfg[wave].map((roleId, index) => {
+      const role = abyssState[context.id]?.roleMap?.[roleId];
+      const active = context.wave === wave && context.index === index;
+      const name = role ? abyssRoleName(role) : roleId || "空槽";
+      return `<div class="abyss-editor-cell"><button type="button" class="abyss-editor-slot${roleId ? " filled" : ""}${active ? " active" : ""}" data-abyss-team-slot data-wave="${wave}" data-index="${index}" aria-pressed="${active}" aria-label="${filterEscape(`${label}位置 ${index + 1}，${name}`)}" title="${filterEscape(name)}">${role ? heroPortraitHTML({ ...role, name, avatar: abyssRoleAvatar(role) }) : roleId ? `<span class="abyss-slot-label">${filterEscape(roleId)}</span>` : '<span class="abyss-slot-plus">＋</span>'}<span class="abyss-editor-position" aria-hidden="true">${index + 1}</span></button>${roleId ? `<button type="button" class="abyss-editor-remove" data-abyss-remove-slot data-wave="${wave}" data-index="${index}" aria-label="${filterEscape(`移除${label}位置 ${index + 1}的${name}`)}" title="移除角色"><svg aria-hidden="true"><use href="#ui-x"></use></svg></button>` : ""}</div>`;
+    }).join("")}</div></section>`;
+  }).join("");
+  const hint = modal.querySelector(".abyss-picker-hint");
+  hint.textContent = context.index == null ? "两队已满。可拖动调整位置，或点击已选角色移除。"
+    : `${context.wave === "upper" ? "上半" : "下半"} ${context.index + 1}：${cfg[context.wave][context.index] ? "点击角色替换" : "点击角色加入"}；拖动队伍头像调整位置。`;
+}
+function renderAbyssSlots(id) {
+  const root = $(`abyss-${id}`); if (!root) return;
+  const cfg = getAbyssCfg();
+  root.querySelectorAll(".abyss-wave").forEach((waveEl) => {
+    const wave = waveEl.dataset.wave;
+    waveEl.querySelector(".abyss-slots").innerHTML = cfg[wave].map((roleId, index) => abyssSlotHTML(id, wave, index, roleId)).join("");
+  });
+  root.querySelectorAll(".abyss-slot").forEach((slot) => slot.addEventListener("click", () => openAbyssPicker(id, slot.dataset.wave, Number(slot.dataset.index))));
+}
+async function loadAbyssOptions(id, refresh = false) {
+  const root = $(`abyss-${id}`); if (!root || (root.dataset.loading === "1" && !refresh)) return;
+  const account = activeAccount;
+  root.dataset.loading = "1";
+  const sceneSlot = root.querySelector(".abyss-scene-slot"), refreshBtn = root.querySelector(".abyss-options-refresh");
+  if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.classList.add("loading"); }
+  try {
+    const data = await api("/api/abyss/options");
+    if (activeAccount !== account || !root.isConnected) return;
+    const scenes = Array.isArray(data.scenes) ? data.scenes : (Array.isArray(data.levels) ? data.levels : []);
+    let cfg = getAbyssCfg();
+    // 账号配置也保存在后端，首次在新设备打开时用后端快照恢复本地配队。
+    // 已存在本地配置时优先保留用户当前浏览器里的编辑内容。
+    const saved = data?.config;
+    if (frontendStorageGet(abyssLsKey()) == null) cfg.autoAdvance = saved?.autoAdvance === true;
+    if (!cfg.sceneId && saved?.sceneId) cfg.sceneId = saved.sceneId;
+    if (!cfg.upper.some(Boolean) && Array.isArray(saved?.waves?.upper)) {
+      cfg.upper = Array.from({ length: 4 }, (_, i) => saved.waves.upper[i] || null);
+    }
+    if (!cfg.lower.some(Boolean) && Array.isArray(saved?.waves?.lower)) {
+      cfg.lower = Array.from({ length: 4 }, (_, i) => saved.waves.lower[i] || null);
+    }
+    setAbyssCfg(cfg);
+    const autoAdvance = root.querySelector(".abyss-auto-advance");
+    if (autoAdvance) autoAdvance.checked = cfg.autoAdvance;
+    const sceneOpts = scenes.map((scene) => ({
+      val: scene.id || scene.sceneId || scene.StaticID,
+      label: `<span class="abyss-scene-label"><span class="abyss-scene-name">${filterEscape(scene.name || scene.label || scene.id)}</span>${abyssSceneStarsHTML(scene)}</span>`,
+    }));
+    const sceneVal = cfg.sceneId && sceneOpts.some((s) => s.val === cfg.sceneId) ? cfg.sceneId : sceneOpts[0]?.val || "";
+    setAbyssCfg({ sceneId: sceneVal });
+    sceneSlot.innerHTML = dropdownHTML("abyss-scene", sceneOpts, sceneVal, "暂无已解锁的虚构深渊关卡");
+    bindDropdown(sceneSlot.querySelector(".dropdown"), (value) => {
+      setAbyssCfg({ sceneId: value });
+      renderAbyssEffects(id);
+    });
+    const roles = abyssRoleList(data).length ? abyssRoleList(data) : (activeAcc()?.roster?.heroes || []);
+    const roleMap = Object.fromEntries(roles.map((role) => [abyssRoleId(role), role]));
+    abyssState[id] = { roles, roleMap, scenes, account };
+    renderAbyssEffects(id);
+    renderAbyssSlots(id);
+    root.dataset.loaded = "1";
+  } catch (error) {
+    if (activeAccount !== account || !root.isConnected) return;
+    sceneSlot.innerHTML = `<div class="dd-loading err">加载失败：${filterEscape(error.message)}</div>`;
+    const roles = activeAcc()?.roster?.heroes || [];
+    abyssState[id] = { roles, roleMap: Object.fromEntries(roles.map((role) => [abyssRoleId(role), role])), scenes: [], account };
+    renderAbyssEffects(id);
+    renderAbyssSlots(id);
+    log(`加载虚构深渊选项失败：${error.message}`, "err");
+  } finally {
+    root.dataset.loading = "0";
+    if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.classList.remove("loading"); }
+  }
+}
+function bindAbyssWidget(id) {
+  const root = $(`abyss-${id}`); if (!root) return;
+  const body = root.querySelector(".shop-body"), toggle = root.querySelector(".abyss-toggle");
+  toggle.addEventListener("click", async () => { body.classList.toggle("hidden"); toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾"; if (!body.classList.contains("hidden") && !root.dataset.loaded) await loadAbyssOptions(id); });
+  root.querySelector(".abyss-options-refresh")?.addEventListener("click", () => loadAbyssOptions(id, true));
+  root.querySelector(".abyss-start")?.addEventListener("click", () => runAbyss(id));
+  root.querySelector(".abyss-rewards")?.addEventListener("click", () => claimAbyssRewards(id));
+  root.querySelector(".abyss-auto-advance")?.addEventListener("change", (event) => setAbyssCfg({ autoAdvance: event.target.checked }));
+  renderAbyssBattle(id);
+}
+async function claimAbyssRewards(id) {
+  const email = activeAccount;
+  if (!email || abyssRunning[email] || abyssRewarding[email]) return;
+  abyssRewarding[email] = true;
+  renderAbyssBattle(id);
+  try {
+    const result = await api("/api/abyss/rewards", { account: email });
+    if (result.status) applyStatus(email, result.status, result.nextClaims);
+    logResult({ ...result, name: "深渊奖励" }, "", email);
+    if (activeAccount === email) {
+      const summary = $(`abyss-${id}`)?.querySelector(".abyss-summary");
+      if (summary) summary.textContent = result.detail || (result.ok ? "奖励领取完成" : "奖励领取失败");
+    }
+  } catch (error) {
+    logTo(email, `深渊奖励领取失败：${error.message}`, "err");
+    if (activeAccount === email) {
+      const summary = $(`abyss-${id}`)?.querySelector(".abyss-summary");
+      if (summary) summary.textContent = "奖励领取失败";
+    }
+  } finally {
+    delete abyssRewarding[email];
+    if (activeAccount === email) renderAbyssBattle(id);
+  }
+}
+async function runAbyss(id) {
+  const email = activeAccount; if (!email) return;
+  if (abyssRewarding[email]) return;
+  if (abyssRunning[email]) {
+    if (abyssCancelling[email]) return;
+    abyssCancelling[email] = true;
+    const button = $(`abyss-${id}`)?.querySelector(".abyss-start");
+    if (button) { button.disabled = true; button.textContent = "中止中…"; }
+    try {
+      const result = await api("/api/abyss/cancel", { account: email });
+      if (!result.running) {
+        abyssCancelling[email] = false;
+        logTo(email, "挑战正在启动或已结束，请稍后确认运行状态", "info");
+      }
+    }
+    catch (error) {
+      abyssCancelling[email] = false;
+      logTo(email, `中止深渊失败：${error.message}`, "err");
+    } finally {
+      if (activeAccount === email && !abyssCancelling[email]) {
+        const current = $(`abyss-${id}`)?.querySelector(".abyss-start");
+        if (current) { current.disabled = false; current.textContent = abyssRunning[email] ? "中止挑战" : "▶ 开始挑战"; }
+      }
+    }
+    return;
+  }
+  const cfg = getAbyssCfg();
+  if (!cfg.sceneId) return logTo(email, "请先选择深渊关卡", "err");
+  if (!cfg.upper.some(Boolean) || !cfg.lower.some(Boolean)) return logTo(email, "上半和下半都至少需要 1 名角色", "err");
+  const picks = abyssPicks(cfg); if (new Set(picks).size !== picks.length) return logTo(email, "上下半不能使用重复角色", "err");
+  const root = $(`abyss-${id}`), button = root?.querySelector(".abyss-start"), summary = root?.querySelector(".abyss-summary");
+  const request = {};
+  abyssRequests[email] = request;
+  delete abyssBattleState[email];
+  if (summary) summary.textContent = "";
+  abyssRunning[email] = true; if (button) { button.disabled = false; button.textContent = "中止挑战"; button.classList.add("task-stop-button"); }
+  renderAbyssBattle(id);
+  try {
+    const result = await api("/api/abyss/run", { ...abyssPayload(cfg), account: email });
+    if (result.status) applyStatus(email, result.status, result.nextClaims);
+    logResult({ ...result, name: (TASKS.find((task) => task.id === id) || {}).name || "虚构深渊" }, "", email);
+    if (summary?.isConnected && activeAccount === email) summary.textContent = result.detail || (result.ok ? "挑战完成" : "挑战失败");
+  } catch (error) {
+    logTo(email, `虚构深渊执行失败：${error.message}`, "err");
+    if (summary?.isConnected && activeAccount === email) summary.textContent = "执行失败";
+  } finally {
+    if (abyssRequests[email] === request) delete abyssRequests[email];
+    abyssRunning[email] = false;
+    abyssCancelling[email] = false;
+    delete abyssBattleState[email];
+    if (activeAccount === email) {
+      renderAbyssBattle(id);
+      if ($(`abyss-${id}`)?.dataset.loaded === "1") await loadAbyssOptions(id, true);
+    }
+  }
+}
+
 // ---------- 活动关卡自定义控件（含助战好友选择） ----------
 // 配置按账号命名空间（关卡/队伍/助战 各账号不同）
-const ACT_LS = "ark_activity_cfg"; // {count, sceneId, teamId, supportCuid, quick}
+const ACT_LS = "ark_activity_cfg"; // {count, sceneId, teamId, supportCuid, quick, urgentEnabled, urgentSpecializations}
 const actLsKey = () => `${ACT_LS}::${activeAccount || "_"}`;
 function getActCfg() {
   try {
-    const v = JSON.parse(localStorage.getItem(actLsKey())) || {};
+    const v = JSON.parse(frontendStorageGet(actLsKey())) || {};
+    const legacyUrgent = ["gold", "catalyst"].includes(v.urgentSpecialization)
+      ? [v.urgentSpecialization] : ["gold", "catalyst"];
+    const urgentSpecializations = Array.isArray(v.urgentSpecializations)
+      ? [...new Set(v.urgentSpecializations.filter((mode) => ["gold", "catalyst"].includes(mode)))]
+      : legacyUrgent;
     return {
       count: v.count || 5, sceneId: v.sceneId || "", teamId: v.teamId || "",
+      mode: v.mode === "progress" ? "progress" : "sweep", family: v.family || "",
       supportCuid: v.supportCuid || "", quick: v.quick !== false,
+      urgentEnabled: v.urgentEnabled !== false,
+      urgentSpecializations,
     };
   } catch {
-    return { count: 5, sceneId: "", teamId: "", supportCuid: "", quick: true };
+    return {
+      count: 5, sceneId: "", teamId: "", supportCuid: "", quick: true,
+      mode: "sweep", family: "",
+      urgentEnabled: true, urgentSpecializations: ["gold", "catalyst"],
+    };
   }
 }
 function setActCfg(patch) {
-  localStorage.setItem(actLsKey(), JSON.stringify({ ...getActCfg(), ...patch }));
+  frontendStorageSet(actLsKey(), JSON.stringify({ ...getActCfg(), ...patch }));
+}
+
+function closeActivityUrgentHelp(scope = document) {
+  scope.querySelectorAll(".act-urgent-option.help-open").forEach((item) => item.classList.remove("help-open"));
+  scope.querySelectorAll("[data-urgent-help-text]").forEach((item) => item.classList.add("hidden"));
+  scope.querySelectorAll("[data-urgent-help]").forEach((item) => item.setAttribute("aria-expanded", "false"));
 }
 
 function renderActivityWidget(t) {
@@ -2884,10 +4434,18 @@ function renderActivityWidget(t) {
       <button type="button" class="mini act-toggle">选项 ▸</button>
     </div>
     <div class="shop-body hidden">
+      <div class="act-option-head"><div class="b-tabs act-tabs" role="tablist" aria-label="活动关卡模式">
+        <button type="button" class="b-tab${cfg.mode !== "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode !== "progress"}" data-act-mode="sweep">扫荡</button>
+        <button type="button" class="b-tab${cfg.mode === "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "progress"}" data-act-mode="progress">自动推图</button>
+      </div><button type="button" class="act-options-refresh" title="重新加载活动关卡选项" aria-label="重新加载活动关卡选项"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button></div>
+      <div class="shop-row col act-progress-only${cfg.mode === "progress" ? "" : " hidden"}">
+        <span class="shop-lbl">活动</span>
+        <div class="dd-slot act-family-slot"><div class="dd-loading">加载中…</div></div>
+        <p class="act-progress-hint">从首个未通关关卡继续，直至当前已开放的最后一关。剧情关自动使用指定队伍。</p>
+      </div>
       <div class="shop-row col">
         <div class="act-option-head">
           <span class="shop-lbl">活动关卡</span>
-          <button type="button" class="act-options-refresh" title="重新加载活动关卡选项" aria-label="重新加载活动关卡选项">↻</button>
         </div>
         <div class="dd-slot act-scene-slot"><div class="dd-loading">加载中…</div></div>
       </div>
@@ -2908,15 +4466,144 @@ function renderActivityWidget(t) {
           <button type="button" class="count-btn" data-d="1">+</button>
         </div>
       </div>
-      <label class="save-pwd act-quick-row">
-        <input type="checkbox" class="act-quick" ${cfg.quick ? "checked" : ""}>
-        <span class="sp-box"></span>
-        <span class="sp-txt">使用快速战斗券</span>
+      <label class="quick-ticket-toggle target-score-toggle act-quick-row">
+        <input type="checkbox" role="switch" class="act-quick" ${cfg.quick ? "checked" : ""}>
+        <span class="target-score-switch" aria-hidden="true"></span>
+        <span>使用快速战斗券</span>
       </label>
+      <div class="act-urgent-control${cfg.urgentEnabled ? " enabled" : ""}">
+        <label class="act-urgent-toggle target-score-toggle">
+          <input type="checkbox" role="switch" class="act-urgent-enabled" ${cfg.urgentEnabled ? "checked" : ""}>
+          <span class="target-score-switch" aria-hidden="true"></span>
+          <span>自动清理紧急任务</span>
+        </label>
+        <div class="act-urgent-modes${cfg.urgentEnabled ? "" : " hidden"}" role="group" aria-label="紧急任务特化类型，可多选">
+          <div class="act-urgent-option${cfg.urgentSpecializations.includes("gold") ? " selected" : ""}">
+            <label class="act-urgent-choice">
+              <input type="checkbox" data-urgent-mode="gold" ${cfg.urgentSpecializations.includes("gold") ? "checked" : ""}>
+              ${checkboxUIHTML()}
+              <span>金币特化</span>
+            </label>
+            <button type="button" class="act-urgent-help" data-urgent-help="gold" aria-label="查看金币特化说明" aria-expanded="false" title="查看说明">
+              <svg aria-hidden="true"><use href="#ui-circle-help"></use></svg>
+            </button>
+            <p class="act-urgent-help-text hidden" data-urgent-help-text="gold">发现赏金任务时立即完成；其它任务最多暂存两个以提高目标出现概率，本轮活动结束后统一清理。</p>
+          </div>
+          <div class="act-urgent-option${cfg.urgentSpecializations.includes("catalyst") ? " selected" : ""}">
+            <label class="act-urgent-choice">
+              <input type="checkbox" data-urgent-mode="catalyst" ${cfg.urgentSpecializations.includes("catalyst") ? "checked" : ""}>
+              ${checkboxUIHTML()}
+              <span>催化剂特化</span>
+            </label>
+            <button type="button" class="act-urgent-help" data-urgent-help="catalyst" aria-label="查看催化剂特化说明" aria-expanded="false" title="查看说明">
+              <svg aria-hidden="true"><use href="#ui-circle-help"></use></svg>
+            </button>
+            <p class="act-urgent-help-text hidden" data-urgent-help-text="catalyst">发现催化剂任务时立即完成；其它任务最多暂存两个以提高目标出现概率，本轮活动结束后统一清理。</p>
+          </div>
+        </div>
+      </div>
       <button type="button" class="btn primary act-start">▶ 开始扫荡</button>
       <div class="sweep-summary" id="actSummary-${t.id}"></div>
+      <div class="act-progress-status hidden" aria-live="polite"></div>
+      <div class="act-battle-progress abyss-battle-progress hidden" aria-label="活动战斗进度"></div>
     </div>
   </div>`;
+}
+
+const actProgressRunning = {};
+const actProgressRequests = {};
+const actProgressState = {};
+const actProgressStopping = {};
+
+function updateActivityMode(id) {
+  const root = $(`act-${id}`);
+  if (!root) return;
+  const running = !!actProgressRunning[activeAccount];
+  const progress = running || getActCfg().mode === "progress";
+  root.querySelectorAll(".act-sweep-only").forEach((node) => node.classList.toggle("hidden", progress));
+  root.querySelectorAll(".act-progress-only").forEach((node) => node.classList.toggle("hidden", !progress));
+  root.querySelectorAll("[data-act-mode]").forEach((button) => {
+    const selected = button.dataset.actMode === (progress ? "progress" : "sweep");
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.disabled = !!(running || actRunning[activeAccount]);
+  });
+  const button = root.querySelector(".act-start");
+  if (progress) {
+    button.textContent = running ? (actProgressStopping[activeAccount] ? "停止中…" : "停止推图") : "▶ 开始推图";
+    button.disabled = !!actProgressStopping[activeAccount];
+    button.classList.toggle("task-stop-button", running);
+  } else if (!actRunning[activeAccount]) {
+    button.textContent = "▶ 开始扫荡";
+    button.disabled = false;
+    button.classList.remove("task-stop-button");
+  }
+  root.querySelector(".act-options-refresh").disabled = !!(running || actRunning[activeAccount] || root.dataset.loading === "1");
+  root.querySelectorAll(".dd-slot, .act-support-slot").forEach((node) => {
+    node.inert = !!(running || actRunning[activeAccount]);
+  });
+  const status = root.querySelector(".act-progress-status");
+  const state = actProgressState[activeAccount];
+  status.classList.toggle("hidden", !progress || !state);
+  if (state) {
+    const wave = state.battle ? ` · 第 ${Number(state.battle.wave) + 1} 波` : "";
+    status.textContent = `已通关 ${state.completed}/${state.total}${state.stageName ? ` · ${state.stageName}` : ""}${wave} · ${state.detail || ""}`;
+  }
+  const battle = progress && running ? state?.battle : null;
+  const host = root.querySelector(".act-battle-progress");
+  const html = battle ? abyssBattleHTML(battle, { sceneLabel: state.stageName || "",
+    waveLabel: `第 ${Number(battle.wave) + 1} 波` }) : "";
+  if (host._battleHTML !== html) {
+    host.innerHTML = html;
+    host._battleHTML = html;
+  }
+  host.classList.toggle("hidden", !battle);
+}
+
+function applyActivityProgress(email, snapshot) {
+  if (!snapshot) return;
+  actProgressRunning[email] = !!(snapshot.running || actProgressRequests[email]);
+  if (!actProgressRunning[email]) delete actProgressStopping[email];
+  if (snapshot.progress) actProgressState[email] = snapshot.progress;
+  if (activeAccount === email) updateActivityMode("activity_scene");
+}
+
+async function runActivityProgress(id) {
+  const email = activeAccount;
+  if (actProgressRunning[email]) {
+    actProgressStopping[email] = true;
+    updateActivityMode(id);
+    try { await api("/api/activity/progress/cancel", { account: email }); }
+    catch (error) { delete actProgressStopping[email]; logTo(email, error.message, "err"); updateActivityMode(id); }
+    return;
+  }
+  if (actRunning[email]) return;
+  const cfg = getActCfg();
+  if (!cfg.family || !cfg.teamId) return log("请先选择活动和队伍", "err");
+  const request = {};
+  actProgressRequests[email] = request;
+  actProgressRunning[email] = true;
+  delete actProgressState[email];
+  updateActivityMode(id);
+  logTo(email, "开始活动自动推图", "info");
+  try {
+    const result = await api("/api/activity/progress/run", { account: email, family: cfg.family,
+      teamId: cfg.teamId, supportCuid: cfg.supportCuid || null });
+    applyActivityProgress(email, result.activityProgress);
+    if (result.status) applyStatus(email, result.status, result.nextClaims);
+    logResult({ ...result, name: "活动自动推图" }, "", email);
+    if (result.lines?.length && result.detail) logTo(email, `[活动自动推图] ${result.detail}`, result.ok ? "ok" : "warn");
+    if (actProgressState[email]) actProgressState[email] = { ...actProgressState[email], battle: null, detail: result.detail };
+  } catch (error) {
+    logTo(email, `活动自动推图：${error.message}`, "err");
+    actProgressState[email] = { ...(actProgressState[email] || {completed: 0, total: "—"}), battle: null, detail: error.message };
+  } finally {
+    if (actProgressRequests[email] === request) delete actProgressRequests[email];
+    actProgressRunning[email] = false;
+    delete actProgressStopping[email];
+    if (email === activeAccount) updateActivityMode(id);
+    refreshAccountStatus(email);
+  }
 }
 
 // 助战好友卡片（信息页 hero-card 风格：圆头像+名，附 UID）。选中高亮。
@@ -2950,6 +4637,16 @@ async function bindActivityWidget(id) {
   if (!root) return;
   const body = root.querySelector(".shop-body");
   const toggle = root.querySelector(".act-toggle");
+  const sceneRow = root.querySelector(".act-scene-slot").closest(".shop-row");
+  const countRow = root.querySelector(".act-count").closest(".shop-row");
+  [sceneRow, countRow, root.querySelector(".act-quick-row"), root.querySelector(".act-urgent-control")]
+    .forEach((node) => node.classList.add("act-sweep-only"));
+  root.querySelectorAll("[data-act-mode]").forEach((button) => button.addEventListener("click", () => {
+    if (actRunning[activeAccount] || actProgressRunning[activeAccount]) return;
+    setActCfg({ mode: button.dataset.actMode });
+    updateActivityMode(id);
+  }));
+  updateActivityMode(id);
   toggle.addEventListener("click", async () => {
     body.classList.toggle("hidden");
     toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
@@ -2973,7 +4670,48 @@ async function bindActivityWidget(id) {
   const quick = root.querySelector(".act-quick");
   if (quick) quick.addEventListener("change", () => setActCfg({ quick: quick.checked }));
 
-  root.querySelector(".act-start").addEventListener("click", () => runActivity(id));
+  const urgentControl = root.querySelector(".act-urgent-control");
+  const urgentToggle = root.querySelector(".act-urgent-enabled");
+  const urgentModes = root.querySelector(".act-urgent-modes");
+  urgentToggle.addEventListener("change", () => {
+    urgentControl.classList.toggle("enabled", urgentToggle.checked);
+    urgentModes.classList.toggle("hidden", !urgentToggle.checked);
+    if (!urgentToggle.checked) closeActivityUrgentHelp(root);
+    setActCfg({ urgentEnabled: urgentToggle.checked });
+  });
+  root.querySelectorAll("[data-urgent-mode]").forEach((input) => {
+    input.addEventListener("change", () => {
+      input.closest(".act-urgent-option")?.classList.toggle("selected", input.checked);
+      const modes = [...root.querySelectorAll("[data-urgent-mode]:checked")]
+        .map((item) => item.dataset.urgentMode);
+      setActCfg({ urgentSpecializations: modes });
+    });
+  });
+  root.querySelectorAll("[data-urgent-help]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const text = root.querySelector(`[data-urgent-help-text="${button.dataset.urgentHelp}"]`);
+      const willOpen = text?.classList.contains("hidden");
+      closeActivityUrgentHelp(root);
+      if (willOpen && text) {
+        button.closest(".act-urgent-option")?.classList.add("help-open");
+        text.classList.remove("hidden");
+        button.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+
+  root.querySelector(".act-start").addEventListener("click", () => {
+    if (actProgressRunning[activeAccount] || getActCfg().mode === "progress") runActivityProgress(id);
+    else if (actRunning[activeAccount]) requestActivityStop(id, activeAccount);
+    else runActivity(id);
+  });
+  if (actRunning[activeAccount]) {
+    const button = root.querySelector(".act-start");
+    const stopping = !!actStopRequested[activeAccount];
+    button.disabled = stopping;
+    button.classList.add("task-stop-button");
+    button.textContent = stopping ? "停止中…" : "停止";
+  }
 }
 
 async function loadActivityOptions(id, refresh = false) {
@@ -2983,17 +4721,27 @@ async function loadActivityOptions(id, refresh = false) {
   const teamSlot = root.querySelector(".act-team-slot");
   const supSlot = root.querySelector(".act-support-slot");
   const refreshButton = root.querySelector(".act-options-refresh");
+  const email = activeAccount;
   root.dataset.loading = "1";
   refreshButton.disabled = true;
   refreshButton.classList.add("loading");
   if (refresh || !root.dataset.loaded) {
+    root.querySelector(".act-family-slot").innerHTML = `<div class="dd-loading">加载中…</div>`;
     sceneSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
     teamSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
     supSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
   }
   try {
-    const { scenes, teams, supports, favorites } = await api("/api/activity/options");
+    const { scenes, teams, supports, favorites, activities = [] } = await api("/api/activity/options");
+    if (activeAccount !== email || !root.isConnected) return false;
     const cfg = getActCfg();
+    const familySlot = root.querySelector(".act-family-slot");
+    const family = activities.some((a) => a.id === cfg.family) ? cfg.family : activities[0]?.id || "";
+    setActCfg({ family });
+    familySlot.innerHTML = dropdownHTML("act-family", activities.length
+      ? activities.map((a) => ({ val: a.id, label: `${a.name} · 已通关 ${a.completed}/${a.total}` }))
+      : [{ val: "", label: "（当前没有开放的活动）" }], family);
+    bindDropdown(familySlot.querySelector(".dropdown"), (v) => setActCfg({ family: v }));
 
     // 后端只回当期活动的全部已解锁关卡（已结束的按排期表过滤掉），可能一个都没有
     const sceneOpts = scenes.length
@@ -3016,10 +4764,14 @@ async function loadActivityOptions(id, refresh = false) {
     root.dataset.loaded = "1";
     return true;
   } catch (e) {
+    if (activeAccount !== email || !root.isConnected) return false;
     delete root.dataset.loaded;
     sceneSlot.innerHTML = `<div class="act-load-error"><span>加载失败</span><button type="button" class="act-options-retry">重新加载</button></div>`;
     teamSlot.innerHTML = `<div class="dd-loading err">等待重新加载</div>`;
     supSlot.innerHTML = `<div class="dd-loading err">等待重新加载</div>`;
+    const familySlot = root.querySelector(".act-family-slot");
+    familySlot.innerHTML = `<div class="act-load-error"><span>加载失败</span><button type="button" class="act-options-retry">重新加载</button></div>`;
+    familySlot.querySelector(".act-options-retry").addEventListener("click", () => loadActivityOptions(id, true));
     sceneSlot.querySelector(".act-options-retry")?.addEventListener("click", () => loadActivityOptions(id, true));
     log(`加载活动关卡选项失败：${e.message}`, "err");
     return false;
@@ -3107,6 +4859,14 @@ async function toggleSupportFav(id, cuid, isFav, btn) {
 
 // 运行编排：同扫荡（锁定发起账号、显式带 email、无掉落即停）。
 const actRunning = {};  // email -> bool
+const actStopRequested = {};
+function logActivityUrgentResults(cleanup, prefix, email) {
+  (cleanup?.results || []).forEach((result) => {
+    const reason = result.reason ? `·${result.reason}` : "";
+    logResult({ ...result, name: `${result.urgentName || "紧急任务"}${reason}` }, prefix, email);
+  });
+}
+
 async function runActivity(id) {
   const email = activeAccount;
   if (actRunning[email]) return;
@@ -3117,56 +4877,136 @@ async function runActivity(id) {
   const startBtn = root.querySelector(".act-start");
   const summary = $(`actSummary-${id}`);
   actRunning[email] = true;
-  startBtn.disabled = true;
-  startBtn.textContent = "扫荡中…";
+  updateActivityMode(id);
+  actStopRequested[email] = false;
+  startBtn.disabled = false;
+  startBtn.classList.add("task-stop-button");
+  startBtn.textContent = "停止";
   const sceneName = (root.querySelector(".act-scene .dd-cur")?.textContent || cfg.sceneId).trim();
   const supName = cfg.supportCuid
     ? (root.querySelector(".sup-card.sel .sup-name")?.textContent || "").trim() : "";
-  logTo(email, `开始${taskName}：${sceneName} × ${cfg.count} 次${supName ? `（助战 ${supName}）` : "（无助战）"}`);
+  const urgentModeNames = cfg.urgentSpecializations.map((mode) => mode === "catalyst" ? "催化剂特化" : "金币特化");
+  const urgentModeText = urgentModeNames.length ? urgentModeNames.join("、") : "仅保留两个非目标任务";
+  logTo(email, `开始${taskName}：${sceneName} × ${cfg.count} 次${supName ? `（助战 ${supName}）` : "（无助战）"}${cfg.urgentEnabled ? `，自动清理紧急任务（${urgentModeText}）` : ""}`);
   let done = 0;
+  let stopped = false;
+  let urgentSpecializations = cfg.urgentEnabled ? [...cfg.urgentSpecializations] : null;
   try {
     for (let i = 1; i <= cfg.count; i++) {
+      await waitRequestDelayBetweenIterations(i, () => actStopRequested[email]);
+      if (actStopRequested[email]) {
+        stopped = true;
+        break;
+      }
       const r = await api("/api/activity/run", {
         account: email, sceneId: cfg.sceneId, teamId: cfg.teamId,
         supportCuid: cfg.supportCuid || null, quick: cfg.quick,
+        urgentSpecializations,
       });
       if (r.status) applyStatus(email, r.status, r.nextClaims);
       logResult({ ...r, name: taskName }, `第${i}次·`, email);
+      if (actStopRequested[email]) {
+        stopped = true;
+        break;
+      }
+      if (r.urgentCleanup) {
+        logActivityUrgentResults(r.urgentCleanup, `第${i}次·紧急任务·`, email);
+        if (!r.urgentCleanup.ok) {
+          urgentSpecializations = null;
+          logTo(email, "本轮紧急任务自动清理失败，后续活动次数不再重复尝试", "warn");
+        }
+      }
       if (!r.ok) { logTo(email, `第 ${i} 次未获得掉落，停止扫荡`, "err"); break; }
       done++;
     }
+    if (stopped) logTo(email, `[${taskName}] 已停止，未继续后续请求`, "warn");
     if (summary && email === activeAccount) summary.textContent = `完成 ${done}/${cfg.count} 次`;
   } catch (e) {
     logTo(email, `活动关卡出错：${e.message}`, "err");
   } finally {
+    if (cfg.urgentEnabled && !stopped) {
+      try {
+        const cleanup = await api("/api/activity/urgent/clear", {
+          account: email, teamId: cfg.teamId, supportCuid: cfg.supportCuid || null,
+        });
+        if (cleanup.status) applyStatus(email, cleanup.status, cleanup.nextClaims);
+        logActivityUrgentResults(cleanup, "紧急任务·", email);
+        if (cleanup.ok && !(cleanup.results || []).length) {
+          logTo(email, "[紧急任务] 最终清理完成，当前没有待处理任务", "ok");
+        }
+      } catch (error) {
+        logTo(email, `紧急任务最终清理失败：${error.message}`, "err");
+      }
+    }
     actRunning[email] = false;
+    delete actStopRequested[email];
     if (email === activeAccount && startBtn.isConnected) {
       startBtn.disabled = false;
+      startBtn.classList.remove("task-stop-button");
       startBtn.textContent = "▶ 开始扫荡";
+      updateActivityMode(id);
     }
     refreshAccountStatus(email);
   }
 }
 
-// ---------- 商店购买自定义控件（VIP礼包 / 友情 / 荣誉勋章） ----------
+function requestActivityStop(id, email) {
+  if (!email || !actRunning[email]) return;
+  actStopRequested[email] = true;
+  const root = $(`act-${id}`);
+  const button = root?.querySelector(".act-start");
+  if (button) {
+    button.disabled = true;
+    button.classList.add("task-stop-button");
+    button.textContent = "停止中…";
+  }
+}
+
+// ---------- 商店购买自定义控件（静态货架） ----------
 // 选中态按账号命名空间（各账号想买什么互不相干）：{tab, picks:{档位id: 份数}}
 const STORE_LS = "ark_store_buy_cfg";
 const storeLsKey = () => `${STORE_LS}::${activeAccount || "_"}`;
 function getStoreCfg() {
   try {
-    const v = JSON.parse(localStorage.getItem(storeLsKey())) || {};
+    const v = JSON.parse(frontendStorageGet(storeLsKey())) || {};
     return { tab: v.tab || "", picks: (v.picks && typeof v.picks === "object") ? v.picks : {} };
   } catch {
     return { tab: "", picks: {} };
   }
 }
 function setStoreCfg(patch) {
-  localStorage.setItem(storeLsKey(), JSON.stringify({ ...getStoreCfg(), ...patch }));
+  frontendStorageSet(storeLsKey(), JSON.stringify({ ...getStoreCfg(), ...patch }));
 }
 // 货架数据按账号缓存（展开时拉一次，切 tab 不重复请求）
 const STORE_DATA = {};   // email -> {stores, wallet}
-const itemIcon = (sid) => `/static/assets/items/${sid}.png`;
+const itemIcon = (sid) => `/assets/items/${sid}.png`;
 const fmtNum2 = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
+const STORE_RESET_LABEL = { Day: "每日", Week: "每周", Month: "每月", Hour: "每小时" };
+
+function applyStateSyncMeta(email, data) {
+  const a = ACCOUNTS[email];
+  if (!a || !data) return false;
+  const oldRevision = a.stateRevision;
+  const oldError = a.stateSyncError;
+  if (data.stateRevision != null) a.stateRevision = data.stateRevision;
+  if (data.stateSyncedAt != null) a.stateSyncedAt = data.stateSyncedAt;
+  a.stateSyncError = data.stateSyncError || null;
+  return (data.stateRevision != null && data.stateRevision !== oldRevision)
+    || a.stateSyncError !== oldError;
+}
+
+async function reloadStoreAfterStateSync(email) {
+  delete STORE_DATA[email];
+  if (email !== activeAccount) return;
+  const root = $("store-store_buy");
+  if (!root || !root.dataset.loaded) return;
+  const body = root.querySelector(".shop-body");
+  if (!body || body.classList.contains("hidden")) {
+    delete root.dataset.loaded;
+    return;
+  }
+  await loadStoreOptions("store_buy");
+}
 
 function renderStoreWidget(t) {
   return `<div class="shop-widget store-host" id="store-${t.id}">
@@ -3200,7 +5040,9 @@ async function loadStoreOptions(id) {
   const root = $(`store-${id}`);
   const pane = root.querySelector(".store-panes");
   try {
-    STORE_DATA[activeAccount] = await api("/api/store/options");
+    const data = await api("/api/store/options");
+    STORE_DATA[activeAccount] = data;
+    applyStateSyncMeta(activeAccount, data);
     renderStorePanes(id);
   } catch (e) {
     pane.innerHTML = `<div class="dd-loading err">加载失败</div>`;
@@ -3254,7 +5096,8 @@ function renderStorePanes(id) {
     const cost = `<span class="b-cost"><img src="${itemIcon(g.cost.item)}" alt="">${fmtNum2(g.cost.count)}</span>`;
     // 购买状态 = 游戏内的"剩余可购次数/上限"（"购买 1/1"=还能买 1 次，"购买 0/1"=已售罄）。
     // 售罄不置灰：照发请求，服务器拒绝时把它的原话写进日志（用户定）。
-    const state = g.limit != null ? `购买 ${g.remain}/${g.limit}`
+    const cycle = STORE_RESET_LABEL[g.resetType] || "";
+    const state = g.limit != null ? `${cycle ? `${cycle}限购 · ` : "限购 · "}剩余 ${g.remain}/${g.limit}`
       : (g.bought ? `已购 ${g.bought}` : "");
     // 可多次购买的档给次数步进器，默认买满剩余额度；限购 1 次的不给（没得选）
     const q = picks[g.id];
@@ -3280,7 +5123,6 @@ function renderStorePanes(id) {
       <img src="${itemIcon(sid)}" alt=""><b>${fmtNum2(sum[sid])}</b>
       <span class="w-have">/ ${fmtNum2(data.wallet[sid] || 0)}</span></span>`;
   }).join("");
-
   pane.innerHTML = `<div class="b-tabs">${tabs}</div>
     <div class="b-grid">${cards || '<div class="dd-loading">该商店暂无可显示的货架</div>'}</div>
     <div class="b-cart">
@@ -3360,27 +5202,37 @@ async function runStoreBuy(id) {
 // 读缓存状态（不重登）：工具自己的领取/购买已由后端 NowItem 增量写回，读缓存即最新。
 // 巡检、任务执行后都走这个，零重登。
 // 把 status/nextClaims 写回当前账号缓存并渲染（供刷新/巡检后调用）
-function applyStatus(email, status, nextClaims, arena) {
+function applyStatus(email, status, nextClaims, arena, connection, redeemCodes) {
   const a = ACCOUNTS[email]; if (!a) return;
+  if (connection) applyConnectionState(email, connection);
   if (status) { a.status = status; a.name = status.name; a.avatar = status.avatar; }
   if (nextClaims) a.nextClaims = nextClaims;
   // 竞技场档期（/api/status 带回）。直接采用后端值：勾选存在后端 params 里、
   // 由 /api/arena/config 单独写入，且 /api/toggles 已改成按 key 合并不会抹掉它，
   // 所以后端就是唯一真源，不需要再在前端做"保留本地勾选"的兜底。
   if (arena) a.arena = arena;
+  if (redeemCodes) {
+    a.redeemCodes = redeemCodes;
+    if (email === activeAccount) {
+      const root = $("auto-redeem_code");
+      if (root) { const body = root.querySelector(".auto-body"); if (body) body.innerHTML = renderRedeemCodeOptions(); }
+    }
+  }
   if (email === activeAccount) {
     if (status) renderStatus(status);
     if (nextClaims) { NEXT_CLAIMS = nextClaims; renderNextClaims(); }
     if (arena) renderArenaList("arena_npc");
   }
-  renderAccountSwitcher();
+  updateAccountSwitcher(email);
 }
 
 async function refreshStatus(quiet = false) {
   const email = activeAccount;
   try {
-    const { status, nextClaims, arena } = await api("/api/status");
-    applyStatus(email, status, nextClaims, arena);
+    const data = await api("/api/status");
+    const { status, nextClaims, arena, connection, redeemCodes } = data;
+    applyStateSyncMeta(email, data);
+    applyStatus(email, status, nextClaims, arena, connection, redeemCodes);
     if (!quiet) log("状态已刷新", "ok");
   } catch (e) { if (!quiet) log(`刷新失败：${e.message}`, "err"); }
 }
@@ -3389,27 +5241,118 @@ async function refreshStatus(quiet = false) {
 // 只在用户主动点按钮时才重登，不做自动轮询。
 async function manualRefresh() {
   const email = activeAccount;
-  const btn = $("refreshBtn");
-  if (btn) { btn.disabled = true; btn.classList.add("spinning"); }
+  const account = ACCOUNTS[email];
+  if (!account || account.refreshPending) return;
+  account.refreshPending = true;
+  renderConnectionState(email);
   try {
-    const { status, nextClaims, arena } = await api("/api/status/refresh", {});
-    applyStatus(email, status, nextClaims);
+    const data = await api("/api/status/refresh", { account: email });
+    if (ACCOUNTS[email] !== account) return;
+    const { status, nextClaims, arena, connection, redeemCodes } = data;
+    const snapshotChanged = applyStateSyncMeta(email, data);
+    applyStatus(email, status, nextClaims, undefined, connection, redeemCodes);
     // 刷新会清空竞技场的失败退避（后端 refresh_status 调 reset_task_runtime），
     // 把新状态写回并重渲，让"重试倒计时"立刻变回"可挑战"。
     if (arena && ACCOUNTS[email]) {
       ACCOUNTS[email].arena = arena;
       if (email === activeAccount) renderArenaList("arena_npc");
     }
+    if (snapshotChanged) await reloadStoreAfterStateSync(email);
     loadRoster(email, true);   // 重登后团员/物品也刷新
-    log("状态已刷新（重新登录拉取全量）", "ok");
+    logTo(email, "状态已刷新（重新登录）", "ok");
   } catch (e) {
-    log(`刷新失败：${e.message}`, "err");
+    if (ACCOUNTS[email] === account) logTo(email, `重新登录失败：${e.message}`, "err");
   } finally {
-    if (btn) { btn.disabled = false; btn.classList.remove("spinning"); }
+    account.refreshPending = false;
+    if (email === activeAccount && ACCOUNTS[email] === account) renderConnectionState(email);
   }
 }
 
 // ---------- 账号切换器 + 后台日志轮询 ----------
+function updateAccountSwitcherUnread(email) {
+  const account = ACCOUNTS[email];
+  if (!account) return;
+  const item = [...document.querySelectorAll("#accSwitcher .acc-item")]
+    .find((element) => element.dataset.email === email);
+  if (!item) return;
+
+  const oldBadge = item.querySelector(".acc-unread");
+  if (!account.logUnread) {
+    oldBadge?.remove();
+    return;
+  }
+
+  const text = account.logUnread > 99 ? "99+" : String(account.logUnread);
+  if (oldBadge) {
+    oldBadge.textContent = text;
+    return;
+  }
+
+  const badge = document.createElement("span");
+  badge.className = "acc-unread";
+  badge.textContent = text;
+  item.insertBefore(badge, item.querySelector(".acc-x"));
+}
+
+function updateAccountConnectionIndicator(email) {
+  const account = ACCOUNTS[email];
+  const box = $("accSwitcher");
+  if (!account || !box) return;
+  const connected = account.connection?.connected !== false;
+  const label = connected ? "已连接：游戏会话正常"
+    : account.connection?.reason === "duplicate_login" ? "已断开：账号在其它地方登录"
+    : "已断开：游戏会话已断开";
+  const item = [...box.querySelectorAll(".acc-item")]
+    .find((element) => element.dataset.email === email);
+  const indicators = [item?.querySelector(".acc-connection")];
+  if (email === activeAccount) indicators.push($("accCurrentBtn")?.querySelector(".acc-connection"));
+  indicators.forEach((indicator) => {
+    if (!indicator) return;
+    indicator.className = `acc-connection ${connected ? "is-connected" : "is-disconnected"}`;
+    indicator.title = label;
+    indicator.setAttribute("aria-label", label);
+  });
+}
+
+function updateAccountSwitcher(email) {
+  const account = ACCOUNTS[email];
+  if (!account) return;
+
+  const item = [...document.querySelectorAll("#accSwitcher .acc-item")]
+    .find((element) => element.dataset.email === email);
+  if (item) {
+    const avatar = item.querySelector(".acc-ava");
+    const name = item.querySelector(".acc-name");
+    const sub = item.querySelector(".acc-sub");
+    if (avatar) {
+      avatar.innerHTML = account.avatar
+        ? `<img src="${account.avatar}" alt="">`
+        : `<span>${(account.name || email).slice(0, 1)}</span>`;
+    }
+    if (name) name.textContent = account.name || email;
+    if (sub) sub.textContent = email;
+  }
+
+  if (email === activeAccount) {
+    const current = $("accCurrentBtn");
+    if (current) {
+      const avatar = current.querySelector(".acc-ava");
+      const name = current.querySelector(".acc-name");
+      const sub = current.querySelector(".acc-sub");
+      if (avatar) {
+        avatar.innerHTML = account.avatar
+          ? `<img src="${account.avatar}" alt="">`
+          : `<span>${(account.name || email || "?").slice(0, 1)}</span>`;
+      }
+      if (name) name.textContent = account.name || email || "未登录";
+      if (sub) sub.textContent = email;
+    }
+  }
+
+  updateAccountSwitcherUnread(email);
+  updateAccountConnectionIndicator(email);
+}
+
 // 渲染左下角账号切换器（在线账号列表 + 添加账号）。
 function renderAccountSwitcher() {
   const box = $("accSwitcher");
@@ -3421,7 +5364,8 @@ function renderAccountSwitcher() {
     ? `<img src="${cur.avatar}" alt="">` : `<span>${initial}</span>`;
   // 顶部：当前账号胶囊（点击展开列表）
   let html = `<button class="acc-current" id="accCurrentBtn">
-      <div class="acc-ava">${avatarHtml}</div>
+      <div class="acc-portrait"><div class="acc-ava">${avatarHtml}</div>
+        <span class="acc-connection hidden" role="img"></span></div>
       <div class="acc-meta"><div class="acc-name">${cur.name || activeAccount || "未登录"}</div>
         <div class="acc-sub">${activeAccount || ""}</div></div>
       <span class="acc-caret">▴</span>
@@ -3432,7 +5376,8 @@ function renderAccountSwitcher() {
     const av = a.avatar ? `<img src="${a.avatar}" alt="">` : `<span>${(a.name || email).slice(0, 1)}</span>`;
     const badge = a.logUnread ? `<span class="acc-unread">${a.logUnread > 99 ? "99+" : a.logUnread}</span>` : "";
     return `<div class="acc-item ${email === activeAccount ? "on" : ""}" data-email="${email}">
-        <div class="acc-ava sm">${av}</div>
+        <div class="acc-portrait"><div class="acc-ava sm">${av}</div>
+          <span class="acc-connection hidden" role="img"></span></div>
         <div class="acc-meta"><div class="acc-name">${a.name || email}</div><div class="acc-sub">${email}</div></div>
         ${badge}
         <button class="acc-x" data-del="${email}" title="退出并删除该账号">✕</button>
@@ -3443,6 +5388,7 @@ function renderAccountSwitcher() {
       <button class="acc-add" id="accAddBtn"><span>＋</span> 添加账号</button>
     </div>`;
   box.innerHTML = html;
+  emails.forEach(updateAccountConnectionIndicator);
 
   $("accCurrentBtn").onclick = (e) => { e.stopPropagation(); $("accPop").classList.toggle("hidden"); };
   box.querySelectorAll(".acc-item").forEach((el) => {
@@ -3552,14 +5498,27 @@ async function pollAutoLogs() {
   try {
     for (const email of emails) {
       const a = ACCOUNTS[email];
+      if (!a) continue;
+      ensureAccountStarted(email);
+      const abyssRequest = abyssRequests[email];
+      const activityRequest = actProgressRequests[email];
       try {
-        const { entries, logSeq } = await api(`/api/logs/auto?account=${encodeURIComponent(email)}&since=${a.logSeq || 0}`);
+        const data = await api(`/api/logs/auto?account=${encodeURIComponent(email)}&since=${a.logSeq || 0}`);
+        if (ACCOUNTS[email] !== a) continue;
+        if (abyssRequest === abyssRequests[email]) applyAbyssBattle(email, data.abyssBattle);
+        if (activityRequest === actProgressRequests[email]) applyActivityProgress(email, data.activityProgress);
+        const { entries, logSeq } = data;
+        const snapshotChanged = applyStateSyncMeta(email, data);
         if (entries && entries.length) {
           // 用后端给的产生时刻，而不是此刻——窗口冻结期间积压的记录到这里才被拉回
-          entries.forEach((e) => logResult(e.result, e.prefix, email, e.ts));
+          entries.forEach((e) => handleAutoTaskResult(e.result, e.prefix, email, e.ts));
           a.logSeq = logSeq;
           // 有新巡检日志 → 该账号状态多半变了，刷新其状态缓存
           refreshAccountStatus(email);
+        }
+        if (snapshotChanged) {
+          refreshAccountStatus(email);
+          await reloadStoreAfterStateSync(email);
         }
       } catch (e) { /* 账号可能已下线，忽略 */ }
     }
@@ -3569,11 +5528,13 @@ async function pollAutoLogs() {
 }
 // 拉某账号最新状态写回缓存（不重登，读后端缓存）
 async function refreshAccountStatus(email) {
+  const a = ACCOUNTS[email];
   try {
-    const res = await fetch(`/api/status?account=${encodeURIComponent(email)}`);
-    if (!res.ok) return;
-    const { status, nextClaims, arena } = await res.json();
-    applyStatus(email, status, nextClaims, arena);
+    const data = await api(`/api/status?account=${encodeURIComponent(email)}`);
+    if (ACCOUNTS[email] !== a) return;
+    const { status, nextClaims, arena, connection, redeemCodes } = data;
+    applyStateSyncMeta(email, data);
+    applyStatus(email, status, nextClaims, arena, connection, redeemCodes);
   } catch (e) {}
 }
 
@@ -3641,6 +5602,9 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("#accSwitcher")) {
     const pop = $("accPop"); if (pop) pop.classList.add("hidden");
   }
+  if (!e.target.closest("[data-urgent-help], [data-urgent-help-text]")) {
+    closeActivityUrgentHelp();
+  }
 });
 
 if ($("acctCaret")) $("acctCaret").onclick = (e) => { e.stopPropagation(); toggleSavedMenu(); };
@@ -3675,6 +5639,7 @@ async function initAccounts() {
         try { preferred = sessionStorage.getItem(TEST_ACTIVE_ACCOUNT_SS) || ""; } catch { /* optional */ }
         switchAccount(ACCOUNTS[preferred] ? preferred : restoredEmails[0]);
         ensureAutoLogPoll();
+        restoredEmails.forEach((email) => ensureAccountStarted(email));
         return;
       }
     }
@@ -3687,17 +5652,15 @@ async function initAccounts() {
   $("appView").classList.add("hidden");
   $("loginView").classList.remove("hidden");
   $("loginCancel") && $("loginCancel").classList.add("hidden");
-  loginStatus("");
+  if (updateStartupReady) loginStatus("");
+  else loginStatus("正在检查最新版本，请稍候…", "pending");
   renderSavedAccounts();
 }
 
 // ---------- 事件绑定 ----------
-// 主题：页面一加载就应用（登录前也生效）
-renderSwatches();
-applyTheme(getTheme());
-
 $("loginBtn").onclick = doLogin;
 $("refreshBtn").onclick = manualRefresh;
+$("reconnectBtn").onclick = manualRefresh;
 $("logoutBtn").onclick = logout;
 $("password").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
 $("account").addEventListener("input", () => {
@@ -3745,51 +5708,235 @@ document.querySelectorAll("#modeSeg button").forEach((b) =>
   b.addEventListener("click", () => setTheme({ mode: b.dataset.mode }))
 );
 
-// ---------- 代理设置 ----------
-function proxyNotice(msg, cls = "ok") {
-  const el = $("proxyNotice");
-  if (el) el.innerHTML = msg ? `<div class="notice ${cls}">${msg}</div>` : "";
+// ---------- 系统设置 ----------
+let runtimePlatform = "windows";
+
+function requestDelayNotice(message, cls = "ok") {
+  const el = $("requestDelayNotice");
+  if (!el) return;
+  el.textContent = message || "";
+  el.className = `request-delay-notice${message ? ` ${cls}` : ""}`;
 }
-// 手动地址输入框仅在 manual 模式下显示
-function syncProxyModeUI() {
-  const mode = document.querySelector('input[name="proxyMode"]:checked')?.value || "system";
-  const f = $("proxyManualField");
-  if (f) f.style.display = mode === "manual" ? "" : "none";
+
+let autoReloginSaving = false;
+let autoReloginConfig = { enabled: false, delaySeconds: 300 };
+
+function autoReloginNotice(message, cls = "ok") {
+  const el = $("autoReloginNotice");
+  if (!el) return;
+  el.textContent = message || "";
+  el.className = `request-delay-notice${message ? ` ${cls}` : ""}`;
 }
-// 启动时拉一次 /api/config：代理设置 + 版本号（版本唯一真源在 backend/version.py，
+
+function syncAutoReloginUI(value = {}) {
+  const enabledInput = $("autoReloginEnabled");
+  const delayInput = $("autoReloginDelay");
+  if (!enabledInput || !delayInput) return;
+  const enabled = value.enabled === true;
+  const minutes = Math.max(1, Math.min(1440, Math.round(Number(value.delaySeconds ?? 300) / 60) || 5));
+  enabledInput.checked = enabled;
+  enabledInput.disabled = autoReloginSaving;
+  delayInput.value = String(minutes);
+  delayInput.disabled = !enabled || autoReloginSaving;
+  $("autoReloginFields")?.classList.toggle("request-delay-row-disabled", !enabled);
+}
+
+async function saveAutoRelogin() {
+  const enabledInput = $("autoReloginEnabled");
+  const delayInput = $("autoReloginDelay");
+  if (!enabledInput || !delayInput || autoReloginSaving) return;
+  const minutes = Math.max(1, Math.min(1440, Math.round(Number(delayInput.value) || 5)));
+  const enabled = enabledInput.checked;
+  delayInput.value = String(minutes);
+  autoReloginSaving = true;
+  enabledInput.disabled = true;
+  delayInput.disabled = true;
+  try {
+    const cfg = await api("/api/config", {
+      autoReloginEnabled: enabled,
+      autoReloginDelaySeconds: minutes * 60,
+    });
+    autoReloginConfig = cfg.autoRelogin;
+    autoReloginNotice("");
+  } catch (error) {
+    autoReloginNotice(`保存失败：${error.message}`, "err");
+  } finally {
+    autoReloginSaving = false;
+    syncAutoReloginUI(autoReloginConfig);
+  }
+}
+
+$("autoReloginEnabled")?.addEventListener("change", () => {
+  syncAutoReloginUI({
+    enabled: $("autoReloginEnabled").checked,
+    delaySeconds: Number($("autoReloginDelay").value || 5) * 60,
+  });
+  saveAutoRelogin();
+});
+$("autoReloginDelay")?.addEventListener("change", saveAutoRelogin);
+
+function syncRequestDelayUI(value = {}) {
+  const enabledInput = $("requestDelayEnabled");
+  const msInput = $("requestDelayMs");
+  const jitterInput = $("requestDelayJitter");
+  const enabled = value.enabled !== false;
+  const ms = Math.max(0, Math.min(60000, Number(value.ms ?? REQUEST_DELAY_DEFAULTS.ms) || 0));
+  const jitter = Math.max(0, Math.min(100, Number(value.jitter ?? 20) || 0));
+  requestDelayRuntime = { enabled, ms, jitter };
+  if (!enabledInput || !msInput || !jitterInput) return;
+  enabledInput.checked = enabled;
+  msInput.value = String(Math.round(ms));
+  jitterInput.value = String(Math.round(jitter));
+  msInput.disabled = !enabled;
+  jitterInput.disabled = !enabled;
+  $("requestDelayControls")?.classList.toggle("request-delay-row-disabled", !enabled);
+}
+
+async function saveRequestDelay() {
+  const enabledInput = $("requestDelayEnabled");
+  const msInput = $("requestDelayMs");
+  const jitterInput = $("requestDelayJitter");
+  if (!enabledInput || !msInput || !jitterInput) return;
+  const ms = Math.max(0, Math.min(60000, Math.round(Number(msInput.value) || 0)));
+  const jitter = Math.max(0, Math.min(100, Math.round(Number(jitterInput.value) || 0)));
+  msInput.value = String(ms);
+  jitterInput.value = String(jitter);
+  try {
+    const cfg = await api("/api/config", {
+      requestDelayEnabled: enabledInput.checked,
+      requestDelayMs: ms,
+      requestDelayJitter: jitter,
+    });
+    syncRequestDelayUI(cfg.requestDelay);
+    requestDelayNotice("");
+  } catch (error) {
+    requestDelayNotice(`保存失败：${error.message}`, "err");
+  }
+}
+
+$("requestDelayEnabled")?.addEventListener("change", () => {
+  syncRequestDelayUI({
+    enabled: $("requestDelayEnabled").checked,
+    ms: $("requestDelayMs").value,
+    jitter: $("requestDelayJitter").value,
+  });
+  saveRequestDelay();
+});
+$("requestDelayMs")?.addEventListener("change", saveRequestDelay);
+$("requestDelayJitter")?.addEventListener("change", saveRequestDelay);
+// 启动时拉一次 /api/config：系统设置 + 版本号（版本唯一真源在 backend/version.py，
 // 前端不写死，免得又出现"关于页 1.0.2 / APK 1.7"各说各话）。
 async function loadConfig() {
   try {
     const cfg = await api("/api/config");
-    const mode = cfg.proxyMode || "system";
-    const radio = document.querySelector(`input[name="proxyMode"][value="${mode}"]`);
-    if (radio) radio.checked = true;
-    if ($("proxyInput")) $("proxyInput").value = cfg.proxy || "";
-    syncProxyModeUI();
+    runtimePlatform = cfg.platform || "windows";
+    syncRequestDelayUI(cfg.requestDelay);
+    autoReloginConfig = cfg.autoRelogin || autoReloginConfig;
+    syncAutoReloginUI(autoReloginConfig);
+    syncDownloadPathUI(cfg);
     if ($("aboutVer") && cfg.version) $("aboutVer").textContent = `v${cfg.version}`;
   } catch { /* 忽略：服务器未就绪时静默 */ }
 }
-async function saveProxy() {
-  const mode = document.querySelector('input[name="proxyMode"]:checked')?.value || "system";
-  const proxy = $("proxyInput").value.trim();
-  $("saveProxyBtn").disabled = true;
+loadConfig();
+
+// ---------- 下载路径 ----------
+function downloadPathNotice(message, cls = "ok") {
+  const element = $("downloadPathNotice");
+  if (!element) return;
+  element.textContent = message || "";
+  element.className = `download-path-notice${message ? ` ${cls}` : ""}`;
+}
+
+function androidDownloadLocation() {
   try {
-    const cfg = await api("/api/config", { proxyMode: mode, proxy });
-    const eff = cfg.proxyEffective || "（直连）";
-    const modeLabel = { system: "跟随系统代理", manual: "手动指定", direct: "直连" }[cfg.proxyMode];
-    proxyNotice(`已保存：${modeLabel}，当前生效代理：${eff || "直连"}（下次登录/请求生效）`, "ok");
-    log(`代理模式：${modeLabel}，生效地址：${eff || "直连"}`, "ok");
-  } catch (e) {
-    proxyNotice(`保存失败：${e.message}`, "err");
-  } finally {
-    $("saveProxyBtn").disabled = false;
+    return window.LucimaFiles?.getDownloadLocation?.() || "";
+  } catch {
+    return "";
   }
 }
-if ($("saveProxyBtn")) $("saveProxyBtn").onclick = saveProxy;
-document.querySelectorAll('input[name="proxyMode"]').forEach((r) =>
-  r.addEventListener("change", syncProxyModeUI)
-);
-loadConfig();
+
+function syncDownloadPathUI(config = {}) {
+  const input = $("downloadPathInput");
+  if (!input) return;
+  const nativeAndroid = runtimePlatform === "android" && window.LucimaFiles;
+  input.readOnly = Boolean(nativeAndroid);
+  input.value = nativeAndroid
+    ? (androidDownloadLocation() || config.downloadPath || "系统下载文件夹（Download）")
+    : (config.downloadPath || "");
+}
+
+async function persistDownloadPath(path) {
+  const normalized = String(path || "").trim();
+  if (!normalized || runtimePlatform === "android") return;
+  try {
+    const config = await api("/api/config", { downloadPath: normalized });
+    syncDownloadPathUI(config);
+    downloadPathNotice("");
+  } catch (error) {
+    downloadPathNotice(error.message, "err");
+  }
+}
+
+async function browseDownloadPath() {
+  downloadPathNotice("");
+  if (runtimePlatform === "android" && window.LucimaFiles?.chooseDownloadDirectory) {
+    window.LucimaFiles.chooseDownloadDirectory();
+    return;
+  }
+  if (window.pywebview?.api?.chooseDownloadDirectory) {
+    try {
+      const selected = await window.pywebview.api.chooseDownloadDirectory(
+        $("downloadPathInput")?.value || ""
+      );
+      if (selected) await persistDownloadPath(selected);
+    } catch (error) {
+      downloadPathNotice(`无法打开文件夹选择器：${error.message || error}`, "err");
+    }
+    return;
+  }
+  try {
+    const config = await api("/api/config", { resetDownloadPath: true });
+    syncDownloadPathUI(config);
+    downloadPathNotice("浏览器测试模式使用 Windows 默认下载路径", "ok");
+  } catch (error) {
+    downloadPathNotice(error.message || "无法读取 Windows 默认下载路径", "err");
+  }
+}
+
+async function resetDownloadPath() {
+  downloadPathNotice("");
+  if (runtimePlatform === "android" && window.LucimaFiles?.resetDownloadDirectory) {
+    try {
+      $("downloadPathInput").value = window.LucimaFiles.resetDownloadDirectory();
+    } catch (error) {
+      downloadPathNotice(error.message || "恢复默认路径失败", "err");
+    }
+    return;
+  }
+  try {
+    const config = await api("/api/config", { resetDownloadPath: true });
+    syncDownloadPathUI(config);
+  } catch (error) {
+    downloadPathNotice(error.message, "err");
+  }
+}
+
+window.onLucimaDownloadDirectoryChanged = (location) => {
+  if ($("downloadPathInput")) $("downloadPathInput").value = location || "";
+  downloadPathNotice("");
+};
+
+$("browseDownloadPathBtn")?.addEventListener("click", browseDownloadPath);
+$("resetDownloadPathBtn")?.addEventListener("click", resetDownloadPath);
+$("downloadPathInput")?.addEventListener("change", (event) => {
+  persistDownloadPath(event.target.value);
+});
+$("downloadPathInput")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.target.blur();
+  }
+});
 
 // ---------- 自助更新 ----------
 let updateState = null;
@@ -3797,6 +5944,13 @@ let updateAutoShownVersion = "";
 let updateStatusPending = false;
 let updateProgressPollToken = 0;
 let updateProgressPollTimer = null;
+let updateDialogMode = "update";
+let updateStartupReady = false;
+let updateStartupBlocked = true;
+let updateStartupCheckPending = false;
+let updateStartupCheckPromise = null;
+let updateLastSuccessfulCheckAt = 0;
+const UPDATE_STALE_AFTER_MS = 60 * 60 * 1000;
 
 function formatUpdateBytes(value) {
   const bytes = Math.max(0, Number(value) || 0);
@@ -3829,6 +5983,7 @@ function renderUpdateProgress(progressState) {
     preparing: "正在准备下载",
     downloading: "正在下载更新",
     verifying: "正在校验更新",
+    "applying-delta": "正在合成增量更新",
     waiting: "正在等待当前任务结束",
     "preparing-install": "正在准备安装",
     ready: "更新包已准备完成",
@@ -3879,6 +6034,7 @@ function renderUpdateAvailability(state) {
 
 function openUpdateDialog(state = updateState) {
   if (!state?.available) return;
+  updateDialogMode = "update";
   updateState = state;
   const forced = !!state.forced;
   $("updateEyebrow").textContent = forced ? "需要更新后继续使用" : "发现新版本";
@@ -3895,8 +6051,13 @@ function openUpdateDialog(state = updateState) {
   $("updateIgnoreBtn").classList.toggle("hidden", forced);
   $("updateModal").querySelector(".update-actions")?.classList.toggle("forced", forced);
   const installButton = $("updateInstallBtn");
-  installButton.disabled = !state.artifactAvailable || !state.installSupported || !!state.installing;
-  installButton.textContent = state.installing ? "正在准备…" : "立即更新";
+  // A forced manifest without a package must remain blocking, but the only
+  // available action is a retry instead of a permanently disabled dialog.
+  const canRetryManifest = forced && (!state.artifactAvailable || !state.installSupported);
+  installButton.disabled = canRetryManifest ? false : (!state.artifactAvailable || !state.installSupported || !!state.installing);
+  installButton.textContent = canRetryManifest
+    ? "重新检查"
+    : (state.installing ? "正在准备…" : "立即更新");
   if (state.installing) renderUpdateProgress(state.progress);
   else resetUpdateProgress();
   $("updateStatus").className = "update-status";
@@ -3909,17 +6070,121 @@ function openUpdateDialog(state = updateState) {
 }
 
 function closeUpdateDialog() {
-  if (updateState?.forced) return;
+  if (updateState?.forced || updateStartupBlocked) return;
   $("updateModal")?.classList.add("hidden");
   document.body.classList.remove("update-dialog-open");
 }
 
-async function refreshUpdateStatus(autoShow = false) {
-  if (updateStatusPending) return;
+function openUpdateCheckFailureDialog(message = "无法获取最新版本，请检查网络后重试。") {
+  updateDialogMode = "check-error";
+  updateState = {
+    ...(updateState || {}),
+    available: false,
+    forced: false,
+    startupError: true,
+    artifactAvailable: false,
+    installSupported: false,
+    installing: false,
+    notes: [],
+  };
+  $("updateEyebrow").textContent = "无法继续使用";
+  $("updateTitle").textContent = "无法获取最新版本";
+  $("updateSummary").textContent = "请确认网络连接正常，完成版本检查后才能进入主界面。";
+  const notesEl = $("updateNotes");
+  notesEl.classList.add("empty");
+  notesEl.textContent = "更新服务暂时不可用。";
+  $("updateIgnoreBtn").classList.add("hidden");
+  $("updateModal").querySelector(".update-actions")?.classList.add("forced");
+  const retry = $("updateInstallBtn");
+  retry.disabled = false;
+  retry.textContent = "重新检查";
+  resetUpdateProgress();
+  $("updateStatus").className = "update-status err";
+  $("updateStatus").textContent = message;
+  $("updateModal").classList.remove("hidden");
+  document.body.classList.add("update-dialog-open");
+  requestAnimationFrame(() => retry.focus());
+}
+
+function sleepForUpdateCheck(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchFreshUpdateStatus() {
+  let state = await api("/api/update/check", {});
+  const deadline = Date.now() + 20000;
+  // request_check is intentionally non-blocking when the background checker
+  // already owns the lock. Wait for that check to settle before deciding.
+  while (!state?.testServer && (state?.checking || (!state?.checked && !state?.lastError))
+         && Date.now() < deadline) {
+    await sleepForUpdateCheck(250);
+    state = await api("/api/update/status");
+  }
+  if (!state?.testServer && !state?.checked && !state?.lastError) {
+    throw new Error("版本检查超时");
+  }
+  return state;
+}
+
+function setLoginUpdateGate(ready, message = "") {
+  updateStartupReady = !!ready;
+  const button = $("loginBtn");
+  if (button) button.disabled = !ready;
+  if (!ready && message) loginStatus(message, "pending");
+  else if (ready) loginStatus("");
+}
+
+async function runStartupUpdateCheck() {
+  if (updateStartupCheckPromise) return updateStartupCheckPromise;
+  updateStartupCheckPending = true;
+  setLoginUpdateGate(false, "正在检查最新版本，请稍候…");
+  updateStartupCheckPromise = (async () => {
+    try {
+      const state = await fetchFreshUpdateStatus();
+      updateState = state;
+      if (state.testServer) {
+        updateLastSuccessfulCheckAt = Date.now();
+        updateStartupBlocked = false;
+        setLoginUpdateGate(true);
+        closeUpdateDialog();
+        return state;
+      }
+      if (state.lastError) throw new Error(state.lastError);
+      updateLastSuccessfulCheckAt = Number(state.lastCheckedAt) || Date.now();
+      if (state.forced) {
+        updateStartupBlocked = true;
+        setLoginUpdateGate(false, "当前版本需要更新后才能继续使用。");
+        openUpdateDialog(state);
+      } else {
+        updateStartupBlocked = false;
+        setLoginUpdateGate(true);
+        renderUpdateAvailability(state);
+        if (state.available && !state.ignored) openUpdateDialog(state);
+        else closeUpdateDialog();
+      }
+      return state;
+    } catch (error) {
+      updateStartupBlocked = true;
+      setLoginUpdateGate(false, "无法获取最新版本，请完成检查后再登录。");
+      openUpdateCheckFailureDialog(error?.message || "更新检查失败");
+      return null;
+    } finally {
+      updateStartupCheckPending = false;
+      updateStartupCheckPromise = null;
+    }
+  })();
+  return updateStartupCheckPromise;
+}
+
+async function refreshUpdateStatus(autoShow = false, forceCheck = false) {
+  if (updateStatusPending || updateStartupCheckPending) return;
   updateStatusPending = true;
   try {
-    const state = await api("/api/update/status");
+    const state = forceCheck ? await fetchFreshUpdateStatus() : await api("/api/update/status");
     updateState = state;
+    if (!state.testServer && !state.lastError && state.checked && state.lastCheckedAt) {
+      updateLastSuccessfulCheckAt = Number(state.lastCheckedAt);
+    }
     renderUpdateAvailability(state);
     const shouldShow = state.available && (
       state.forced || (autoShow && !state.ignored && updateAutoShownVersion !== state.latestVersion)
@@ -3927,7 +6192,7 @@ async function refreshUpdateStatus(autoShow = false) {
     if (shouldShow) {
       updateAutoShownVersion = state.latestVersion;
       openUpdateDialog(state);
-    } else if (!state.available && !$("updateModal")?.classList.contains("hidden")) {
+    } else if (!state.available && !$("updateModal")?.classList.contains("hidden") && !updateStartupBlocked) {
       closeUpdateDialog();
     }
   } catch { /* 更新服务不可达不影响主功能 */ }
@@ -3951,7 +6216,19 @@ async function ignoreCurrentUpdate() {
 }
 
 async function installCurrentUpdate() {
-  if (!updateState?.available || !updateState.artifactAvailable) return;
+  if (updateDialogMode === "check-error") {
+    await runStartupUpdateCheck();
+    return;
+  }
+  if (!updateState?.available) return;
+  if (!updateState.artifactAvailable || !updateState.installSupported) {
+    // Keep a forced dialog actionable even if the server published its
+    // manifest before the platform artifact finished uploading.
+    if (updateState.forced) {
+      await refreshUpdateStatus(true, true);
+    }
+    return;
+  }
   const installButton = $("updateInstallBtn");
   const ignoreButton = $("updateIgnoreBtn");
   installButton.disabled = true;
@@ -3992,60 +6269,90 @@ function initUpdateUI() {
   $("aboutUpdateBtn")?.addEventListener("click", () => openUpdateDialog());
   $("updateIgnoreBtn")?.addEventListener("click", ignoreCurrentUpdate);
   $("updateInstallBtn")?.addEventListener("click", installCurrentUpdate);
-  refreshUpdateStatus(true);
+  runStartupUpdateCheck();
   setTimeout(() => refreshUpdateStatus(true), 4000);
   setTimeout(() => refreshUpdateStatus(true), 18000);
   setInterval(() => refreshUpdateStatus(true), 60 * 60 * 1000);
+  const checkOnForeground = () => {
+    if (document.visibilityState !== "visible" || !updateStartupReady) return;
+    const last = Number(updateLastSuccessfulCheckAt) || 0;
+    if (!last || Date.now() - last >= UPDATE_STALE_AFTER_MS) {
+      refreshUpdateStatus(true, true);
+    }
+  };
+  document.addEventListener("visibilitychange", checkOnForeground);
+  window.addEventListener("focus", checkOnForeground);
+}
+
+// ---------- 非阻塞消息弹窗 ----------
+function showMessageToast(message, type = "ok", duration = 4200) {
+  const region = $("messageToastRegion");
+  if (!region || !message) return;
+  while (region.children.length >= 3) region.firstElementChild?.remove();
+
+  const toast = document.createElement("div");
+  toast.className = `message-toast ${type === "err" ? "err" : "ok"}`;
+  toast.setAttribute("role", type === "err" ? "alert" : "status");
+  toast.innerHTML = `<svg class="message-toast-icon" aria-hidden="true"><use href="${type === "err" ? "#ui-triangle-alert" : "#ui-circle-check"}"></use></svg>
+    <span class="message-toast-text"></span>
+    <button class="message-toast-close" type="button" title="关闭" aria-label="关闭消息"><svg aria-hidden="true"><use href="#ui-x"></use></svg></button>`;
+  toast.querySelector(".message-toast-text").textContent = message;
+  region.appendChild(toast);
+
+  let timer;
+  const dismiss = () => {
+    clearTimeout(timer);
+    if (!toast.isConnected || toast.classList.contains("leaving")) return;
+    toast.classList.add("leaving");
+    setTimeout(() => toast.remove(), 180);
+  };
+  toast.querySelector(".message-toast-close").addEventListener("click", dismiss);
+  timer = setTimeout(dismiss, duration);
 }
 
 // ---------- 开发者日志 ----------
-async function copyDevLog() {
-  const btn = $("copyDevLogBtn");
+async function saveDevLog() {
+  const btn = $("saveDevLogBtn");
   if (!btn || btn.disabled) return;
-  const original = btn.textContent;
+  const label = btn.querySelector("span");
+  const original = label?.textContent || "保存";
   btn.disabled = true;
   try {
-    const r = await api("/api/logs");
-    await writeClipboardText(r.content || "（暂无日志）");
-    btn.textContent = "已复制";
-    btn.classList.add("copy-success");
+    let result;
+    if (runtimePlatform === "android" && window.LucimaFiles?.saveDeveloperLogs) {
+      const raw = window.LucimaFiles.saveDeveloperLogs();
+      result = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!result?.ok) throw new Error(result?.detail || "保存开发者日志失败");
+    } else {
+      result = await api("/api/logs/save", {});
+    }
+    if (label) label.textContent = "已保存";
+    btn.classList.add("save-success");
+    showMessageToast(`开发者日志已保存至 ${result.path}`, "ok");
   } catch (e) {
-    btn.textContent = "复制失败";
-    btn.classList.add("copy-failed");
+    if (label) label.textContent = "保存失败";
+    btn.classList.add("save-failed");
+    showMessageToast(e.message || "保存开发者日志失败", "err", 5200);
   } finally {
     setTimeout(() => {
       btn.disabled = false;
-      btn.textContent = original;
-      btn.classList.remove("copy-success", "copy-failed");
-    }, 1200);
+      if (label) label.textContent = original;
+      btn.classList.remove("save-success", "save-failed");
+    }, 1600);
   }
 }
-if ($("copyDevLogBtn")) $("copyDevLogBtn").onclick = copyDevLog;
+if ($("saveDevLogBtn")) $("saveDevLogBtn").onclick = saveDevLog;
 
 // ---------- 开发者模式 · 协议控制台 ----------
 // 入口靠口令解锁：设置页底部一个无提示输入框（#devGate），输对了控制台就出现，
 // 输错了什么都不发生（没有确认按钮、没有报错文案，这是刻意的）。
 // 口令**不写在前端**，输入的内容交后端 /api/dev/unlock 校验（真源 config.DEV_PASSPHRASE）。
 // ⚠️ 隐藏 UI 不是门禁：真正的门禁是 /api/dev/call 每次都要带口令，由后端验。
-const DEV_PRESETS = [
-  { v: "", label: "常用 route…" },
-  { v: "StoreHandler.ResetRandomStore", label: "刷新秘密商店",
-    data: { StoreID: "SecretShop", IsUseGold: 0 } },
-  { v: "AccountHandler.Login", label: "登录（拉全量快照）", data: {} },
-  // 竞技场档期查询：只要 AID+SessionID，**不扣旗帜**（响应无 CostItems）。
-  // 返回 PVPData.NPCPVPInfoList 共 30 条 = 10 个 NPC × 普通/困难/地狱三难度。
-  { v: "PVPHandler.QueryPVPData", label: "查竞技场档期（不扣旗帜）", data: {} },
-  { v: "SupportFriendHandler.QueryBattleSupportDataList", label: "查助战好友", data: {} },
-  { v: "TimingMealHandler.SentMeal", label: "投递定时邮件（月卡/餐食）", data: {} },
-  { v: "MailHandler.QueryNewestMails", label: "查邮件", data: { MailID: "" } },
-  { v: "ServerStatusHandler.Query", label: "服务器状态/计时器", data: {} },
-];
-
 // 记住上次输入（按账号），免得每次重开都要重敲
 const devLsKey = () => `ark_dev_console::${activeAccount || "_"}`;
 function devSaveInput() {
   try {
-    localStorage.setItem(devLsKey(), JSON.stringify({
+    frontendStorageSet(devLsKey(), JSON.stringify({
       route: $("devRoute").value, data: $("devData").value,
       useAuth: $("devUseAuth").checked,
     }));
@@ -4053,7 +6360,7 @@ function devSaveInput() {
 }
 function devLoadInput() {
   try {
-    const v = JSON.parse(localStorage.getItem(devLsKey())) || {};
+    const v = JSON.parse(frontendStorageGet(devLsKey())) || {};
     if (v.route) $("devRoute").value = v.route;
     if (v.data) $("devData").value = v.data;
     if (v.useAuth === false) $("devUseAuth").checked = false;
@@ -4082,8 +6389,9 @@ function devCheckJson() {
   }
 }
 
-let DEV_LAST = null;   // 供"复制收发"用
+let DEV_LAST = null;   // 当前响应，用于发送区展示
 let DEV_HISTORY = [];
+let DEV_RECENT_ROUTES = [];
 let DEV_HISTORY_ACCOUNT = "";
 let devHistoryTimer = null;
 let devHistoryPending = false;
@@ -4102,9 +6410,11 @@ function renderDevHistory() {
     list.innerHTML = '<div class="dev-history-empty">暂无请求记录</div>';
     return;
   }
-  list.innerHTML = DEV_HISTORY.slice(0, 5).map((item, index) => {
+  list.innerHTML = DEV_HISTORY.map((item, index) => {
     const fields = Object.keys(item.data || {}).length;
-    const meta = [devHistoryTime(item.timestamp), `${fields} 个字段`, item.useAuth ? "自动鉴权" : "无鉴权"]
+    const source = item.source === "console" ? "控制台" : "后台任务";
+    const status = item.error ? "请求失败" : item.status == null ? "等待响应" : `HTTP ${item.status}`;
+    const meta = [source, devHistoryTime(item.timestamp), status, `${fields} 个字段`, item.useAuth ? "自动鉴权" : "无鉴权"]
       .filter(Boolean).join(" · ");
     return `<div class="dev-history-item">
       <div class="dev-history-copy">
@@ -4112,11 +6422,51 @@ function renderDevHistory() {
         <small>${filterEscape(meta)}</small>
       </div>
       <div class="dev-history-actions">
+        <button type="button" class="mini dev-history-copy-request" data-history-copy-request-index="${index}">复制请求</button>
+        <button type="button" class="mini dev-history-copy-response" data-history-copy-response-index="${index}">复制响应</button>
         <button type="button" class="mini dev-history-loop" data-history-loop-index="${index}">加入循环</button>
         <button type="button" class="mini dev-history-import" data-history-import-index="${index}">导入</button>
       </div>
     </div>`;
   }).join("");
+}
+
+function showDevHistoryCopyFeedback(button, ok) {
+  if (!button) return;
+  clearTimeout(button._copyFeedbackTimer);
+  const original = button.dataset.copyLabel || button.textContent;
+  button.dataset.copyLabel = original;
+  button.classList.remove("copy-feedback-success", "copy-feedback-error");
+  void button.offsetWidth;
+  button.classList.add(ok ? "copy-feedback-success" : "copy-feedback-error");
+  button.textContent = ok ? "✓" : "!";
+  button._copyFeedbackTimer = setTimeout(() => {
+    if (!button.isConnected) return;
+    button.classList.remove("copy-feedback-success", "copy-feedback-error");
+    button.textContent = original;
+  }, 1200);
+}
+
+async function copyDevHistoryPart(index, kind, button) {
+  const item = DEV_HISTORY[index];
+  if (!item) return;
+  let text = "";
+  if (kind === "request") {
+    const request = item.request || { route: item.route || "", data: item.data || {} };
+    text = JSON.stringify(request, null, 2);
+  } else {
+    if (item.error) text = `请求失败：${item.error}`;
+    else if (typeof item.responseText === "string" && item.responseText.length) text = item.responseText;
+    else if (item.isJson) text = JSON.stringify(item.response, null, 2);
+    else text = "未收到响应";
+  }
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("剪贴板不可用");
+    await navigator.clipboard.writeText(text);
+    showDevHistoryCopyFeedback(button, true);
+  } catch {
+    showDevHistoryCopyFeedback(button, false);
+  }
 }
 
 function devImportHistory(index) {
@@ -4144,11 +6494,37 @@ async function devRefreshHistory() {
       pass: devPass(),
     });
     if (email !== activeAccount) return;
-    DEV_HISTORY = Array.isArray(result.history) ? result.history.slice(0, 5) : [];
+    DEV_HISTORY = Array.isArray(result.history) ? result.history.slice(0, 30) : [];
+    const routes = Array.isArray(result.routes)
+      ? result.routes.map((route) => String(route || "").trim()).filter(Boolean).slice(0, 30)
+      : [];
+    if (JSON.stringify(routes) !== JSON.stringify(DEV_RECENT_ROUTES)) {
+      DEV_RECENT_ROUTES = routes;
+      renderDevRecentRoutes();
+    }
     DEV_HISTORY_ACCOUNT = email;
     renderDevHistory();
   } catch { /* 会话切换或退出时静默等待下一轮 */ }
   finally { devHistoryPending = false; }
+}
+
+function renderDevRecentRoutes() {
+  const holder = $("devPreset");
+  if (!holder) return;
+  const selected = holder.dataset.val || "";
+  const options = DEV_RECENT_ROUTES.map((route) => ({ val: route, label: filterEscape(route) }));
+  const current = options.some((option) => option.val === selected) ? selected : "";
+  holder.innerHTML = dropdownHTML(
+    "dev-preset",
+    options,
+    current,
+    options.length ? "最近运行的 route…" : "暂无运行 route",
+  );
+  bindDropdown(holder, (value) => {
+    if (!value) return;
+    $("devRoute").value = value;
+    devSaveInput();
+  });
 }
 
 function ensureDevHistoryPoll() {
@@ -4377,22 +6753,6 @@ async function devSend() {
   }
 }
 
-function devCopy() {
-  if (!DEV_LAST) { $("devMeta").innerHTML = `<span class="bad">还没有可复制的收发</span>`; return; }
-  const txt = [
-    `route: ${DEV_LAST.route}`,
-    `--- 请求 ---`,
-    JSON.stringify(DEV_LAST.request, null, 2),
-    `--- 响应 (HTTP ${DEV_LAST.status}, ${DEV_LAST.isJson ? "JSON" : "明文"}`
-      + `${DEV_LAST.gzip ? ", gzip" : ""}, ${DEV_LAST.rawLen} 字节) ---`,
-    DEV_LAST.rawText,
-  ].join("\n");
-  navigator.clipboard.writeText(txt).then(
-    () => { $("devMeta").innerHTML = `<span class="ok">已复制收发到剪贴板</span>`; },
-    () => { $("devMeta").innerHTML = `<span class="bad">复制失败（剪贴板不可用）</span>`; }
-  );
-}
-
 // 解锁态：口令存在本机，随每次 /api/dev/call 带上（后端每次都验）。
 // ⚠️ **只存内存，不落盘**：每次重启（以及刷新页面）都要重新输口令才显控制台。
 // 故意不用 localStorage/sessionStorage —— 否则口令会留在 WebView 的 profile 里，
@@ -4423,6 +6783,73 @@ function bindDevGate() {
   });
 }
 
+let devUpdateChannelState = null;
+let devUpdateChannelPending = false;
+let devUpdateChannelError = "";
+
+function renderDevUpdateChannel(selectedChannel = null) {
+  const holder = $("devUpdateChannel");
+  if (!holder) return;
+  const state = devUpdateChannelState || updateState || {};
+  holder.innerHTML = dropdownHTML("", [
+    { val: "stable", label: "稳定版" },
+    { val: "preview", label: "预览版" },
+  ], selectedChannel || state.channel || "stable");
+  const dropdown = holder.querySelector(".dropdown");
+  const button = dropdown.querySelector(".dd-btn");
+  button.disabled = devUpdateChannelPending;
+  button.setAttribute("aria-labelledby", "devUpdateChannelLabel");
+  bindDropdown(dropdown, channel => checkDevUpdateChannel(channel));
+  const refresh = $("devUpdateCheckBtn");
+  refresh.disabled = devUpdateChannelPending;
+  refresh.classList.toggle("loading", devUpdateChannelPending);
+  const status = $("devUpdateChannelStatus");
+  const error = devUpdateChannelError || state.lastError;
+  status.className = `dev-hint dev-update-status${!devUpdateChannelPending && error ? " bad" : ""}`;
+  status.textContent = devUpdateChannelPending ? "正在检查更新…"
+    : error ? `检查失败：${error}`
+    : state.testServer ? "网页测试版不检查更新"
+    : state.checking ? "正在检查更新…"
+    : !state.checked ? "尚未检查"
+    : state.available ? `发现新版本 ${state.latestVersion}`
+    : `当前 ${state.currentVersion} · 通道最新 ${state.latestVersion}`;
+}
+
+async function checkDevUpdateChannel(channel = null) {
+  if (devUpdateChannelPending) return;
+  devUpdateChannelPending = true;
+  devUpdateChannelError = "";
+  renderDevUpdateChannel(channel);
+  try {
+    devUpdateChannelState = channel
+      ? await api("/api/update/channel", { channel, pass: devPass() })
+      : await api("/api/update/check", {});
+    if (!devUpdateChannelState.testServer && devUpdateChannelState.checking) {
+      devUpdateChannelState = await fetchFreshUpdateStatus();
+    }
+    updateState = devUpdateChannelState;
+    if (!updateState.lastError && updateState.checked) {
+      updateLastSuccessfulCheckAt = Number(updateState.lastCheckedAt) || Date.now();
+    }
+    updateAutoShownVersion = "";
+    renderUpdateAvailability(updateState);
+    if (!updateState.testServer && !updateState.lastError && updateState.available && !updateState.ignored) {
+      updateAutoShownVersion = updateState.latestVersion;
+      openUpdateDialog(updateState);
+    }
+  } catch (error) {
+    devUpdateChannelError = error.message || "请求失败";
+    const state = await api("/api/update/status").catch(() => null);
+    if (state) {
+      devUpdateChannelState = updateState = state;
+      renderUpdateAvailability(state);
+    }
+  } finally {
+    devUpdateChannelPending = false;
+    renderDevUpdateChannel();
+  }
+}
+
 // 显隐整张卡片：以本次运行有没有输过正确口令为准（进程重启即回到隐藏）
 function renderDevConsole() {
   const card = $("devConsoleCard");
@@ -4431,26 +6858,28 @@ function renderDevConsole() {
   card.style.display = on ? "" : "none";
   if (on && !card.dataset.bound) {
     card.dataset.bound = "1";
-    $("devPreset").innerHTML = dropdownHTML(
-      "", DEV_PRESETS.map((p) => ({ v: p.v, label: p.label })), "", "常用 route…");
-    bindDropdown($("devPreset"), (v) => {
-      const p = DEV_PRESETS.find((x) => x.v === v);
-      if (!p || !p.v) return;
-      $("devRoute").value = p.v;
-      $("devData").value = JSON.stringify(p.data || {}, null, 2);
-      devCheckJson();
-      devSaveInput();
-    });
+    renderDevUpdateChannel();
+    api("/api/update/status").then(state => {
+      if (!devUpdateChannelPending && !devUpdateChannelState) {
+        devUpdateChannelState = state;
+        renderDevUpdateChannel();
+      }
+    }).catch(() => {});
+    $("devUpdateCheckBtn").onclick = () => checkDevUpdateChannel();
+    renderDevRecentRoutes();
     $("devSendBtn").onclick = devSend;
-    $("devCopyBtn").onclick = devCopy;
     $("devLoopAddBtn").onclick = devAddCurrentToLoop;
     $("devLoopStartBtn").onclick = devStartLoop;
     $("devLoopStopBtn").onclick = devStopLoop;
     $("devHistoryList").addEventListener("click", (event) => {
       const importButton = event.target.closest("[data-history-import-index]");
       const loopButton = event.target.closest("[data-history-loop-index]");
+      const copyRequestButton = event.target.closest("[data-history-copy-request-index]");
+      const copyResponseButton = event.target.closest("[data-history-copy-response-index]");
       if (importButton) devImportHistory(Number(importButton.dataset.historyImportIndex));
       if (loopButton) devAddLoopRequest(DEV_HISTORY[Number(loopButton.dataset.historyLoopIndex)]);
+      if (copyRequestButton) copyDevHistoryPart(Number(copyRequestButton.dataset.historyCopyRequestIndex), "request", copyRequestButton);
+      if (copyResponseButton) copyDevHistoryPart(Number(copyResponseButton.dataset.historyCopyResponseIndex), "response", copyResponseButton);
     });
     $("devLoopList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-loop-action]");
@@ -4479,8 +6908,10 @@ function renderDevConsole() {
   if (on) {
     if (DEV_HISTORY_ACCOUNT !== activeAccount) {
       DEV_HISTORY = [];
+      DEV_RECENT_ROUTES = [];
       DEV_HISTORY_ACCOUNT = activeAccount || "";
       renderDevHistory();
+      renderDevRecentRoutes();
     }
     devLoadInput();
     devCheckJson();
@@ -4495,16 +6926,1173 @@ function initDevGate() {
   bindDevGate();
   // 清掉旧版本(v73)遗留在磁盘上的口令：那时是存 localStorage 的，现在不再持久化，
   // 留着既没用又是把口令写在用户机器上。
-  try { localStorage.removeItem("ark_dev_pass"); } catch { /* 禁用 localStorage 也无妨 */ }
+  frontendStorageRemove("ark_dev_pass");
   renderDevConsole();
 }
 
 // ---------- 工具箱预览 ----------
 function showToolboxHome() {
+  stopBackgroundTestPolling();
+  closeEncyclopediaStatusFilter(false);
+  closeEncyclopediaCard();
+  $("encyclopediaPage")?.classList.add("hidden");
+  $("encyclopediaDetailPage")?.classList.add("hidden");
   const home = $("toolboxHome");
-  const page = $("equipmentFilterPage");
   if (home) home.classList.remove("hidden");
-  if (page) page.classList.add("hidden");
+  document.querySelectorAll("#section-toolbox .tool-page").forEach((page) => page.classList.add("hidden"));
+}
+
+// ---------- 图鉴查询 ----------
+// The index stays small enough to ship with the app. Character dossiers and
+// large portrait assets are loaded only after a preview is selected.
+const ENCYCLOPEDIA_ALL_ICON = "/assets/ui/hero-all.png";
+const ENCYCLOPEDIA_ELEMENTS = [
+  { id: "ALL", label: "ALL", icon: ENCYCLOPEDIA_ALL_ICON },
+  { id: "Fire", label: "火", icon: "/assets/attributes/fire.png" },
+  { id: "Ice", label: "水", icon: "/assets/attributes/water.png" },
+  { id: "Earth", label: "木", icon: "/assets/attributes/wood.png" },
+  { id: "Light", label: "光", icon: "/assets/attributes/light.png" },
+  { id: "Dark", label: "暗", icon: "/assets/attributes/dark.png" },
+];
+const ENCYCLOPEDIA_JOBS = [
+  { id: "ALL", label: "ALL", icon: ENCYCLOPEDIA_ALL_ICON },
+  { id: "Warrior", label: "战士", icon: "/assets/jobs/Warrior.png" },
+  { id: "Caster", label: "术师", icon: "/assets/jobs/Caster.png" },
+  { id: "Sniper", label: "狙击", icon: "/assets/jobs/Sniper.png" },
+  { id: "Vanguard", label: "先锋", icon: "/assets/jobs/Vanguard.png" },
+  { id: "Defender", label: "重装", icon: "/assets/jobs/Defender.png" },
+  { id: "Medic", label: "医疗", icon: "/assets/jobs/Medic.png" },
+];
+const ENCYCLOPEDIA_STARS = [
+  { id: "ALL", label: "ALL", icon: ENCYCLOPEDIA_ALL_ICON },
+  { id: "5", label: "5星" },
+  { id: "4", label: "4星" },
+  { id: "3", label: "3星" },
+  { id: "2", label: "2星" },
+];
+const ENCYCLOPEDIA_STATE = {
+  index: null,
+  ui: null,
+  resourceConfig: null,
+  details: new Map(),
+  filters: { element: "ALL", job: "ALL", star: "ALL", statuses: [] },
+  statusDraft: null,
+  statusReturnFocus: null,
+  statusContext: null,
+  mode: "static",
+  initialized: false,
+  loading: false,
+  activeId: null,
+  detailGeneration: 0,
+  savingImage: false,
+  archiveView: {
+    zoomFactor: 1,
+    scale: 1,
+    fitScale: 1,
+    panX: 0,
+    panY: 0,
+    viewport: null,
+    stage: null,
+    abortController: null,
+    resizeObserver: null,
+    dragging: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startPanX: 0,
+    startPanY: 0,
+    moved: false,
+    suppressClickUntil: 0,
+  },
+};
+const ENCYCLOPEDIA_INDEX_URL = "/assets/encyclopedia/index.json";
+const ENCYCLOPEDIA_UI_URL = "/assets/encyclopedia/ui.json";
+let encyclopediaIndexPending = null;
+
+function encyclopediaEscape(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[character]));
+}
+
+function encyclopediaJoinUrl(base, path) {
+  if (!path) return "";
+  const raw = String(path);
+  if (/^(?:https?:)?\/\//i.test(raw) || raw.startsWith("/")) return raw;
+  if (!base) return "";
+  try {
+    const result = new URL(raw.replace(/^\/+/, ""), String(base).replace(/\/?$/, "/"));
+    return ["http:", "https:"].includes(result.protocol) ? result.href : "";
+  } catch { return ""; }
+}
+
+function encyclopediaConfigUrl(path, fallback = "") {
+  const config = ENCYCLOPEDIA_STATE.resourceConfig || {};
+  if (!path) return fallback;
+  const raw = String(path);
+  if (/^(?:https?:)?\/\//i.test(raw) || raw.startsWith("/")) {
+    try {
+      const result = new URL(raw, location.href);
+      return ["http:", "https:"].includes(result.protocol) ? result.href : fallback;
+    } catch { return fallback; }
+  }
+  return encyclopediaJoinUrl(config.baseUrl || "", raw) || fallback;
+}
+
+function encyclopediaCacheName(url = "") {
+  if (/\/objects\/[a-f0-9]{64}\.(png|jpg|jpeg|webp|skel|atlas|js)$/.test(new URL(url || location.href, location.href).pathname)) {
+    return "lucima-encyclopedia-objects-v1";
+  }
+  const version = String(ENCYCLOPEDIA_STATE.resourceConfig?.version || "local").replace(/[^a-z0-9._-]/gi, "_");
+  return `lucima-encyclopedia-resources-${version}`;
+}
+
+const encyclopediaPendingRequests = new Map();
+async function encyclopediaFetch(url) {
+  if (!url) throw new Error("图鉴资源地址为空");
+  let cache = null;
+  try {
+    if (typeof caches !== "undefined") {
+      cache = await caches.open(encyclopediaCacheName(url));
+      const cached = await cache.match(url);
+      if (cached) return cached;
+    }
+  } catch { /* Cache Storage can be unavailable in embedded browsers. */ }
+  if (!encyclopediaPendingRequests.has(url)) {
+    const pending = (async () => {
+      const objectHash = new URL(url, location.href).pathname.match(/\/objects\/([a-f0-9]{64})\.(?:png|jpg|jpeg|webp|skel|atlas|js)$/)?.[1];
+      const response = await fetch(url, { cache: objectHash ? "default" : "no-store", credentials: "omit" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (objectHash) {
+        const digest = await crypto.subtle.digest("SHA-256", await response.clone().arrayBuffer());
+        const actual = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+        if (actual !== objectHash) throw new Error("图鉴资源校验失败");
+      }
+      try { await cache?.put(url, response.clone()); } catch { /* Still display the download. */ }
+      return response;
+    })();
+    encyclopediaPendingRequests.set(url, pending);
+  }
+  try {
+    return (await encyclopediaPendingRequests.get(url)).clone();
+  } finally {
+    encyclopediaPendingRequests.delete(url);
+  }
+}
+window.fetchEncyclopediaResource = encyclopediaFetch;
+
+async function encyclopediaJson(url) {
+  const parsed = new URL(url, location.href);
+  const isBundledDetail = parsed.origin === location.origin
+    && parsed.pathname.startsWith("/assets/encyclopedia/");
+  const response = isBundledDetail
+    ? await fetch(parsed.href, { cache: "no-store" })
+    : await encyclopediaFetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+let encyclopediaRuntimePromise = null;
+async function ensureEncyclopediaSpineRuntime() {
+  if (window.spine) return window.spine;
+  if (encyclopediaRuntimePromise) return encyclopediaRuntimePromise;
+  const runtimeUrl = ENCYCLOPEDIA_STATE.resourceConfig?.spineRuntimeUrl;
+  if (!runtimeUrl) throw new Error("未配置 Spine 运行时");
+  encyclopediaRuntimePromise = (async () => {
+    const config = ENCYCLOPEDIA_STATE.resourceConfig;
+    const resolved = window.LucimaEncyclopediaMedia.resourceUrl(config, runtimeUrl);
+    if (!resolved) throw new Error("Spine 运行库未列入资源清单");
+    const response = await encyclopediaFetch(resolved);
+    const code = await response.text();
+    const script = document.createElement("script");
+    script.textContent = `${code}\n//# sourceURL=${encyclopediaConfigUrl(runtimeUrl)}`;
+    document.head.appendChild(script);
+    if (!window.spine) throw new Error("Spine 运行时初始化失败");
+    return window.spine;
+  })();
+  try {
+    return await encyclopediaRuntimePromise;
+  } catch (error) {
+    encyclopediaRuntimePromise = null;
+    throw error;
+  }
+}
+
+async function loadEncyclopediaResourceConfig() {
+  if (ENCYCLOPEDIA_STATE.resourceConfig) return ENCYCLOPEDIA_STATE.resourceConfig;
+  if (ENCYCLOPEDIA_STATE.resourceConfigPromise) return ENCYCLOPEDIA_STATE.resourceConfigPromise;
+  ENCYCLOPEDIA_STATE.resourceConfigPromise = readEncyclopediaResourceConfig();
+  return ENCYCLOPEDIA_STATE.resourceConfigPromise;
+}
+
+async function readEncyclopediaResourceConfig() {
+  let config = {};
+  try {
+    config = await api("/api/encyclopedia/resources");
+  } catch (error) {
+    console.warn("读取图鉴资源配置失败：", error);
+  }
+  if (config.manifestUrl) {
+    let cache = null;
+    const resolveManifest = async (response) => {
+      if (!response?.ok) throw new Error("图鉴资源清单不可用");
+      const manifest = await response.json();
+      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
+          || typeof manifest.version !== "string" || !manifest.version.trim()
+          || (manifest.baseUrl !== undefined && typeof manifest.baseUrl !== "string")) {
+        throw new Error("图鉴资源清单格式无效");
+      }
+      if (manifest.schema !== undefined && ![1, 2].includes(manifest.schema)) {
+        throw new Error("不支持的图鉴资源清单版本");
+      }
+      if (manifest.schema === 2) {
+        const files = manifest.files;
+        if (!files || typeof files !== "object" || Array.isArray(files) || !Object.keys(files).length
+            || Object.entries(files).some(([path, file]) =>
+              path.startsWith("/") || /[\\:%?#\u0000-\u001f]/.test(path)
+              || path.split("/").some((part) => !part || part === "." || part === "..")
+              || !/\.(png|jpg|jpeg|webp|skel|atlas|js)$/i.test(path)
+              || !file || typeof file !== "object" || !/^[a-f0-9]{64}$/.test(file.sha256)
+              || !Number.isSafeInteger(file.size) || file.size <= 0)) {
+          throw new Error("图鉴资源文件表无效");
+        }
+      }
+      const baseUrl = new URL(manifest.baseUrl || ".", config.manifestUrl);
+      if (!["http:", "https:"].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
+        throw new Error("图鉴资源地址无效");
+      }
+      return { ...config, ...manifest, baseUrl: baseUrl.href };
+    };
+    try {
+      try { cache = await caches.open("lucima-encyclopedia-config"); } catch { /* Optional cache. */ }
+      try {
+        const response = await fetch(config.manifestUrl, {
+          cache: "no-cache", credentials: "omit",
+          ...(typeof AbortSignal.timeout === "function" ? { signal: AbortSignal.timeout(10000) } : {}),
+        });
+        const copy = response.clone();
+        const resolved = await resolveManifest(response);
+        try { await cache?.put(config.manifestUrl, copy); } catch { /* Optional cache. */ }
+        config = resolved;
+      } catch (error) {
+        const response = await cache?.match(config.manifestUrl);
+        if (!response) throw error;
+        config = await resolveManifest(response);
+      }
+    } catch {
+      // A missing manifest leaves the complete text card available.
+      config = {};
+    }
+  }
+  ENCYCLOPEDIA_STATE.resourceConfig = config;
+  return config;
+}
+
+function encyclopediaLocalIndexUrl() {
+  return new URL(ENCYCLOPEDIA_INDEX_URL, location.href).href;
+}
+
+async function loadEncyclopediaIndex({ resources = true } = {}) {
+  if (resources) void loadEncyclopediaResourceConfig();
+  if (ENCYCLOPEDIA_STATE.index && ENCYCLOPEDIA_STATE.ui) return ENCYCLOPEDIA_STATE.index;
+  if (!encyclopediaIndexPending) {
+    encyclopediaIndexPending = (async () => {
+      if (!ENCYCLOPEDIA_STATE.ui) {
+        ENCYCLOPEDIA_STATE.ui = await encyclopediaJson(new URL(ENCYCLOPEDIA_UI_URL, location.origin).href);
+      }
+      const payload = await encyclopediaJson(encyclopediaLocalIndexUrl());
+      const characters = Array.isArray(payload) ? payload : payload?.characters;
+      if (!Array.isArray(characters)) throw new Error("图鉴索引格式无效");
+      ENCYCLOPEDIA_STATE.index = characters.map((entry) => ({
+        ...entry,
+        id: String(entry.id || ""),
+        number: Number(entry.number) || Number(String(entry.id || "").slice(1)) || 9999,
+        statuses: Array.isArray(entry.statuses) ? entry.statuses : [],
+      })).filter((entry) => entry.id).sort((left, right) => left.number - right.number || left.id.localeCompare(right.id));
+      return ENCYCLOPEDIA_STATE.index;
+    })().finally(() => { encyclopediaIndexPending = null; });
+  }
+  return encyclopediaIndexPending;
+}
+
+function characterMatchesFilters(entry, filters) {
+  return (filters.element === "ALL" || entry.element === filters.element)
+    && (filters.job === "ALL" || entry.job === filters.job)
+    && (!filters.star || filters.star === "ALL" || Number(entry.star) === Number(filters.star))
+    && (!filters.statuses.length || (entry.statuses || []).some((id) => filters.statuses.includes(id)));
+}
+
+function characterStatusIconsHTML(statuses) {
+  const options = encyclopediaStatusOptions();
+  const names = new Map([...options.buff, ...options.debuff].map((option) => [option.id, option.name]));
+  return statuses.map((id) => {
+    const icon = ENCYCLOPEDIA_STATE.ui?.status_icons?.[id];
+    if (!icon) return "";
+    const name = names.get(id) || id;
+    return `<span class="encyclopedia-status-selected-icon" role="listitem" data-encyclopedia-selected-status="${encyclopediaEscape(id)}" title="${encyclopediaEscape(name)}"><img src="${encyclopediaEscape(icon)}" alt="${encyclopediaEscape(name)}"></span>`;
+  }).join("");
+}
+
+function encyclopediaFilterButtonHTML(option, type, active, scope = "encyclopedia") {
+  const themeIconClass = type === "job" || option.id === "ALL" ? " task-icon-light-invert" : "";
+  const content = type === "star" && option.id !== "ALL"
+    ? `<span class="encyclopedia-filter-rating" aria-hidden="true"><span>${encyclopediaEscape(option.id)}</span><svg><use href="#ui-star"></use></svg></span>`
+    : `<img class="encyclopedia-filter-icon${themeIconClass}" src="${encyclopediaEscape(option.icon)}" alt="">`;
+  return `<button type="button" class="encyclopedia-filter-option ${active ? "active" : ""} ${option.id === "ALL" ? "is-all" : ""}" data-${scope}-filter="${type}" data-value="${encyclopediaEscape(option.id)}" aria-label="${encyclopediaEscape(option.label)}" title="${encyclopediaEscape(option.label)}" aria-pressed="${active}">
+    ${content}
+  </button>`;
+}
+
+function renderEncyclopediaFilters() {
+  const elementHost = $("encyclopediaElementFilters");
+  const jobHost = $("encyclopediaJobFilters");
+  const starHost = $("encyclopediaStarFilters");
+  if (elementHost) elementHost.innerHTML = ENCYCLOPEDIA_ELEMENTS.map((option) => encyclopediaFilterButtonHTML(option, "element", ENCYCLOPEDIA_STATE.filters.element === option.id)).join("");
+  if (jobHost) jobHost.innerHTML = ENCYCLOPEDIA_JOBS.map((option) => encyclopediaFilterButtonHTML(option, "job", ENCYCLOPEDIA_STATE.filters.job === option.id)).join("");
+  if (starHost) starHost.innerHTML = ENCYCLOPEDIA_STARS.map((option) => encyclopediaFilterButtonHTML(option, "star", ENCYCLOPEDIA_STATE.filters.star === option.id)).join("");
+  updateEncyclopediaStatusFilterButton();
+}
+
+function encyclopediaStatusOptions() {
+  const options = ENCYCLOPEDIA_STATE.ui?.status_filters || {};
+  return {
+    buff: Array.isArray(options.buff) ? options.buff : [],
+    debuff: Array.isArray(options.debuff) ? options.debuff : [],
+  };
+}
+
+function updateEncyclopediaStatusFilterButton() {
+  const button = $("encyclopediaStatusFilterButton");
+  if (!button) return;
+  const options = encyclopediaStatusOptions();
+  const count = ENCYCLOPEDIA_STATE.filters.statuses.length;
+  button.disabled = !ENCYCLOPEDIA_STATE.index || !(options.buff.length + options.debuff.length);
+  button.classList.toggle("active", count > 0);
+  button.setAttribute("aria-label", count ? `状态筛选，已选 ${count} 种状态` : "选择状态，不限状态");
+  const icons = $("encyclopediaStatusSelectedIcons");
+  if (icons) icons.innerHTML = characterStatusIconsHTML(ENCYCLOPEDIA_STATE.filters.statuses);
+}
+
+function renderEncyclopediaStatusOptions() {
+  const options = encyclopediaStatusOptions();
+  const draft = ENCYCLOPEDIA_STATE.statusDraft;
+  for (const [tone, hostId] of [["buff", "encyclopediaStatusBuffOptions"], ["debuff", "encyclopediaStatusDebuffOptions"]]) {
+    const host = $(hostId);
+    if (!host) continue;
+    host.innerHTML = options[tone].map((option) => {
+      const checked = draft?.has(option.id) || false;
+      const icon = ENCYCLOPEDIA_STATE.ui?.status_icons?.[option.id];
+      return `<button type="button" class="encyclopedia-status-option${checked ? " selected" : ""}" data-encyclopedia-status="${encyclopediaEscape(option.id)}" title="${encyclopediaEscape(option.name)}" aria-label="${encyclopediaEscape(option.name)}" aria-pressed="${checked}">
+        <img src="${encyclopediaEscape(icon || "")}" alt="">
+      </button>`;
+    }).join("");
+  }
+  updateEncyclopediaStatusSelection();
+}
+
+function updateEncyclopediaStatusSelection() {
+  const count = ENCYCLOPEDIA_STATE.statusDraft?.size || 0;
+  const output = $("encyclopediaStatusSelectionCount");
+  if (output) output.textContent = `已选 ${count} 种状态`;
+  const clear = $("encyclopediaStatusClear");
+  if (clear) clear.disabled = count === 0;
+}
+
+function openEncyclopediaStatusFilter() {
+  const button = $("encyclopediaStatusFilterButton");
+  if (!button || button.disabled) return;
+  openCharacterStatusFilter({ trigger: button, statuses: ENCYCLOPEDIA_STATE.filters.statuses, onApply: (statuses) => {
+    ENCYCLOPEDIA_STATE.filters.statuses = statuses;
+    updateEncyclopediaStatusFilterButton();
+    renderEncyclopediaGrid();
+  } });
+}
+
+function openCharacterStatusFilter(context) {
+  const modal = $("encyclopediaStatusModal");
+  if (!modal) return;
+  bindCharacterStatusFilter();
+  ENCYCLOPEDIA_STATE.statusContext = context;
+  ENCYCLOPEDIA_STATE.statusDraft = new Set(context.statuses);
+  ENCYCLOPEDIA_STATE.statusReturnFocus = context.trigger || document.activeElement;
+  renderEncyclopediaStatusOptions();
+  modal.classList.toggle("abyss-status-modal", !!context.trigger?.closest("#abyssRolePicker"));
+  modal.classList.remove("hidden");
+  context.trigger?.setAttribute("aria-expanded", "true");
+  modal.querySelector(".encyclopedia-status-body").scrollTop = 0;
+  modal.querySelector(".scheme-import-close")?.focus();
+}
+
+function closeEncyclopediaStatusFilter(restoreFocus = true) {
+  const modal = $("encyclopediaStatusModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  modal.classList.add("hidden");
+  modal.classList.remove("abyss-status-modal");
+  ENCYCLOPEDIA_STATE.statusContext?.trigger?.setAttribute("aria-expanded", "false");
+  ENCYCLOPEDIA_STATE.statusContext = null;
+  ENCYCLOPEDIA_STATE.statusDraft = null;
+  const returnFocus = ENCYCLOPEDIA_STATE.statusReturnFocus;
+  ENCYCLOPEDIA_STATE.statusReturnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+}
+
+function applyEncyclopediaStatusFilter() {
+  if (!ENCYCLOPEDIA_STATE.statusDraft) return;
+  const statuses = [...ENCYCLOPEDIA_STATE.statusDraft], context = ENCYCLOPEDIA_STATE.statusContext;
+  closeEncyclopediaStatusFilter();
+  context?.onApply(statuses);
+}
+
+function encyclopediaFilteredIndex() {
+  return (ENCYCLOPEDIA_STATE.index || []).filter((entry) => characterMatchesFilters(entry, ENCYCLOPEDIA_STATE.filters));
+}
+
+function renderEncyclopediaGrid() {
+  const grid = $("encyclopediaGrid");
+  const empty = $("encyclopediaEmpty");
+  if (!grid) return;
+  const entries = encyclopediaFilteredIndex();
+  grid.innerHTML = entries.map((entry) => `<button class="encyclopedia-preview" type="button" data-encyclopedia-character="${encyclopediaEscape(entry.id)}" aria-label="查看 ${encyclopediaEscape(entry.name || entry.id)} 图鉴">
+    <span class="encyclopedia-preview-avatar"><img src="${encyclopediaEscape(entry.avatar || "/assets/ui/hero-all.png")}" alt="" loading="lazy"></span>
+    <span class="encyclopedia-preview-name">${encyclopediaEscape(entry.name || entry.id)}</span>
+  </button>`).join("");
+  empty?.classList.toggle("hidden", entries.length > 0);
+  const count = $("encyclopediaResultCount");
+  if (count) count.textContent = String(entries.length);
+  const total = $("encyclopediaTotalCount");
+  if (total) total.textContent = String((ENCYCLOPEDIA_STATE.index || []).length);
+}
+
+function setEncyclopediaMode(mode, rerender = true) {
+  ENCYCLOPEDIA_STATE.mode = mode === "dynamic" ? "dynamic" : "static";
+  frontendStorageSet("encyclopedia_portrait_mode", ENCYCLOPEDIA_STATE.mode);
+  document.querySelectorAll("[data-encyclopedia-mode]").forEach((button) => {
+    const active = button.dataset.encyclopediaMode === ENCYCLOPEDIA_STATE.mode;
+    button.setAttribute("aria-pressed", String(active));
+  });
+  if (rerender && ENCYCLOPEDIA_STATE.activeId && !$("encyclopediaDetailPage")?.classList.contains("hidden")) {
+    $("encyclopediaCard").dataset.portraitMode = ENCYCLOPEDIA_STATE.mode;
+    encyclopediaArchiveViewState().renderer?.setStaticMode(ENCYCLOPEDIA_STATE.mode === "static");
+    void encyclopediaArchiveViewState().media?.setMode(ENCYCLOPEDIA_STATE.mode);
+  }
+}
+
+function encyclopediaDetailUrl(entry) {
+  return new URL(`/assets/encyclopedia/${entry.detail || `characters/${entry.id}.json`}`, location.origin).href;
+}
+
+async function loadEncyclopediaDetail(entry) {
+  if (ENCYCLOPEDIA_STATE.details.has(entry.id)) return ENCYCLOPEDIA_STATE.details.get(entry.id);
+  const detail = await encyclopediaJson(encyclopediaDetailUrl(entry));
+  ENCYCLOPEDIA_STATE.details.set(entry.id, detail);
+  return detail;
+}
+
+function encyclopediaArchiveViewState() {
+  return ENCYCLOPEDIA_STATE.archiveView;
+}
+
+function disposeEncyclopediaArchiveViewport() {
+  const view = encyclopediaArchiveViewState();
+  view.media?.dispose?.();
+  view.media = null;
+  view.renderer?.dispose?.();
+  view.abortController?.abort?.();
+  view.resizeObserver?.disconnect?.();
+  view.stopGestures?.();
+  view.stopGestures = null;
+  view.viewport?.classList.remove("is-dragging");
+  view.viewport = null;
+  view.stage = null;
+  view.shell = null;
+  view.scaleNode = null;
+  view.card = null;
+  view.renderer = null;
+  view.abortController = null;
+  view.resizeObserver = null;
+  view.dragging = false;
+  view.pointerId = null;
+}
+
+function encyclopediaArchiveClamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function updateEncyclopediaZoomControls() {
+  const view = encyclopediaArchiveViewState();
+  const label = $("encyclopediaZoomValue");
+  if (label) label.textContent = `${Math.round((view.scale || view.fitScale || 1) * 100)}%`;
+  document.querySelectorAll("[data-encyclopedia-zoom]").forEach((button) => {
+    const action = button.dataset.encyclopediaZoom;
+    if (action === "out") button.disabled = (view.zoomFactor || 1) <= 0.8 + 0.001;
+    if (action === "in") button.disabled = (view.zoomFactor || 1) >= 3 - 0.001;
+  });
+}
+
+function positionEncyclopediaArchiveViewport(preserveAnchor = false, anchor = null) {
+  const view = encyclopediaArchiveViewState();
+  const { viewport, stage, shell, scaleNode, card } = view;
+  if (!viewport || !stage || !shell || !scaleNode || !card) return;
+  const oldStageWidth = stage.offsetWidth || viewport.clientWidth;
+  const oldStageHeight = stage.offsetHeight || viewport.clientHeight;
+  const oldCenterX = viewport.scrollLeft + viewport.clientWidth / 2;
+  const oldCenterY = viewport.scrollTop + viewport.clientHeight / 2;
+  const oldAnchorX = preserveAnchor && oldStageWidth > viewport.clientWidth
+    ? oldCenterX / oldStageWidth : 0.5;
+  const oldAnchorY = preserveAnchor && oldStageHeight > viewport.clientHeight
+    ? oldCenterY / oldStageHeight : 0;
+
+  const naturalHeight = Math.max(1200, card.offsetHeight || 0, card.scrollHeight || 0);
+  const availableWidth = Math.max(1, viewport.clientWidth);
+  const fitScale = Math.min(1, availableWidth / 1000);
+  const zoomFactor = encyclopediaArchiveClamp(Number(view.zoomFactor) || 1, 0.8, 3);
+  const scale = fitScale * zoomFactor;
+  const scaledWidth = Math.max(1, Math.round(1000 * scale));
+  const scaledHeight = Math.max(1, Math.round(naturalHeight * scale));
+  view.fitScale = fitScale;
+  view.scale = scale;
+  view.zoomFactor = zoomFactor;
+
+  scaleNode.style.width = "1000px";
+  scaleNode.style.height = `${naturalHeight}px`;
+  scaleNode.style.setProperty("--archive-scale", String(scale));
+  scaleNode.style.setProperty("--archive-card-height", `${naturalHeight}px`);
+  shell.style.width = `${scaledWidth}px`;
+  shell.style.height = `${scaledHeight}px`;
+  shell.style.setProperty("--archive-scaled-width", `${scaledWidth}px`);
+  shell.style.setProperty("--archive-scaled-height", `${scaledHeight}px`);
+  stage.style.width = `${Math.max(viewport.clientWidth, scaledWidth)}px`;
+  stage.style.height = `${Math.max(viewport.clientHeight, scaledHeight)}px`;
+
+  const maxScrollX = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+  const maxScrollY = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  const rect = anchor ? card.getBoundingClientRect() : null;
+  const nextX = anchor ? viewport.scrollLeft + rect.left + anchor.x * scale - anchor.clientX
+    : preserveAnchor ? oldAnchorX * stage.offsetWidth - viewport.clientWidth / 2 : maxScrollX / 2;
+  const nextY = anchor ? viewport.scrollTop + rect.top + anchor.y * scale - anchor.clientY
+    : preserveAnchor ? oldAnchorY * stage.offsetHeight - viewport.clientHeight / 2 : 0;
+  viewport.scrollLeft = encyclopediaArchiveClamp(nextX, 0, maxScrollX);
+  viewport.scrollTop = encyclopediaArchiveClamp(nextY, 0, maxScrollY);
+  updateEncyclopediaZoomControls();
+}
+
+function initEncyclopediaArchiveViewport(viewport) {
+  if (!viewport) return;
+  disposeEncyclopediaArchiveViewport();
+  const stage = viewport.querySelector(".encyclopedia-archive-stage");
+  const shell = viewport.querySelector(".encyclopedia-archive-shell");
+  const scaleNode = viewport.querySelector(".encyclopedia-archive-scale");
+  const card = viewport.querySelector(".archive-card");
+  if (!stage || !shell || !scaleNode || !card) return;
+  const view = encyclopediaArchiveViewState();
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const options = controller ? { signal: controller.signal } : undefined;
+  view.viewport = viewport;
+  view.stage = stage;
+  view.shell = shell;
+  view.scaleNode = scaleNode;
+  view.card = card;
+  view.abortController = controller;
+  view.dragging = false;
+  view.moved = false;
+  view.suppressClickUntil = 0;
+
+  const pointers = new Map();
+  let pinch = null;
+  let gestureFrame = 0;
+  const pairPosition = () => {
+    const [first, second] = [...pointers.values()];
+    return { clientX: (first.x + second.x) / 2, clientY: (first.y + second.y) / 2,
+      distance: Math.hypot(first.x - second.x, first.y - second.y) };
+  };
+  const capturePointer = (id) => viewport.setPointerCapture?.(id);
+  const releasePointer = (id) => {
+    if (viewport.hasPointerCapture?.(id)) viewport.releasePointerCapture(id);
+  };
+  const rebaseGesture = () => {
+    pinch = null;
+    view.dragging = false;
+    view.pointerId = null;
+    if (pointers.size >= 2) {
+      const pair = pairPosition();
+      const rect = card.getBoundingClientRect();
+      pinch = { distance: Math.max(1, pair.distance), zoomFactor: view.zoomFactor,
+        x: (pair.clientX - rect.left) / view.scale, y: (pair.clientY - rect.top) / view.scale };
+      view.dragging = true;
+      view.moved = true;
+      for (const id of pointers.keys()) capturePointer(id);
+    } else if (pointers.size === 1) {
+      const [id, point] = [...pointers][0];
+      if (!point.interactive || view.moved) {
+        view.dragging = true;
+        view.pointerId = id;
+        view.startX = point.x;
+        view.startY = point.y;
+        view.startPanX = viewport.scrollLeft;
+        view.startPanY = viewport.scrollTop;
+        capturePointer(id);
+      }
+    }
+    viewport.classList.toggle("is-dragging", view.dragging);
+  };
+  const applyGesture = () => {
+    gestureFrame = 0;
+    if (view.viewport !== viewport) return;
+    if (pinch) {
+      const pair = pairPosition();
+      view.zoomFactor = encyclopediaArchiveClamp(pinch.zoomFactor * pair.distance / pinch.distance, 0.8, 3);
+      positionEncyclopediaArchiveViewport(false, { ...pinch, ...pair });
+    } else if (view.dragging && view.moved) {
+      const point = pointers.get(view.pointerId);
+      viewport.scrollLeft = view.startPanX - (point.x - view.startX);
+      viewport.scrollTop = view.startPanY - (point.y - view.startY);
+    }
+  };
+  const flushGesture = () => {
+    if (!gestureFrame) return;
+    cancelAnimationFrame(gestureFrame);
+    applyGesture();
+  };
+  const stopGestures = () => {
+    if (gestureFrame) cancelAnimationFrame(gestureFrame);
+    gestureFrame = 0;
+    const ids = [...pointers.keys()];
+    pointers.clear();
+    pinch = null;
+    view.dragging = false;
+    view.pointerId = null;
+    viewport.classList.remove("is-dragging");
+    for (const id of ids) releasePointer(id);
+  };
+  view.stopGestures = stopGestures;
+
+  const onPointerDown = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if ([...pointers.values()].some((point) => point.type !== event.pointerType)
+        || (pointers.size && event.pointerType !== "touch")) return;
+    const interactive = Boolean(event.target.closest?.("summary,button,a,input,select,textarea"));
+    // A control tap stays native; a second finger can still start a pinch there.
+    if (interactive && event.pointerType !== "touch") return;
+    flushGesture();
+    if (!pointers.size) view.moved = false;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType, interactive });
+    rebaseGesture();
+    if (pinch) event.preventDefault();
+  };
+  const onPointerMove = (event) => {
+    const point = pointers.get(event.pointerId);
+    if (!point) return;
+    point.x = event.clientX;
+    point.y = event.clientY;
+    if (!view.dragging) return;
+    const deltaX = event.clientX - view.startX;
+    const deltaY = event.clientY - view.startY;
+    if (pinch || Math.hypot(deltaX, deltaY) > 4) view.moved = true;
+    if (!view.moved) return;
+    event.preventDefault();
+    if (!gestureFrame) gestureFrame = requestAnimationFrame(applyGesture);
+  };
+  const onPointerUp = (event) => {
+    if (!pointers.has(event.pointerId)) return;
+    flushGesture();
+    pointers.delete(event.pointerId);
+    if (view.moved) view.suppressClickUntil = performance.now() + (event.pointerType === "touch" ? 300 : 80);
+    rebaseGesture();
+    releasePointer(event.pointerId);
+  };
+  const onClick = (event) => {
+    if (view.suppressClickUntil && performance.now() < view.suppressClickUntil) {
+      event.preventDefault();
+      event.stopPropagation();
+      view.suppressClickUntil = 0;
+    }
+  };
+  viewport.addEventListener("pointerdown", onPointerDown, options);
+  viewport.addEventListener("pointermove", onPointerMove, options);
+  window.addEventListener("pointerup", onPointerUp, options);
+  window.addEventListener("pointercancel", onPointerUp, options);
+  viewport.addEventListener("lostpointercapture", onPointerUp, options);
+  viewport.addEventListener("click", onClick, { ...options, capture: true });
+  window.addEventListener("blur", stopGestures, options);
+  const resize = () => positionEncyclopediaArchiveViewport(true, pinch ? { ...pinch, ...pairPosition() } : null);
+  window.addEventListener("resize", resize, options);
+  if (typeof ResizeObserver === "function") {
+    view.resizeObserver = new ResizeObserver(resize);
+    view.resizeObserver.observe(viewport);
+    view.resizeObserver.observe(card);
+  }
+  positionEncyclopediaArchiveViewport(false);
+}
+
+function setEncyclopediaZoom(action) {
+  const view = encyclopediaArchiveViewState();
+  if (!view.viewport) return;
+  view.stopGestures?.();
+  if (action === "reset") view.zoomFactor = 1;
+  else if (action === "in") view.zoomFactor = encyclopediaArchiveClamp((view.zoomFactor || 1) * 1.15, 0.8, 3);
+  else if (action === "out") view.zoomFactor = encyclopediaArchiveClamp((view.zoomFactor || 1) / 1.15, 0.8, 3);
+  positionEncyclopediaArchiveViewport(true);
+}
+
+function renderEncyclopediaCard(entry, detail) {
+  const card = $("encyclopediaCard");
+  const body = $("encyclopediaCardBody");
+  if (!card || !body) return;
+  disposeEncyclopediaArchiveViewport();
+  card.dataset.portraitMode = ENCYCLOPEDIA_STATE.mode;
+  $("encyclopediaCardId").textContent = entry.id;
+  $("encyclopediaCardTitle").textContent = detail.NAME || entry.name || entry.id;
+  $("encyclopediaCardNameEn").textContent = detail.NAME_EN || entry.nameEn || "";
+  body.innerHTML = `<div class="encyclopedia-archive-viewport"><div class="encyclopedia-archive-stage"><div class="encyclopedia-archive-shell"><div class="encyclopedia-archive-scale"></div></div></div></div>`;
+  const renderer = window.LucimaEncyclopediaCard.mount({
+    host: body.querySelector(".encyclopedia-archive-scale"),
+    data: detail,
+    translations: ENCYCLOPEDIA_STATE.ui || {},
+    staticMode: ENCYCLOPEDIA_STATE.mode === "static",
+  });
+  initEncyclopediaArchiveViewport(body.querySelector(".encyclopedia-archive-viewport"));
+  encyclopediaArchiveViewState().renderer = renderer;
+  updateEncyclopediaSaveButton();
+  void loadEncyclopediaResourceConfig().then((config) => {
+    const view = encyclopediaArchiveViewState();
+    if (view.renderer !== renderer) return;
+    view.media = window.LucimaEncyclopediaMedia.mount({
+      renderer, entry, data: detail, config,
+      fetchResource: encyclopediaFetch, loadRuntime: ensureEncyclopediaSpineRuntime,
+    });
+    void view.media.setMode(ENCYCLOPEDIA_STATE.mode);
+  });
+}
+
+async function openEncyclopediaCard(id) {
+  const entry = ENCYCLOPEDIA_STATE.index?.find((item) => item.id === id);
+  const detailPage = $("encyclopediaDetailPage");
+  const listPage = $("encyclopediaPage");
+  const body = $("encyclopediaCardBody");
+  if (!entry || !detailPage || !body) return;
+  if (ENCYCLOPEDIA_STATE.activeId !== id) {
+    encyclopediaArchiveViewState().zoomFactor = 1;
+    encyclopediaArchiveViewState().scale = 1;
+  }
+  disposeEncyclopediaArchiveViewport();
+  const generation = ++ENCYCLOPEDIA_STATE.detailGeneration;
+  ENCYCLOPEDIA_STATE.activeId = id;
+  $("toolboxHome")?.classList.add("hidden");
+  listPage?.classList.add("hidden");
+  detailPage.classList.remove("hidden");
+  $("content")?.scrollTo({ top: 0, behavior: "auto" });
+  document.body.classList.add("encyclopedia-detail-open");
+  body.innerHTML = `<div class="encyclopedia-card-loading">加载 ${encyclopediaEscape(entry.name || entry.id)}…</div>`;
+  updateEncyclopediaSaveButton();
+  try {
+    const detail = await loadEncyclopediaDetail(entry);
+    if (ENCYCLOPEDIA_STATE.detailGeneration === generation && ENCYCLOPEDIA_STATE.activeId === id) renderEncyclopediaCard(entry, detail);
+  } catch (error) {
+    if (ENCYCLOPEDIA_STATE.detailGeneration === generation && ENCYCLOPEDIA_STATE.activeId === id) {
+      body.innerHTML = `<div class="encyclopedia-card-loading">图鉴卡片加载失败：${encyclopediaEscape(error.message || "未知错误")}</div>`;
+    }
+  }
+}
+
+function showEncyclopediaList() {
+  $("encyclopediaDetailPage")?.classList.add("hidden");
+  $("encyclopediaPage")?.classList.remove("hidden");
+}
+
+function closeEncyclopediaCard() {
+  ENCYCLOPEDIA_STATE.detailGeneration += 1;
+  ENCYCLOPEDIA_STATE.activeId = null;
+  showEncyclopediaList();
+  document.body.classList.remove("encyclopedia-detail-open");
+  disposeEncyclopediaArchiveViewport();
+  $("encyclopediaCardBody")?.replaceChildren();
+  updateEncyclopediaSaveButton();
+}
+
+function updateEncyclopediaSaveButton() {
+  const button = $("encyclopediaSaveImage");
+  if (!button) return;
+  button.disabled = ENCYCLOPEDIA_STATE.savingImage || !ENCYCLOPEDIA_STATE.activeId
+    || !$("encyclopediaCardBody")?.querySelector(".encyclopedia-ark2");
+  button.setAttribute("aria-busy", String(ENCYCLOPEDIA_STATE.savingImage));
+  button.querySelector("span").textContent = ENCYCLOPEDIA_STATE.savingImage ? "保存中…" : "保存图片";
+}
+
+async function saveEncyclopediaImageAndroid(filename, pngBase64) {
+  const bridge = window.LucimaFiles;
+  if (!bridge?.saveEncyclopediaImageStart || !bridge?.saveEncyclopediaImageChunk) {
+    throw new Error("当前 Android 版本不支持保存图鉴图片，请更新应用");
+  }
+  const read = (raw) => {
+    const result = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!result?.ok) throw new Error(result?.detail || "保存图鉴图片失败");
+    return result;
+  };
+  const started = read(bridge.saveEncyclopediaImageStart(filename));
+  let complete = false;
+  try {
+    const chunkSize = 512 * 1024;
+    for (let offset = 0; offset < pngBase64.length; offset += chunkSize) {
+      // Yield between synchronous native bridge calls so progress can repaint.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const finalChunk = offset + chunkSize >= pngBase64.length;
+      const result = read(bridge.saveEncyclopediaImageChunk(started.token, pngBase64.slice(offset, offset + chunkSize), finalChunk));
+      if (finalChunk) {
+        complete = true;
+        return result;
+      }
+    }
+    throw new Error("图鉴图片数据为空");
+  } finally {
+    if (!complete) {
+      try { bridge.saveEncyclopediaImageCancel?.(started.token); } catch { /* Native cleanup also runs on Activity destruction. */ }
+    }
+  }
+}
+
+async function saveEncyclopediaImage() {
+  if ($("encyclopediaSaveImage")?.disabled) return;
+  const entry = ENCYCLOPEDIA_STATE.index?.find((item) => item.id === ENCYCLOPEDIA_STATE.activeId);
+  if (!entry) return;
+  ENCYCLOPEDIA_STATE.savingImage = true;
+  updateEncyclopediaSaveButton();
+  try {
+    const [data, config] = await Promise.all([loadEncyclopediaDetail(entry), loadEncyclopediaResourceConfig()]);
+    const { pngBase64 } = await window.LucimaEncyclopediaExport.render({
+      entry, data, translations: ENCYCLOPEDIA_STATE.ui || {}, config, fetchResource: encyclopediaFetch,
+    });
+    const name = data.NAME || entry.name || entry.id;
+    const result = runtimePlatform === "android"
+      ? await saveEncyclopediaImageAndroid(`LucimaTools-encyclopedia-${entry.id}-${name}.png`, pngBase64)
+      : await api("/api/encyclopedia/save-image", { characterId: entry.id, name, pngBase64 });
+    if (!result?.ok) throw new Error(result?.detail || "保存图鉴图片失败");
+    showMessageToast(`图鉴图片已保存：${result.path}`, "ok", 5200);
+  } catch (error) {
+    showMessageToast(`保存图鉴图片失败：${error.message || "未知错误"}`, "err", 5200);
+  } finally {
+    ENCYCLOPEDIA_STATE.savingImage = false;
+    updateEncyclopediaSaveButton();
+  }
+}
+
+function bindCharacterStatusFilter() {
+  const modal = $("encyclopediaStatusModal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+  $("encyclopediaStatusModal")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-encyclopedia-status-apply]")) applyEncyclopediaStatusFilter();
+    else if (event.target.closest("[data-encyclopedia-status-close]")) closeEncyclopediaStatusFilter();
+    else {
+      const button = event.target.closest("[data-encyclopedia-status]");
+      const draft = ENCYCLOPEDIA_STATE.statusDraft;
+      if (!button || !draft) return;
+      const id = button.dataset.encyclopediaStatus;
+      const selected = !draft.has(id);
+      if (selected) draft.add(id);
+      else draft.delete(id);
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+      updateEncyclopediaStatusSelection();
+    }
+  });
+  $("encyclopediaStatusClear")?.addEventListener("click", () => {
+    ENCYCLOPEDIA_STATE.statusDraft?.clear();
+    $("encyclopediaStatusModal")?.querySelectorAll("[data-encyclopedia-status]").forEach((button) => {
+      button.setAttribute("aria-pressed", "false");
+      button.classList.remove("selected");
+    });
+    updateEncyclopediaStatusSelection();
+  });
+  $("encyclopediaStatusApply")?.addEventListener("click", applyEncyclopediaStatusFilter);
+  document.addEventListener("keydown", (event) => {
+    const modal = $("encyclopediaStatusModal");
+    if (modal && !modal.classList.contains("hidden")) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeEncyclopediaStatusFilter();
+      } else if (event.key === "Tab") {
+        const controls = [...modal.querySelector(".encyclopedia-status-dialog").querySelectorAll("button:not(:disabled), input:not(:disabled)")];
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if ((!event.shiftKey && document.activeElement === last) || !modal.contains(document.activeElement)) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+      return;
+    }
+  });
+}
+
+async function initEncyclopedia() {
+  if (ENCYCLOPEDIA_STATE.initialized) return;
+  ENCYCLOPEDIA_STATE.initialized = true;
+  ENCYCLOPEDIA_STATE.mode = frontendStorageGet("encyclopedia_portrait_mode") === "dynamic" ? "dynamic" : "static";
+  renderEncyclopediaFilters();
+  setEncyclopediaMode(ENCYCLOPEDIA_STATE.mode, false);
+  $("encyclopediaElementFilters")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-encyclopedia-filter]");
+    if (!button) return;
+    ENCYCLOPEDIA_STATE.filters.element = button.dataset.value || "ALL";
+    renderEncyclopediaFilters();
+    renderEncyclopediaGrid();
+  });
+  $("encyclopediaJobFilters")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-encyclopedia-filter]");
+    if (!button) return;
+    ENCYCLOPEDIA_STATE.filters.job = button.dataset.value || "ALL";
+    renderEncyclopediaFilters();
+    renderEncyclopediaGrid();
+  });
+  $("encyclopediaStarFilters")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-encyclopedia-filter]");
+    if (!button) return;
+    ENCYCLOPEDIA_STATE.filters.star = button.dataset.value || "ALL";
+    renderEncyclopediaFilters();
+    renderEncyclopediaGrid();
+  });
+  $("encyclopediaStatusFilterButton")?.addEventListener("click", openEncyclopediaStatusFilter);
+  bindCharacterStatusFilter();
+  $("encyclopediaGrid")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-encyclopedia-character]");
+    if (button) openEncyclopediaCard(button.dataset.encyclopediaCharacter);
+  });
+  document.querySelectorAll("[data-encyclopedia-zoom]").forEach((button) => button.addEventListener("click", () => setEncyclopediaZoom(button.dataset.encyclopediaZoom)));
+  document.querySelectorAll("[data-encyclopedia-mode]").forEach((button) => button.addEventListener("click", () => setEncyclopediaMode(button.dataset.encyclopediaMode)));
+  $("encyclopediaBack")?.addEventListener("click", showToolboxHome);
+  $("encyclopediaDetailBack")?.addEventListener("click", closeEncyclopediaCard);
+  $("encyclopediaCardClose")?.addEventListener("click", closeEncyclopediaCard);
+  $("encyclopediaSaveImage")?.addEventListener("click", saveEncyclopediaImage);
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented || !$("encyclopediaStatusModal")?.classList.contains("hidden")) return;
+    if (event.key === "Escape" && !$("encyclopediaDetailPage")?.classList.contains("hidden")) closeEncyclopediaCard();
+  });
+  try {
+    await loadEncyclopediaIndex();
+    updateEncyclopediaStatusFilterButton();
+    renderEncyclopediaGrid();
+  } catch (error) {
+    console.error("图鉴索引加载失败：", error);
+    const empty = $("encyclopediaEmpty");
+    if (empty) {
+      empty.textContent = "本地图鉴资料加载失败";
+      empty.classList.remove("hidden");
+    }
+  }
+}
+
+function showToolboxPage(tool) {
+  const pages = {
+    "equipment-filter": "equipmentFilterPage",
+    "background-limit-test": "backgroundLimitTestPage",
+    encyclopedia: "encyclopediaPage",
+  };
+  const page = $(pages[tool]);
+  if (!page) return;
+  if (tool !== "background-limit-test") stopBackgroundTestPolling();
+  $("toolboxHome")?.classList.add("hidden");
+  document.querySelectorAll("#section-toolbox .tool-page").forEach((entry) => entry.classList.add("hidden"));
+  page.classList.remove("hidden");
+  if (tool === "equipment-filter") renderEquipmentFilterWorkspace();
+  if (tool === "background-limit-test") enterBackgroundLimitTestPage();
+  if (tool === "encyclopedia") initEncyclopedia();
+}
+
+const BACKGROUND_TEST_POLL_MS = 1000;
+let backgroundLimitTestTimer = null;
+let backgroundLimitTestPollBusy = false;
+let backgroundTestRequestSerial = 0;
+let backgroundLimitTest = {
+  state: "idle",
+  startedAtMs: null,
+  stoppedAtMs: null,
+  capturedAtMs: null,
+  appElapsedMs: 0,
+  realElapsedMs: 0,
+  error: "",
+};
+
+function formatBackgroundDuration(value) {
+  const ms = Math.max(0, Number(value) || 0);
+  const totalTenths = Math.floor(ms / 100);
+  const tenths = totalTenths % 10;
+  const seconds = Math.floor(totalTenths / 10) % 60;
+  const minutes = Math.floor(totalTenths / 600) % 60;
+  const hours = Math.floor(totalTenths / 36000);
+  return String(hours).padStart(2, "0") + ":" + String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0") + "." + tenths;
+}
+
+function backgroundTestPageOpen() {
+  const section = $("section-toolbox");
+  return currentSection === "toolbox"
+    && !!section?.classList.contains("active")
+    && !$("backgroundLimitTestPage")?.classList.contains("hidden");
+}
+
+function backgroundTestTimestamp(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function backgroundTestDurations() {
+  let real = Math.max(0, Number(backgroundLimitTest.realElapsedMs) || 0);
+  const app = Math.max(0, Number(backgroundLimitTest.appElapsedMs) || 0);
+  if (backgroundLimitTest.state === "running" && Number.isFinite(Number(backgroundLimitTest.startedAtMs))) {
+    real = Math.max(real, Date.now() - Number(backgroundLimitTest.startedAtMs));
+  }
+  return { app, real };
+}
+
+function setBackgroundTestError(message = "") {
+  backgroundLimitTest.error = String(message || "");
+  const output = $("backgroundTestError");
+  if (output) output.textContent = backgroundLimitTest.error;
+}
+
+function applyBackgroundTestSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") throw new Error("后台计时响应格式无效");
+  const allowed = new Set(["idle", "running", "completed"]);
+  const state = allowed.has(snapshot.state) ? snapshot.state : "idle";
+  backgroundLimitTest = {
+    ...backgroundLimitTest,
+    state,
+    startedAtMs: backgroundTestTimestamp(snapshot.startedAtMs),
+    stoppedAtMs: backgroundTestTimestamp(snapshot.stoppedAtMs),
+    capturedAtMs: backgroundTestTimestamp(snapshot.capturedAtMs),
+    appElapsedMs: Math.max(0, Number(snapshot.appElapsedMs) || 0),
+    realElapsedMs: Math.max(0, Number(snapshot.realElapsedMs) || 0),
+  };
+  if (state !== "running") stopBackgroundTestPolling();
+  renderBackgroundLimitTest();
+}
+
+function renderBackgroundLimitTest() {
+  const running = backgroundLimitTest.state === "running";
+  const starting = backgroundLimitTest.state === "starting";
+  const stopping = backgroundLimitTest.state === "stopping";
+  const durations = backgroundTestDurations();
+  const status = $("backgroundTestStatus");
+  if (!status) return;
+  $("backgroundTestActive").textContent = formatBackgroundDuration(durations.app);
+  $("backgroundTestReal").textContent = formatBackgroundDuration(durations.real);
+  status.className = "background-test-status" + (running ? " running" : (backgroundLimitTest.state === "completed" ? " completed" : (backgroundLimitTest.error ? " error" : "")));
+  status.querySelector("span").textContent = starting ? "正在开始" : (stopping ? "正在停止" : (running ? "计时中" : (backgroundLimitTest.state === "completed" ? "已停止" : "未开始")));
+  $("backgroundTestStart").disabled = running || starting || stopping;
+  $("backgroundTestStart").textContent = backgroundLimitTest.state === "completed" ? "重新开始" : "开始";
+  $("backgroundTestStop").disabled = !running;
+  const error = $("backgroundTestError");
+  if (error) error.textContent = backgroundLimitTest.error || "";
+}
+
+function stopBackgroundTestPolling() {
+  if (backgroundLimitTestTimer != null) {
+    clearInterval(backgroundLimitTestTimer);
+    backgroundLimitTestTimer = null;
+  }
+}
+
+function startBackgroundTestPolling() {
+  stopBackgroundTestPolling();
+  if (!backgroundTestPageOpen() || document.hidden || backgroundLimitTest.state !== "running") return;
+  backgroundLimitTestTimer = setInterval(pollBackgroundTest, BACKGROUND_TEST_POLL_MS);
+}
+
+async function pollBackgroundTest() {
+  if (backgroundLimitTestPollBusy || backgroundLimitTest.state !== "running" || !backgroundTestPageOpen()) return;
+  const requestSerial = backgroundTestRequestSerial;
+  backgroundLimitTestPollBusy = true;
+  try {
+    const snapshot = await api("/api/diagnostics/runtime", { phase: "snapshot" });
+    if (requestSerial !== backgroundTestRequestSerial || backgroundLimitTest.state !== "running"
+        || !backgroundTestPageOpen()) return;
+    setBackgroundTestError("");
+    applyBackgroundTestSnapshot(snapshot);
+    if (backgroundLimitTest.state === "running") startBackgroundTestPolling();
+  } catch (error) {
+    if (requestSerial !== backgroundTestRequestSerial || !backgroundTestPageOpen()) return;
+    setBackgroundTestError("无法读取后台计时：" + (error.message || "未知错误"));
+    renderBackgroundLimitTest();
+  } finally {
+    backgroundLimitTestPollBusy = false;
+  }
+}
+
+async function syncBackgroundTest() {
+  const requestSerial = ++backgroundTestRequestSerial;
+  try {
+    const snapshot = await api("/api/diagnostics/runtime", { phase: "snapshot" });
+    if (requestSerial !== backgroundTestRequestSerial || !backgroundTestPageOpen()) return;
+    setBackgroundTestError("");
+    applyBackgroundTestSnapshot(snapshot);
+    if (backgroundLimitTest.state === "running") startBackgroundTestPolling();
+  } catch (error) {
+    if (requestSerial !== backgroundTestRequestSerial || !backgroundTestPageOpen()) return;
+    setBackgroundTestError("无法读取后台计时：" + (error.message || "未知错误"));
+    renderBackgroundLimitTest();
+  }
+}
+
+async function startBackgroundLimitTest() {
+  if (backgroundLimitTest.state === "running" || backgroundLimitTest.state === "starting" || backgroundLimitTest.state === "stopping") return;
+  const requestSerial = ++backgroundTestRequestSerial;
+  const previous = { ...backgroundLimitTest };
+  stopBackgroundTestPolling();
+  backgroundLimitTest = {
+    ...previous,
+    state: "starting",
+    error: "",
+  };
+  renderBackgroundLimitTest();
+  try {
+    const snapshot = await api("/api/diagnostics/runtime", { phase: "start" });
+    if (requestSerial !== backgroundTestRequestSerial) return;
+    setBackgroundTestError("");
+    applyBackgroundTestSnapshot(snapshot);
+    if (backgroundLimitTest.state === "running") startBackgroundTestPolling();
+  } catch (error) {
+    if (requestSerial !== backgroundTestRequestSerial) return;
+    backgroundLimitTest.state = previous.state;
+    setBackgroundTestError("无法开始后台计时：" + (error.message || "未知错误"));
+    renderBackgroundLimitTest();
+  }
+}
+
+async function stopBackgroundLimitTest() {
+  if (backgroundLimitTest.state !== "running") return;
+  const requestSerial = ++backgroundTestRequestSerial;
+  const previous = { ...backgroundLimitTest };
+  stopBackgroundTestPolling();
+  backgroundLimitTest.state = "stopping";
+  setBackgroundTestError("");
+  renderBackgroundLimitTest();
+  try {
+    const snapshot = await api("/api/diagnostics/runtime", { phase: "stop" });
+    if (requestSerial !== backgroundTestRequestSerial) return;
+    setBackgroundTestError("");
+    applyBackgroundTestSnapshot(snapshot);
+  } catch (error) {
+    if (requestSerial !== backgroundTestRequestSerial) return;
+    backgroundLimitTest.state = previous.state;
+    setBackgroundTestError("无法停止后台计时：" + (error.message || "未知错误"));
+    renderBackgroundLimitTest();
+    startBackgroundTestPolling();
+  }
+}
+
+function handleBackgroundTestVisibilityChange() {
+  if (document.hidden) {
+    stopBackgroundTestPolling();
+    return;
+  }
+  if (backgroundTestPageOpen()) void syncBackgroundTest();
+}
+
+function enterBackgroundLimitTestPage() {
+  renderBackgroundLimitTest();
+  void syncBackgroundTest();
 }
 
 const EQUIP_FILTER_LS = "ark_equipment_filter_schemes_v2";
@@ -4941,7 +8529,7 @@ function normalizeEquipmentFilterScheme(scheme, schemeIndex = 0, preservedId = "
 
 function loadEquipmentFilterSchemes() {
   try {
-    const saved = JSON.parse(localStorage.getItem(EQUIP_FILTER_LS));
+    const saved = JSON.parse(frontendStorageGet(EQUIP_FILTER_LS));
     if (Array.isArray(saved) && saved.length) {
       return saved.map((scheme, schemeIndex) => {
         const slots = {};
@@ -4968,13 +8556,42 @@ let equipmentFilterSchemeOptionSignature = JSON.stringify(
   EQUIP_FILTER_SCHEMES_DATA.map((scheme) => [scheme.id, scheme.name]),
 );
 
+function reloadEquipmentFilterSchemesFromSettings() {
+  const schemes = loadEquipmentFilterSchemes();
+  if (!Array.isArray(schemes) || !schemes.length) return;
+  EQUIP_FILTER_SCHEMES_DATA = schemes;
+  activeFilterSchemeId = schemes[0].id;
+  activeFilterSlot = "weapon";
+  activeDetailRuleId = schemes[0].slots.weapon?.[0]?.id || null;
+  equipmentFilterSchemeOptionSignature = JSON.stringify(
+    schemes.map((scheme) => [scheme.id, scheme.name]),
+  );
+}
+
 function saveEquipmentFilterSchemes() {
-  try { localStorage.setItem(EQUIP_FILTER_LS, JSON.stringify(EQUIP_FILTER_SCHEMES_DATA)); } catch { /* 无本地存储时仍可预览 */ }
+  frontendStorageSet(EQUIP_FILTER_LS, JSON.stringify(EQUIP_FILTER_SCHEMES_DATA));
+  syncShopFreeSchemeSnapshot();
   const optionSignature = JSON.stringify(EQUIP_FILTER_SCHEMES_DATA.map((scheme) => [scheme.id, scheme.name]));
   if (optionSignature !== equipmentFilterSchemeOptionSignature) {
     equipmentFilterSchemeOptionSignature = optionSignature;
     refreshFilterSchemeDropdowns();
   }
+}
+
+let shopFreeSchemeSyncTimer = null;
+function syncShopFreeSchemeSnapshot() {
+  const a = activeAcc();
+  const cfg = a?.params?.shop_free;
+  if (!a || !cfg?.equipmentEnabled) return;
+  const schemeId = cfg.equipmentSchemeId || EQUIP_FILTER_SCHEMES_DATA[0]?.id;
+  const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
+  if (!scheme) return;
+  a.params = {
+    ...a.params,
+    shop_free: { ...cfg, equipmentSchemeId: scheme.id, equipmentScheme: JSON.parse(JSON.stringify(scheme)) },
+  };
+  if (shopFreeSchemeSyncTimer) clearTimeout(shopFreeSchemeSyncTimer);
+  shopFreeSchemeSyncTimer = setTimeout(() => { shopFreeSchemeSyncTimer = null; syncToggles(); }, 350);
 }
 
 function filterEscape(value) {
@@ -5154,7 +8771,7 @@ function mixedPoolOptionsHTML(rule) {
   return `<div class="mixed-pool-options" role="radiogroup" aria-label="混合属性命中数量">
     ${options.map((required) => `<label class="mix-option">
       <input type="radio" name="mix-required-${filterEscape(rule.id)}" value="${required}" data-mix-required ${rule.mixRequired === required ? "checked" : ""}>
-      <span class="mix-radio"></span><span>混合池中${filterNumberText(count)}选${filterNumberText(required)}</span>
+      <span class="radio-box" aria-hidden="true"></span><span>混合池中${filterNumberText(count)}选${filterNumberText(required)}</span>
     </label>`).join("")}
   </div>`;
 }
@@ -5202,9 +8819,9 @@ function renderFilterSchemeList() {
         <span class="scheme-copy"><strong>${filterEscape(scheme.name)}</strong><small>${count} 条细则</small></span>
       </button>
       <div class="scheme-actions">
-        <button type="button" data-scheme-action="rename" title="重命名" aria-label="重命名"><span class="scheme-action-icon">✎</span></button>
-        <button type="button" data-scheme-action="import" title="导入方案" aria-label="导入方案"><span class="scheme-action-icon">↥</span></button>
-        <button type="button" data-scheme-action="export" title="导出方案到剪贴板" aria-label="导出方案到剪贴板"><span class="scheme-action-icon">↧</span></button>
+        <button type="button" data-scheme-action="rename" title="重命名" aria-label="重命名"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-square-pen"></use></svg></button>
+        <button type="button" data-scheme-action="import" title="导入方案" aria-label="导入方案"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-upload"></use></svg></button>
+        <button type="button" data-scheme-action="export" title="导出方案文件" aria-label="导出方案文件"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-download"></use></svg></button>
         <button type="button" data-scheme-action="delete" title="删除" aria-label="删除"${EQUIP_FILTER_SCHEMES_DATA.length === 1 ? " disabled" : ""}><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-trash-2"></use></svg></button>
       </div>
     </div>`;
@@ -5368,36 +8985,57 @@ function addEquipmentFilterScheme() {
   activeDetailRuleId = null;
   saveEquipmentFilterSchemes();
   renderEquipmentFilterWorkspace();
-  beginEquipmentFilterRename(scheme.id);
+  openEquipmentFilterRename(scheme.id);
 }
 
-function beginEquipmentFilterRename(schemeId) {
+let schemeRenameTargetId = null;
+let schemeRenameReturnFocus = null;
+
+function setSchemeRenameError(message = "") {
+  const output = $("schemeRenameError");
+  if (output) output.textContent = message;
+}
+
+function openEquipmentFilterRename(schemeId, returnFocus) {
   const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
-  const item = [...document.querySelectorAll(".scheme-item")].find((el) => el.dataset.schemeId === schemeId);
-  const button = item?.querySelector(".scheme-select");
-  if (!scheme || !button) return;
-  const input = document.createElement("input");
-  input.className = "scheme-rename-input";
+  const modal = $("schemeRenameModal");
+  const input = $("schemeRenameInput");
+  if (!scheme || !modal || !input) return;
+  schemeRenameTargetId = schemeId;
+  schemeRenameReturnFocus = returnFocus || null;
   input.value = scheme.name;
-  input.maxLength = 32;
-  input.setAttribute("aria-label", "方案名称");
-  button.replaceWith(input);
+  setSchemeRenameError();
+  modal.classList.remove("hidden");
+  document.body.classList.add("scheme-rename-open");
   input.focus();
-  input.select();
-  let finished = false;
-  const finish = (save) => {
-    if (finished) return;
-    finished = true;
-    const value = input.value.trim();
-    if (save && value) scheme.name = value;
-    saveEquipmentFilterSchemes();
-    renderEquipmentFilterWorkspace();
-  };
-  input.addEventListener("blur", () => finish(true));
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") input.blur();
-    if (event.key === "Escape") finish(false);
-  });
+  try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* unsupported input selection */ }
+}
+
+function closeEquipmentFilterRename() {
+  const modal = $("schemeRenameModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  modal.classList.add("hidden");
+  document.body.classList.remove("scheme-rename-open");
+  schemeRenameTargetId = null;
+  const returnFocus = schemeRenameReturnFocus;
+  schemeRenameReturnFocus = null;
+  returnFocus?.focus?.();
+}
+
+function saveEquipmentFilterRename() {
+  const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeRenameTargetId);
+  const input = $("schemeRenameInput");
+  if (!scheme || !input) return;
+  const value = input.value.trim();
+  if (!value) {
+    setSchemeRenameError("方案名称不能为空");
+    input.focus();
+    return;
+  }
+  scheme.name = value;
+  saveEquipmentFilterSchemes();
+  closeEquipmentFilterRename();
+  renderEquipmentFilterWorkspace();
 }
 
 function equipmentFilterExportPayload(scheme) {
@@ -5408,39 +9046,24 @@ function equipmentFilterExportPayload(scheme) {
   };
 }
 
-async function writeClipboardText(text) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.cssText = "position:fixed;left:-9999px;top:0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) throw new Error("clipboard unavailable");
-}
-
 function showSchemeActionFeedback(button, ok, label) {
   if (!button) return;
   clearTimeout(button._feedbackTimer);
   const icon = button.querySelector(".scheme-action-icon");
-  const originalIcon = button.dataset.originalIcon || icon?.textContent || "";
-  button.dataset.originalIcon = originalIcon;
+  const use = icon?.querySelector("use");
+  const originalIconHref = button.dataset.originalIconHref || use?.getAttribute("href") || "";
+  button.dataset.originalIconHref = originalIconHref;
   button.dataset.originalTitle ||= button.title;
   button.classList.remove("action-success", "action-error");
   void button.offsetWidth;
   button.classList.add(ok ? "action-success" : "action-error");
   button.title = label;
-  if (icon) icon.textContent = ok ? "✓" : "!";
+  use?.setAttribute("href", ok ? "#ui-check" : "#ui-triangle-alert");
   button._feedbackTimer = setTimeout(() => {
     if (!button.isConnected) return;
     button.classList.remove("action-success", "action-error");
     button.title = button.dataset.originalTitle;
-    if (icon) icon.textContent = originalIcon;
+    if (originalIconHref) use?.setAttribute("href", originalIconHref);
   }, 1300);
 }
 
@@ -5448,11 +9071,22 @@ async function exportEquipmentFilterScheme(schemeId, button) {
   const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
   if (!scheme) return;
   try {
-    const payload = JSON.stringify(equipmentFilterExportPayload(scheme), null, 2);
-    await writeClipboardText(payload);
-    showSchemeActionFeedback(button, true, "已复制到剪贴板");
-  } catch {
-    showSchemeActionFeedback(button, false, "复制失败，请检查剪贴板权限");
+    const exportData = equipmentFilterExportPayload(scheme);
+    const contents = JSON.stringify(exportData, null, 2) + "\n";
+    let result;
+    if (runtimePlatform === "android" && window.LucimaFiles?.saveEquipmentFilterScheme) {
+      const filename = `LucimaTools-equipment-filter-${scheme.name}.json`;
+      const raw = window.LucimaFiles.saveEquipmentFilterScheme(filename, contents);
+      result = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!result?.ok) throw new Error(result?.detail || "导出装备筛选方案失败");
+    } else {
+      result = await api("/api/equipment-filter/export", exportData);
+    }
+    showSchemeActionFeedback(button, true, "导出成功");
+    showMessageToast(`方案“${scheme.name}”已导出至 ${result.path}`, "ok", 5200);
+  } catch (error) {
+    showSchemeActionFeedback(button, false, "导出失败");
+    showMessageToast(error.message || "导出装备筛选方案失败", "err", 5200);
   }
 }
 
@@ -5461,13 +9095,15 @@ let schemeImportReturnFocus = null;
 let confirmDialogResolve = null;
 let confirmDialogReturnFocus = null;
 
-function openConfirmDialog({ title, message, confirmLabel = "确认删除", returnFocus = document.activeElement }) {
+function openConfirmDialog({ title, message, confirmLabel = "确认删除", icon = "ui-trash-2", tone = "danger", returnFocus = document.activeElement }) {
   const modal = $("confirmModal");
   if (!modal) return Promise.resolve(false);
   if (confirmDialogResolve) closeConfirmDialog(false);
   $("confirmTitle").textContent = title;
   $("confirmMessage").textContent = message;
   $("confirmAction").textContent = confirmLabel;
+  modal.dataset.tone = tone === "warning" ? "warning" : "danger";
+  modal.querySelector('.confirm-icon use').setAttribute('href', `#${icon}`);
   confirmDialogReturnFocus = returnFocus || null;
   modal.classList.remove("hidden");
   document.body.classList.add("confirm-dialog-open");
@@ -5490,37 +9126,104 @@ function closeConfirmDialog(confirmed = false) {
   resolve?.(confirmed);
 }
 
-function setSchemeImportError(message = "") {
-  const output = $("schemeImportError");
-  if (output) output.textContent = message;
+let desktopCloseBusy = false;
+let desktopCloseReturnFocus = null;
+let desktopCloseMinimizeToTray = false;
+
+function setDesktopCloseError(message = "") {
+  const error = $("desktopCloseError");
+  if (error) error.textContent = message;
+}
+
+function showDesktopCloseDialog() {
+  const modal = $("desktopCloseModal");
+  const tray = $("desktopCloseTray");
+  const confirm = $("desktopCloseConfirm");
+  const cancel = $("desktopCloseCancel");
+  if (!modal) return false;
+  desktopCloseBusy = false;
+  desktopCloseReturnFocus = document.activeElement;
+  if (tray) tray.checked = desktopCloseMinimizeToTray;
+  if (confirm) confirm.disabled = false;
+  if (cancel) cancel.disabled = false;
+  setDesktopCloseError();
+  modal.classList.remove("hidden");
+  document.body.classList.add("desktop-close-open");
+  requestAnimationFrame(() => cancel?.focus());
+  return true;
+}
+
+window.showDesktopCloseDialog = showDesktopCloseDialog;
+
+function hideDesktopCloseDialog() {
+  const modal = $("desktopCloseModal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  document.body.classList.remove("desktop-close-open");
+  const returnFocus = desktopCloseReturnFocus;
+  desktopCloseReturnFocus = null;
+  returnFocus?.focus?.();
+}
+
+async function cancelDesktopClose() {
+  if (desktopCloseBusy) return;
+  const bridge = window.pywebview?.api;
+  try {
+    await bridge?.cancelClose?.();
+  } catch { /* 关闭请求已被原生窗口拦截，页面只需恢复可操作状态 */ }
+  hideDesktopCloseDialog();
+}
+
+async function confirmDesktopClose() {
+  if (desktopCloseBusy) return;
+  const modal = $("desktopCloseModal");
+  const tray = $("desktopCloseTray");
+  const confirm = $("desktopCloseConfirm");
+  const cancel = $("desktopCloseCancel");
+  const bridge = window.pywebview?.api;
+  if (!modal || !bridge?.confirmClose) {
+    setDesktopCloseError("桌面窗口桥接尚未就绪，请稍后重试。");
+    return;
+  }
+  desktopCloseBusy = true;
+  setDesktopCloseError();
+  if (confirm) confirm.disabled = true;
+  if (cancel) cancel.disabled = true;
+  const minimizeToTray = !!tray?.checked;
+  desktopCloseMinimizeToTray = minimizeToTray;
+  try {
+    const result = await bridge.confirmClose(minimizeToTray);
+    if (!result?.ok) throw new Error(result?.detail || "无法完成关闭操作");
+    hideDesktopCloseDialog();
+  } catch (error) {
+    desktopCloseBusy = false;
+    if (confirm) confirm.disabled = false;
+    if (cancel) cancel.disabled = false;
+    setDesktopCloseError(error.message || "无法完成关闭操作");
+  }
 }
 
 async function openEquipmentFilterImport(schemeId, returnFocus) {
   const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
-  const modal = $("schemeImportModal");
-  if (!scheme || !modal) return;
+  if (!scheme) return;
   schemeImportTargetId = schemeId;
   schemeImportReturnFocus = returnFocus || null;
-  $("schemeImportTarget").textContent = "将覆盖“" + scheme.name + "”的名称和全部规则";
-  $("schemeImportText").value = "";
-  setSchemeImportError();
-  modal.classList.remove("hidden");
-  document.body.classList.add("scheme-import-open");
-  $("schemeImportText").focus();
   try {
-    const clipboardText = await navigator.clipboard?.readText?.();
-    if (clipboardText && schemeImportTargetId === schemeId && !$("schemeImportText").value.trim()) {
-      $("schemeImportText").value = clipboardText;
-      $("schemeImportText").select();
+    if (runtimePlatform === "android" && window.LucimaFiles?.chooseEquipmentFilterFile) {
+      window.LucimaFiles.chooseEquipmentFilterFile();
+    } else {
+      const input = $("schemeImportFile");
+      if (!input) throw new Error("系统文件选择器不可用");
+      input.value = "";
+      input.click();
     }
-  } catch { /* 浏览器未授权读取时由用户手动粘贴 */ }
+  } catch (error) {
+    finishEquipmentFilterImport();
+    showMessageToast(error.message || "无法打开方案文件选择器", "err", 5200);
+  }
 }
 
-function closeEquipmentFilterImport() {
-  const modal = $("schemeImportModal");
-  if (!modal || modal.classList.contains("hidden")) return;
-  modal.classList.add("hidden");
-  document.body.classList.remove("scheme-import-open");
+function finishEquipmentFilterImport() {
   schemeImportTargetId = null;
   const returnFocus = schemeImportReturnFocus;
   schemeImportReturnFocus = null;
@@ -5560,31 +9263,42 @@ function parseEquipmentFilterImport(text) {
   return scheme;
 }
 
-function importEquipmentFilterScheme() {
+function importEquipmentFilterScheme(text, filename = "方案文件") {
   const index = EQUIP_FILTER_SCHEMES_DATA.findIndex((item) => item.id === schemeImportTargetId);
-  if (index < 0) return;
-  const text = $("schemeImportText")?.value.trim();
-  if (!text) {
-    setSchemeImportError("请先粘贴方案 JSON");
-    $("schemeImportText")?.focus();
-    return;
-  }
+  if (index < 0) throw new Error("导入目标方案已失效，请重新选择导入");
+  if (!text?.trim()) throw new Error("方案文件为空");
+  if (new TextEncoder().encode(text).length > 1024 * 1024) throw new Error("方案文件超过 1 MB，无法导入");
+  const source = parseEquipmentFilterImport(text);
+  const targetId = EQUIP_FILTER_SCHEMES_DATA[index].id;
+  EQUIP_FILTER_SCHEMES_DATA[index] = normalizeEquipmentFilterScheme(source, index, targetId);
+  activeFilterSchemeId = targetId;
+  activeDetailRuleId = null;
+  saveEquipmentFilterSchemes();
+  renderEquipmentFilterWorkspace();
+  const importedItem = [...document.querySelectorAll(".scheme-item")].find((item) => item.dataset.schemeId === targetId);
+  importedItem?.classList.add("scheme-imported");
+  setTimeout(() => importedItem?.classList.remove("scheme-imported"), 900);
+  showMessageToast(`已从 ${filename} 导入方案`, "ok");
+}
+
+function handleEquipmentFilterImport(filename, text) {
   try {
-    const source = parseEquipmentFilterImport(text);
-    const targetId = EQUIP_FILTER_SCHEMES_DATA[index].id;
-    EQUIP_FILTER_SCHEMES_DATA[index] = normalizeEquipmentFilterScheme(source, index, targetId);
-    activeFilterSchemeId = targetId;
-    activeDetailRuleId = null;
-    saveEquipmentFilterSchemes();
-    closeEquipmentFilterImport();
-    renderEquipmentFilterWorkspace();
-    const importedItem = [...document.querySelectorAll(".scheme-item")].find((item) => item.dataset.schemeId === targetId);
-    importedItem?.classList.add("scheme-imported");
-    setTimeout(() => importedItem?.classList.remove("scheme-imported"), 900);
+    importEquipmentFilterScheme(text, filename || "方案文件");
   } catch (error) {
-    setSchemeImportError(error.message || "导入失败，请检查方案内容");
+    showMessageToast(error.message || "导入失败，请检查方案文件", "err", 5200);
+  } finally {
+    finishEquipmentFilterImport();
   }
 }
+
+window.onLucimaEquipmentFilterFileSelected = (filename, contents) => {
+  handleEquipmentFilterImport(filename, contents);
+};
+
+window.onLucimaEquipmentFilterFileError = (message) => {
+  showMessageToast(message || "读取方案文件失败", "err", 5200);
+  finishEquipmentFilterImport();
+};
 
 function addEquipmentDetailRule() {
   const scheme = activeFilterScheme();
@@ -5661,15 +9375,17 @@ function setApplyPopoverOpen(open) {
 function initToolbox() {
   const home = $("toolboxHome");
   const page = $("equipmentFilterPage");
-  const open = $("toolboxHome")?.querySelector('[data-tool="equipment-filter"]');
-  if (!home || !page || !open || open.dataset.bound) return;
-  open.dataset.bound = "1";
-  open.addEventListener("click", () => {
-    home.classList.add("hidden");
-    page.classList.remove("hidden");
-    renderEquipmentFilterWorkspace();
+  if (!home || !page || home.dataset.bound) return;
+  home.dataset.bound = "1";
+  home.addEventListener("click", (event) => {
+    const tile = event.target.closest("[data-tool]");
+    if (tile) showToolboxPage(tile.dataset.tool);
   });
   $("toolboxBack")?.addEventListener("click", showToolboxHome);
+  $("backgroundTestBack")?.addEventListener("click", showToolboxHome);
+  $("backgroundTestStart")?.addEventListener("click", startBackgroundLimitTest);
+  $("backgroundTestStop")?.addEventListener("click", stopBackgroundLimitTest);
+  document.addEventListener("visibilitychange", handleBackgroundTestVisibilityChange);
   $("schemeAdd")?.addEventListener("click", addEquipmentFilterScheme);
   $("schemeList")?.addEventListener("click", async (event) => {
     const action = event.target.closest("[data-scheme-action]");
@@ -5677,7 +9393,7 @@ function initToolbox() {
     if (!item) return;
     const schemeId = item.dataset.schemeId;
     if (action?.dataset.schemeAction === "rename") {
-      beginEquipmentFilterRename(schemeId);
+      openEquipmentFilterRename(schemeId, action);
       return;
     }
     if (action?.dataset.schemeAction === "import") {
@@ -5703,7 +9419,6 @@ function initToolbox() {
       }
       return;
     }
-    if (event.target.closest(".scheme-rename-input")) return;
     activeFilterSchemeId = schemeId;
     activeDetailRuleId = null;
     renderEquipmentFilterWorkspace();
@@ -5874,31 +9589,61 @@ function initToolbox() {
     const picker = event.target.closest(".apply-picker");
     if (!picker && !$("applySetPopover")?.classList.contains("hidden")) setApplyPopoverOpen(false);
   });
-  $("schemeImportModal")?.addEventListener("click", (event) => {
-    if (event.target.closest("[data-import-close]")) closeEquipmentFilterImport();
+  $("schemeRenameModal")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-rename-close]")) closeEquipmentFilterRename();
   });
-  $("schemeImportConfirm")?.addEventListener("click", importEquipmentFilterScheme);
-  $("schemeImportText")?.addEventListener("input", () => setSchemeImportError());
+  $("schemeRenameConfirm")?.addEventListener("click", saveEquipmentFilterRename);
+  $("schemeRenameInput")?.addEventListener("input", () => setSchemeRenameError());
+  $("schemeImportFile")?.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      showMessageToast("方案文件超过 1 MB，无法导入", "err", 5200);
+      finishEquipmentFilterImport();
+      return;
+    }
+    try {
+      handleEquipmentFilterImport(file.name, await file.text());
+    } catch (error) {
+      showMessageToast(error.message || "读取方案文件失败", "err", 5200);
+      finishEquipmentFilterImport();
+    }
+  });
   $("confirmModal")?.addEventListener("click", (event) => {
     if (event.target.closest("[data-confirm-cancel]")) closeConfirmDialog(false);
   });
   $("confirmAction")?.addEventListener("click", () => closeConfirmDialog(true));
+  $("desktopCloseModal")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-desktop-close-cancel]")) cancelDesktopClose();
+  });
+  $("desktopCloseCancel")?.addEventListener("click", cancelDesktopClose);
+  $("desktopCloseConfirm")?.addEventListener("click", confirmDesktopClose);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (!$("confirmModal")?.classList.contains("hidden")) {
+    if (!$("desktopCloseModal")?.classList.contains("hidden")) {
+      event.preventDefault();
+      cancelDesktopClose();
+    } else if (!$("confirmModal")?.classList.contains("hidden")) {
       event.preventDefault();
       closeConfirmDialog(false);
-    } else if (!$("schemeImportModal")?.classList.contains("hidden")) {
+    } else if (!$("schemeRenameModal")?.classList.contains("hidden")) {
       event.preventDefault();
-      closeEquipmentFilterImport();
+      closeEquipmentFilterRename();
     }
   });
 }
 
 // ---------- 启动：显示登录页，等待用户选择账号 ----------
-initBottomLogDock();
-initAccounts();
-initDevGate();
-initToolbox();
-initEquipCardShells();
-initUpdateUI();
+async function initApp() {
+  await loadFrontendSettings();
+  renderSwatches();
+  applyTheme(getTheme());
+  initBottomLogDock();
+  initAccounts();
+  initDevGate();
+  initToolbox();
+  initEquipCardShells();
+  initUpdateUI();
+}
+
+initApp();

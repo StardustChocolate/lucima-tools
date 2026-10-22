@@ -15,6 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE = ROOT / "assets_full"
 DEFAULT_TARGET = ROOT / "assets"
+DEFAULT_ITEMS_TARGET = ROOT / "assets" / "items"
+DEFAULT_METADATA_TARGET = ROOT / "backend"
+INVENTORY_CATEGORIES = ("道具", "其它")
 
 SOURCE_PATHS = {
     "avatars": Path("团员") / "头像",
@@ -67,11 +70,15 @@ UI_SOURCE_FILES = {
     "hunt.png": Path("其它") / "Episode" / "Hunt.png",
     "element.png": Path("其它") / "Episode" / "Elf.png",
     "mail.png": Path("其它") / "UI_Lobby" / "UI05_Btn_C_Mail.png",
+    "UI05_Icon_Monthly.png": Path("其它") / "UI_Lobby" / "UI05_Icon_Monthly.png",
     "customized-equip.png": Path("其它") / "UI_Lobby" / "UI05_Icon_EQuip.png",
     "equipment.png": Path("其它") / "UIz" / "UIz_Icon_Equip.png",
     "activity.png": Path("菜单模块") / "Lobby_SideStory_活动故事.png",
     "store.png": Path("菜单模块") / "Lobby_Shop_商店.png",
     "hero-all.png": Path("其它") / "UIz" / "UIz_Icon_All.png",
+    "hero-illustrated.png": Path("菜单模块") / "Lobby_Illustrated_图鉴.png",
+    "DailyPoint.png": Path("其它") / "Item" / "DailyPoint.png",
+    "GiftPack.png": Path("其它") / "Item" / "GiftPack.png",
 }
 
 
@@ -85,9 +92,10 @@ def _set_icon_map() -> dict[str, str]:
     raise RuntimeError("backend/tasks.py does not define a literal SET_ICON mapping")
 
 
-def _equipment_ids() -> set[str]:
-    with (ROOT / "backend" / "equip_ref.json").open(encoding="utf-8") as stream:
-        equipment = json.load(stream)
+def _equipment_ids(equipment: dict | None = None) -> set[str]:
+    if equipment is None:
+        with (ROOT / "backend" / "equip_ref.json").open(encoding="utf-8") as stream:
+            equipment = json.load(stream)
     return {
         Path(row["img"]).stem
         for row in equipment.values()
@@ -150,16 +158,20 @@ def _avatar_files(source: Path) -> tuple[dict[str, Path], list[str]]:
     return files, missing_known
 
 
-def _equipment_files(source: Path) -> dict[str, Path]:
+def _equipment_files(source: Path, equipment: dict | None = None,
+                     preserved_target: Path | None = None) -> dict[str, Path]:
     index = _prefixed_pngs(source / SOURCE_PATHS["equip"])
-    required_ids = _equipment_ids()
+    required_ids = _equipment_ids(equipment)
     missing = sorted(required_ids - index.keys())
+    if preserved_target is not None:
+        missing = [resource_id for resource_id in missing
+                   if not (preserved_target / "equip" / f"{resource_id}.png").is_file()]
     if missing:
         raise RuntimeError(
             f"full resource archive is missing {len(missing)} required equipment images: "
             + ", ".join(missing)
         )
-    return {f"{resource_id}.png": index[resource_id] for resource_id in required_ids}
+    return {f"{resource_id}.png": index[resource_id] for resource_id in required_ids if resource_id in index}
 
 
 def _set_files(source: Path) -> dict[str, Path]:
@@ -213,6 +225,28 @@ def _ui_files(source: Path) -> dict[str, Path]:
     return files
 
 
+def _guild_files(source: Path) -> dict[str, Path]:
+    """Use UI sprites, not the smaller inventory thumbnails of guild frames."""
+    ui_root = source / SOURCE_PATHS["ui"] / "其它"
+    files = {path.name: path for path in (ui_root / "UI_iconz").glob("UI80_Guild_Sign_*.png")
+             if re.fullmatch(r"UI80_Guild_Sign_\d+\.png", path.name)}
+    table = source / ITEM_TABLE_SOURCE
+    if not table.is_file():
+        return files
+    with table.open(encoding="utf-8", errors="replace", newline="") as stream:
+        for row in csv.DictReader(stream, delimiter="@"):
+            item_id = row.get("ID") or ""
+            if not re.fullmatch(r"GuildFrame\d+", item_id):
+                continue
+            match = re.fullmatch(r"UI/Image/(\w+)\[(\w+)\]", row.get("Icon") or "")
+            if match:
+                path = ui_root / match[1] / (match[2] + ".png")
+                # Some future-season frames already have table rows but no sprite.
+                if path.is_file():
+                    files[item_id + ".png"] = path
+    return files
+
+
 def _localization_files(source: Path) -> dict[str, Path]:
     source_file = source / SOURCE_PATHS["localization"] / LOCALIZATION_SOURCE_FILE
     if not source_file.is_file():
@@ -225,6 +259,58 @@ def _localization_files(source: Path) -> dict[str, Path]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"localization file must contain an object: {source_file}")
     return {LOCALIZATION_SOURCE_FILE: source_file}
+
+
+def _inventory_data(source: Path) -> tuple[dict[str, Path], dict[str, str], dict[str, int]]:
+    """Use catalog IDs and paths; IDs such as TH0_5FES contain underscores."""
+    files: dict[str, Path] = {}
+    names: dict[str, str] = {}
+    ranks: dict[str, int] = {}
+    for category in INVENTORY_CATEGORIES:
+        catalog = source / category / "列表.csv"
+        try:
+            with catalog.open(encoding="utf-8-sig", newline="") as stream:
+                rows = csv.DictReader(stream)
+                required = {"ID", "名称", "Rank", "有图", "图标文件"}
+                if not rows.fieldnames or not required.issubset(rows.fieldnames):
+                    raise RuntimeError(f"invalid inventory catalog header: {catalog}")
+                for row in rows:
+                    item_id = (row.get("ID") or "").strip()
+                    if not item_id or not re.fullmatch(r"[A-Za-z0-9_]+", item_id):
+                        raise RuntimeError(f"invalid item ID in {catalog}: {item_id!r}")
+                    if item_id in ranks:
+                        raise RuntimeError(f"duplicate inventory item ID: {item_id}")
+                    rank = int(row.get("Rank") or 0)
+                    if not 0 <= rank <= 5:
+                        raise RuntimeError(f"invalid item rank for {item_id}: {rank}")
+                    ranks[item_id] = rank
+                    name = (row.get("名称") or "").strip()
+                    if name:
+                        names[item_id] = name
+                    if (row.get("有图") or "").strip().lower() != "true":
+                        continue
+                    relative = Path(row.get("图标文件") or "")
+                    if relative.is_absolute() or not relative.parts or relative.parts[0] != "assets":
+                        raise RuntimeError(f"invalid icon path for {item_id}: {relative}")
+                    icon = source.joinpath(*relative.parts[1:]).resolve()
+                    if not icon.is_relative_to((source / category).resolve()):
+                        raise RuntimeError(f"icon outside inventory category: {icon}")
+                    if icon.suffix.lower() != ".png" or not icon.is_file():
+                        raise RuntimeError(f"missing inventory icon for {item_id}: {icon}")
+                    files[f"{item_id}.png"] = icon
+        except (OSError, UnicodeError, csv.Error, ValueError) as exc:
+            raise RuntimeError(f"invalid inventory catalog {catalog}: {exc}") from exc
+    return files, names, ranks
+
+
+def _merge_item_index(path: Path, updates: dict) -> dict:
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid item index {path}: {exc}") from exc
+    if not isinstance(existing, dict):
+        raise RuntimeError(f"item index must contain an object: {path}")
+    return {**existing, **updates}
 
 
 def _item_category(row: dict[str, str]) -> str:
@@ -314,40 +400,89 @@ def _validate_target(target: Path, categories: set[str]) -> None:
             raise RuntimeError(f"unexpected directory in managed target: {unexpected_dirs[0]}")
 
 
-def _sync_category(target: Path, category: str, files: dict[str, Path]) -> None:
+def _sync_category(target: Path, category: str, files: dict[str, Path], *,
+                   preserve_existing: bool = False) -> None:
     target_dir = target / category
     target_dir.mkdir(parents=True, exist_ok=True)
-    for path in target_dir.iterdir():
-        if path.is_file() and path.name not in files:
-            path.unlink()
+    if not preserve_existing:
+        for path in target_dir.iterdir():
+            if path.is_file() and path.name not in files:
+                path.unlink()
     for output_name, source_file in sorted(files.items()):
-        shutil.copy2(source_file, target_dir / output_name)
+        output_file = target_dir / output_name
+        if not preserve_existing or not output_file.exists():
+            shutil.copy2(source_file, output_file)
+        elif category == "avatars" and output_file.read_bytes() != source_file.read_bytes():
+            # Existing avatars can be pre-release placeholders even when the
+            # full archive did not change in this refresh. These small images
+            # must follow the current source, rather than existence alone.
+            shutil.copy2(source_file, output_file)
 
 
-def sync(source: Path, target: Path) -> tuple[dict[str, int], list[str]]:
+def sync(source: Path, target: Path, *, items_target: Path | None = None,
+         metadata_target: Path | None = None,
+         inventory_only: bool = False,
+         preserve_existing_images: bool = False,
+         equipment_references: dict | None = None,
+         validate_only: bool = False) -> tuple[dict[str, int], list[str]]:
     source = source.resolve()
     target = target.resolve()
-    avatar_files, missing_known_avatars = _avatar_files(source)
-    selection = {
-        "avatars": avatar_files,
-        "equip": _equipment_files(source),
-        "sets": _set_files(source),
-        "stats": _stat_files(source),
-        "attributes": _attribute_files(source),
-        "slots": _slot_files(source),
-        "ui": _ui_files(source),
-        "localization": _localization_files(source),
-    }
+    selection = {"localization": _localization_files(source)}
+    missing_known_avatars = []
+    if not inventory_only:
+        avatar_files, missing_known_avatars = _avatar_files(source)
+        selection.update({
+            "avatars": avatar_files,
+            "equip": _equipment_files(source, equipment_references,
+                                      target if preserve_existing_images else None),
+            "sets": _set_files(source),
+            "stats": _stat_files(source),
+            "attributes": _attribute_files(source),
+            "slots": _slot_files(source),
+            "ui": _ui_files(source),
+            "guild": _guild_files(source),
+        })
     _validate_target(target, set(selection))
-    for category, files in selection.items():
-        _sync_category(target, category, files)
-    counts = {category: len(files) for category, files in selection.items()}
     item_categories = _item_categories(source)
-    _write_item_categories(target, item_categories)
+    role_elements = _role_elements(source) if not inventory_only else None
+    inventory_files, item_names, item_ranks = ({}, {}, {})
+    if items_target is not None or metadata_target is not None:
+        inventory_files, item_names, item_ranks = _inventory_data(source)
+    if metadata_target is not None:
+        item_names = _merge_item_index(metadata_target / "item_names.json", item_names)
+        item_ranks = _merge_item_index(metadata_target / "item_rank.json", item_ranks)
+    counts = {category: len(files) for category, files in selection.items()}
     counts["item_categories"] = len(item_categories)
-    role_elements = _role_elements(source)
-    _write_role_elements(target, role_elements)
-    counts["role_elements"] = len(role_elements)
+    if role_elements is not None:
+        counts["role_elements"] = len(role_elements)
+    if items_target is not None:
+        counts["items"] = len(inventory_files)
+    if metadata_target is not None:
+        counts["item_names"] = len(item_names)
+        counts["item_rank"] = len(item_ranks)
+    if validate_only:
+        return counts, missing_known_avatars
+    for category, files in selection.items():
+        _sync_category(
+            target, category, files,
+            preserve_existing=preserve_existing_images and category != "localization",
+        )
+    _write_item_categories(target, item_categories)
+    if role_elements is not None:
+        _write_role_elements(target, role_elements)
+    if items_target is not None:
+        items_target.mkdir(parents=True, exist_ok=True)
+        # Keep existing optimized icons and icons absent from the newer archive.
+        for output_name, source_file in sorted(inventory_files.items()):
+            output_file = items_target / output_name
+            if not output_file.exists():
+                shutil.copy2(source_file, output_file)
+    if metadata_target is not None:
+        metadata_target.mkdir(parents=True, exist_ok=True)
+        (metadata_target / "item_names.json").write_text(
+            json.dumps(item_names, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        (metadata_target / "item_rank.json").write_text(
+            json.dumps(item_ranks, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return counts, missing_known_avatars
 
 
@@ -355,10 +490,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE, help="full resource archive root")
     parser.add_argument("--target", type=Path, default=DEFAULT_TARGET, help="runtime asset output directory")
+    parser.add_argument("--items-target", type=Path, default=DEFAULT_ITEMS_TARGET,
+                        help="runtime inventory icon output directory")
+    parser.add_argument("--metadata-target", type=Path, default=DEFAULT_METADATA_TARGET,
+                        help="runtime item index output directory")
+    parser.add_argument("--inventory-only", action="store_true",
+                        help="sync inventory icons, item indexes and localization only")
     args = parser.parse_args()
 
     try:
-        counts, missing_known_avatars = sync(args.source, args.target)
+        counts, missing_known_avatars = sync(
+            args.source, args.target, items_target=args.items_target,
+            metadata_target=args.metadata_target, inventory_only=args.inventory_only)
     except RuntimeError as exc:
         parser.error(str(exc))
     print("Synced " + ", ".join(f"{category}={count}" for category, count in counts.items()))

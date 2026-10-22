@@ -3,6 +3,8 @@
 
 # 核心 HTTP 客户端——纯 Python，Windows 和 Android(Chaquopy) 共用
 httpx==0.28.1
+# RoomServer 实时战斗 WebSocket 客户端
+websockets==13.1
 
 # 以下仅 Windows 桌面端需要；Android 端不装
 pywebview==6.2.1     # 原生窗口外壳（WebView2，Win10/11 自带）

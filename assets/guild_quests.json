@@ -1,0 +1,227 @@
+{
+ "schema": 1,
+ "source": {
+  "Quest": "a8587bf5e83023c2857dd73b7e9e55723056ab65b6b4caae5f011090e447be12",
+  "Drop": "75297dfdf19fbaf4783a77ab54184f5ce36e2a76a0170e50107101ed39411fd7",
+  "Item": "71fcdf9783dd708c55ff2b3b39a7a79c4a078ba08ea6806234573cba9e0a12f9"
+ },
+ "personal": {
+  "GuildCheckIn": {
+   "name": "出席佣兵团",
+   "target": 5,
+   "points": 20
+  },
+  "GuildDonatedGold": {
+   "name": "捐赠金币",
+   "target": 200000,
+   "points": 20
+  },
+  "GuildDonatedCourage": {
+   "name": "捐赠英勇证明",
+   "target": 10,
+   "points": 20
+  },
+  "GuildAidResource": {
+   "name": "支持资源",
+   "target": 5,
+   "points": 20
+  },
+  "GuildPassElement": {
+   "name": "进行元素探索",
+   "target": 10,
+   "points": 25
+  },
+  "GuildPassHunt": {
+   "name": "进行讨伐",
+   "target": 10,
+   "points": 25
+  },
+  "GuildGetWeapon": {
+   "name": "获得武器",
+   "target": 20,
+   "points": 25
+  },
+  "GuildGetArmor": {
+   "name": "获得铠甲",
+   "target": 20,
+   "points": 25
+  },
+  "GuildGetHead": {
+   "name": "获得头盔",
+   "target": 20,
+   "points": 25
+  },
+  "GuildGetShoes": {
+   "name": "获得靴子",
+   "target": 20,
+   "points": 25
+  },
+  "GuildGetAmulet": {
+   "name": "获得项链",
+   "target": 10,
+   "points": 25
+  },
+  "GuildGetRing": {
+   "name": "获得戒指",
+   "target": 10,
+   "points": 25
+  },
+  "GuildKillMonster": {
+   "name": "在主线故事中消灭怪物",
+   "target": 150,
+   "points": 25
+  },
+  "GuildKillBoss": {
+   "name": "在主线故事中消灭首领怪物",
+   "target": 15,
+   "points": 25
+  },
+  "GuildSupportHero": {
+   "name": "与辅助团员一同战斗",
+   "target": 15,
+   "points": 25
+  },
+  "GuildEmergencyQuest": {
+   "name": "完成紧急任务",
+   "target": 5,
+   "points": 25
+  },
+  "GuildPassArena": {
+   "name": "进行竞技场",
+   "target": 20,
+   "points": 25
+  },
+  "GuildRewardPotion": {
+   "name": "在星源研究所生产成长药剂",
+   "target": 5,
+   "points": 25
+  },
+  "GuildRewardStarForce": {
+   "name": "在星源研究所培育银光结晶体",
+   "target": 5,
+   "points": 25
+  },
+  "GuildCH1AP": {
+   "name": "在第一章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH2AP": {
+   "name": "在第二章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH3AP": {
+   "name": "在第三章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH4AP": {
+   "name": "在第四章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH5AP": {
+   "name": "在第五章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH6AP": {
+   "name": "在第六章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH7AP": {
+   "name": "在第七章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH8AP": {
+   "name": "在第八章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH9AP": {
+   "name": "在第九章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH10AP": {
+   "name": "在第十章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH11AP": {
+   "name": "在第十一章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  },
+  "GuildCH12AP": {
+   "name": "在第十二章（通常、困难）获得贡献度",
+   "target": 120,
+   "points": 0
+  }
+ },
+ "tiers": {
+  "WeeklyGuildScore500": {
+   "target": 500,
+   "rewards": [
+    {
+     "item": "UEC01",
+     "name": "下级万能装备强化芯片",
+     "count": 3
+    }
+   ]
+  },
+  "WeeklyGuildScore1000": {
+   "target": 1000,
+   "rewards": [
+    {
+     "item": "30",
+     "name": "勇气纹章",
+     "count": 200
+    }
+   ]
+  },
+  "WeeklyGuildScore1500": {
+   "target": 1500,
+   "rewards": [
+    {
+     "item": "5",
+     "name": "招募契约",
+     "count": 5
+    }
+   ]
+  },
+  "WeeklyGuildScore2000": {
+   "target": 2000,
+   "rewards": [
+    {
+     "item": "29",
+     "name": "同盟徽章",
+     "count": 80
+    }
+   ]
+  },
+  "WeeklyGuildScore2400": {
+   "target": 2400,
+   "rewards": [
+    {
+     "item": "21",
+     "name": "永恒之证",
+     "count": 1
+    }
+   ]
+  },
+  "WeeklyGuildScore2800": {
+   "target": 2800,
+   "rewards": [
+    {
+     "item": "6",
+     "name": "神秘契约",
+     "count": 50
+    }
+   ]
+  }
+ }
+}

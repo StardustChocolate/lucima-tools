@@ -1,0 +1,146 @@
+{
+ "schema": 1,
+ "source": {
+  "Commodity": "56e864c9724f9917f4f308951ba820312e40d377a29e01c56942dfd577b50fd4",
+  "Item": "71fcdf9783dd708c55ff2b3b39a7a79c4a078ba08ea6806234573cba9e0a12f9",
+  "Activity": "55e41f516c03bf6e3385525d82f963d87d57031a6e6f21b559a4c596cafaaec9"
+ },
+ "goods": {
+  "GuildA0213": {
+   "item": "A0213",
+   "name": "顺服的劲敌",
+   "amount": 1,
+   "currency": "29",
+   "price": 750,
+   "reset": null,
+   "limit": 1,
+   "activities": [
+    "Version_Guild_A0213"
+   ]
+  },
+  "GuildA0201": {
+   "item": "A0201",
+   "name": "挣扎的妥协",
+   "amount": 1,
+   "currency": "29",
+   "price": 750,
+   "reset": null,
+   "limit": 1,
+   "activities": [
+    "Version_Guild_A0201"
+   ]
+  },
+  "GuildSA0213": {
+   "item": "SA0213",
+   "name": "专属顺服的劲敌",
+   "amount": 1,
+   "currency": "29",
+   "price": 750,
+   "reset": null,
+   "limit": 5,
+   "activities": [
+    "Version_Guild_A0213"
+   ]
+  },
+  "GuildSA0201": {
+   "item": "SA0201",
+   "name": "专属挣扎的妥协",
+   "amount": 1,
+   "currency": "29",
+   "price": 750,
+   "reset": null,
+   "limit": 5,
+   "activities": [
+    "Version_Guild_A0201"
+   ]
+  },
+  "GuildTeraStarForce": {
+   "item": "106",
+   "name": "传说升星水晶",
+   "amount": 1,
+   "currency": "30",
+   "price": 900,
+   "reset": "Month",
+   "limit": 1,
+   "activities": []
+  },
+  "GuildCertificateEterna": {
+   "item": "21",
+   "name": "永恒之证",
+   "amount": 1,
+   "currency": "29",
+   "price": 300,
+   "reset": "Month",
+   "limit": 2,
+   "activities": []
+  },
+  "GuildTesseract": {
+   "item": "34",
+   "name": "技能模块",
+   "amount": 1,
+   "currency": "30",
+   "price": 250,
+   "reset": "Week",
+   "limit": 1,
+   "activities": []
+  },
+  "GuildContractMystic": {
+   "item": "6",
+   "name": "神秘契约",
+   "amount": 50,
+   "currency": "29",
+   "price": 200,
+   "reset": "Week",
+   "limit": 1,
+   "activities": []
+  },
+  "GuildB015": {
+   "item": "B015",
+   "name": "稀有催化剂箱",
+   "amount": 1,
+   "currency": "29",
+   "price": 30,
+   "reset": "Week",
+   "limit": 5,
+   "activities": []
+  },
+  "GuildB021": {
+   "item": "B021",
+   "name": "传说催化剂随机箱",
+   "amount": 1,
+   "currency": "29",
+   "price": 150,
+   "reset": "Week",
+   "limit": 2,
+   "activities": []
+  },
+  "GuildB047": {
+   "item": "B047",
+   "name": "随机催化剂箱",
+   "amount": 1,
+   "currency": "30",
+   "price": 180,
+   "reset": "Week",
+   "limit": 3,
+   "activities": []
+  },
+  "GuildAC01": {
+   "item": "AC01",
+   "name": "下级羁绊强化芯片",
+   "amount": 1,
+   "currency": "30",
+   "price": 180,
+   "reset": null,
+   "limit": null,
+   "activities": []
+  }
+ },
+ "activities": {
+  "Version_Guild_A0213": {
+   "IsUnlimitTime": ""
+  },
+  "Version_Guild_A0201": {
+   "IsUnlimitTime": ""
+  }
+ }
+}

@@ -40,11 +40,29 @@ val appVersionCode: Int = run {
     seg(0) * 10000 + seg(1) * 100 + seg(2)
 }
 
-// 签名：从 keystore.properties 读，缺失回退 debug 签名
+// 正式签名只从被 Git 忽略的 keystore.properties 读取。
+// Release 构建缺少任一项时直接失败，禁止静默产生未签名或 Debug 签名的发布包。
 val keystorePropsFile = rootProject.file("keystore.properties")
-val hasKeystore = keystorePropsFile.exists()
 val keystoreProps = Properties().apply {
-    if (hasKeystore) keystorePropsFile.inputStream().use { load(it) }
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+val signingPropertyNames = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val hasReleaseSigning = keystorePropsFile.exists() &&
+    signingPropertyNames.all { !keystoreProps.getProperty(it).isNullOrBlank() }
+val releaseRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+if (releaseRequested && !hasReleaseSigning) {
+    throw GradleException(
+        "Release signing is not configured. Generate android/signing/lucima.keystore " +
+            "and android/keystore.properties first."
+    )
+}
+if (releaseRequested && hasReleaseSigning) {
+    val configuredStore = rootProject.file(keystoreProps.getProperty("storeFile"))
+    if (!configuredStore.isFile) {
+        throw GradleException("Release keystore is missing: ${configuredStore.path}")
+    }
 }
 
 android {
@@ -52,7 +70,7 @@ android {
     compileSdk = 34
 
     signingConfigs {
-        if (hasKeystore) {
+        if (hasReleaseSigning) {
             create("release") {
                 storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
                 storePassword = keystoreProps.getProperty("storePassword")
@@ -75,12 +93,10 @@ android {
     }
 
     buildTypes {
-        debug {
-            if (hasKeystore) signingConfig = signingConfigs.getByName("release")
-        }
+        debug { }
         release {
             isMinifyEnabled = false
-            if (hasKeystore) signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -102,6 +118,8 @@ chaquopy {
         pip {
             // httpx 及其纯 Python 依赖；游戏协议客户端用它走代理
             install("httpx")
+            // 虚构深渊实时战斗使用的 RoomServer WebSocket 客户端
+            install("websockets==13.1")
         }
         // 让 backend 包被提取到真实文件系统，使 open(equip_ref.json) 可用
         extractPackages("backend")
@@ -122,6 +140,8 @@ val copyWeb = tasks.register<Sync>("copyWebAssets") {
     from(File(projectRoot, "frontend")) { into("frontend") }
     from(File(projectRoot, "assets")) { into("assets") }
     from(updateEndpointFile)
+    from(File(projectRoot, "encyclopedia-endpoint.json"))
+    from(File(projectRoot, "redeem-codes-endpoint.json"))
 }
 
 tasks.named("preBuild") {

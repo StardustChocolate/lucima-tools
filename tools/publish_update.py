@@ -8,12 +8,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import uuid
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     from cryptography.hazmat.primitives import hashes, serialization
@@ -25,16 +25,19 @@ except ImportError as exc:  # pragma: no cover - release workstation setup
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from backend.update_security import verify_manifest_envelope  # noqa: E402
+from tools.package_release import expected_endpoint, validate_android  # noqa: E402
+from tools.package_release import write_checksums  # noqa: E402
+from tools.build_update_delta import build_android, build_windows  # noqa: E402
+from backend.updater import _validate_artifact, _version_key  # noqa: E402
 
 
 DEFAULT_PRIVATE_KEY = Path.home() / ".lucimatools" / "update-signing" / "private.pem"
 DEFAULT_PUBLIC_KEY = ROOT / "backend" / "update_public_key.json"
-DEFAULT_MANIFEST = ROOT / "deploy" / "update-server" / "stable.json"
-DEFAULT_OUTPUT = ROOT / "build" / "update-release"
+DEFAULT_OUTPUT = ROOT / "releases"
+DEFAULT_MANIFEST = DEFAULT_OUTPUT / "preview.json"
 DEFAULT_BASE_URL = os.environ.get("LUCIMA_UPDATE_BASE_URL", "").strip()
 VERSION_RE = re.compile(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']')
 SAFE_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]*$")
-SAFE_REMOTE_RE = re.compile(r"^/[0-9A-Za-z._/-]+$")
 
 
 def b64url(value: bytes) -> str:
@@ -106,39 +109,161 @@ def sign_payload(payload: dict, private_key_path: Path, public_key_path: Path) -
     return envelope
 
 
-def run(command: list[str]) -> str:
-    result = subprocess.run(command, check=True, text=True, capture_output=True)
-    return result.stdout.strip()
+def release_notes(version: str) -> list[str]:
+    lines = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8-sig").splitlines()
+    found = False
+    notes = []
+    for line in lines:
+        if line.startswith("## "):
+            if found:
+                break
+            found = line.startswith(f"## [{version}]")
+        elif found and line.startswith("- "):
+            notes.append(line[2:].strip())
+    return notes
 
 
-def publish(server: str, remote_root: str, manifest_path: Path,
-            artifacts: list[Path], version: str) -> None:
-    if not SAFE_REMOTE_RE.fullmatch(remote_root):
-        raise SystemExit(f"Unsafe remote root: {remote_root}")
-    remote_release = f"{remote_root.rstrip('/')}/releases/{version}"
-    run(["ssh", server, f"mkdir -p '{remote_release}'"])
-    for path in artifacts:
-        token = uuid.uuid4().hex
-        temporary = f"{remote_release}/.{path.name}.{token}.upload"
-        final = f"{remote_release}/{path.name}"
-        run(["scp", str(path), f"{server}:{temporary}"])
-        remote_hash = run(["ssh", server, f"sha256sum '{temporary}' | cut -d' ' -f1"])
-        if remote_hash.lower() != file_sha256(path):
-            raise SystemExit(f"Remote checksum mismatch: {path.name}")
-        run(["ssh", server, f"mv -f '{temporary}' '{final}'"])
+def existing_manifest(path: Path) -> dict:
+    for candidate in (path, path.parent / "stable.json", ROOT / "deploy" / "update-server" / "stable.json"):
+        if candidate.is_file():
+            return verify_manifest_envelope(candidate.read_bytes())
+    return {}
 
-    token = uuid.uuid4().hex
-    temporary_manifest = f"{remote_root.rstrip('/')}/.stable.{token}.upload"
-    final_manifest = f"{remote_root.rstrip('/')}/stable.json"
-    run(["scp", str(manifest_path), f"{server}:{temporary_manifest}"])
-    run(["ssh", server, f"mv -f '{temporary_manifest}' '{final_manifest}'"])
+
+def write_manifest(path: Path, envelope: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(envelope, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def prepare_promotion(source: Path, destination: Path, output: Path,
+                      private_key: Path, public_key: Path) -> tuple[dict, dict | None]:
+    """Validate and sign a promotion without changing local release records."""
+    if destination.name != "stable.json" or source.resolve() == destination.resolve():
+        raise SystemExit("Promotion must write a separate stable.json")
+    public = json.loads(public_key.read_text(encoding="utf-8"))
+    payload = verify_manifest_envelope(source.read_bytes(), public_key=public)
+    if payload.get("channel") != "preview" or payload.get("development"):
+        raise SystemExit("Promotion requires a signed non-development preview manifest")
+    version = str(payload.get("latestVersion") or "")
+    _version_key(version)
+    minimum = str(payload.get("minSupportedVersion") or "")
+    if _version_key(minimum) > _version_key(version):
+        raise SystemExit("Invalid minimum supported version")
+    previous_envelope = None
+    if destination.exists():
+        previous_bytes = destination.read_bytes()
+        previous = verify_manifest_envelope(previous_bytes, public_key=public)
+        previous_envelope = json.loads(previous_bytes)
+        if previous.get("channel") != "stable" or previous.get("development"):
+            raise SystemExit("Existing stable manifest is not a production stable release")
+        if _version_key(str(previous["latestVersion"])) > _version_key(version):
+            raise SystemExit("Cannot promote an older release")
+        if previous["latestVersion"] == version and previous["platforms"] != payload["platforms"]:
+            raise SystemExit("Cannot replace immutable stable artifacts with different bytes")
+    for platform in ("windows", "android"):
+        item = _validate_artifact(payload["platforms"].get(platform), platform)
+        expected_format = "android-apk" if platform == "android" else "windows-portable-zip"
+        if item is None or item["format"] != expected_format:
+            raise SystemExit("Promotion requires both platform packages")
+        for descriptor in [item, *item["deltas"]]:
+            path = output / version / descriptor["fileName"]
+            if not path.is_file() or path.stat().st_size != descriptor["size"] \
+                    or file_sha256(path) != descriptor["sha256"]:
+                raise SystemExit(f"Promotion artifact missing or changed: {path.name}")
+    payload["channel"] = "stable"
+    payload["publishedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    envelope = sign_payload(payload, private_key, public_key)
+    return envelope, previous_envelope
+
+
+def save_promotion(destination: Path, output: Path, envelope: dict,
+                   previous_envelope: dict | None, public_key: dict | None = None) -> None:
+    """Record the exact envelope already prepared (or uploaded) by the caller."""
+    version = verify_manifest_envelope(json.dumps(envelope), public_key=public_key)["latestVersion"]
+    if previous_envelope is not None:
+        previous_version = str(verify_manifest_envelope(json.dumps(previous_envelope), public_key=public_key)["latestVersion"])
+        _version_key(previous_version)
+        if previous_version != version:
+            write_manifest(output / "stable-history" / f"{previous_version}.json", previous_envelope)
+    write_manifest(destination, envelope)
+
+
+def promote(source: Path, destination: Path, output: Path, private_key: Path, public_key: Path) -> None:
+    envelope, previous_envelope = prepare_promotion(source, destination, output, private_key, public_key)
+    public = json.loads(public_key.read_text(encoding="utf-8"))
+    save_promotion(destination, output, envelope, previous_envelope, public)
+    print(f"Promoted verified artifacts locally: {destination.resolve()}")
+    print("Stable metadata is ready for distribution. Nothing has been uploaded.")
+
+
+def default_delta_baselines(output: Path, version: str, public_key: dict | None = None) -> list[Path]:
+    stable_versions = set()
+    for path in [output / "stable.json", *sorted((output / "stable-history").glob("*.json"))]:
+        if not path.is_file():
+            continue
+        payload = verify_manifest_envelope(path.read_bytes(), public_key=public_key)
+        if payload.get("schema") != 1 or payload.get("channel") != "stable" or payload.get("development"):
+            raise SystemExit(f"Invalid stable release record: {path}")
+        previous = str(payload.get("latestVersion") or "")
+        if _version_key(previous) < _version_key(version):
+            stable_versions.add(previous)
+    baselines = [output / previous for previous in sorted(stable_versions, key=_version_key, reverse=True)[:2]]
+    # Keep the latest local candidate for preview-to-preview update tests too.
+    available = [p for p in output.iterdir() if p.is_dir()
+                 and re.fullmatch(r"\d+\.\d+\.\d+", p.name)
+                 and _version_key(p.name) < _version_key(version)]
+    baselines.extend(sorted(available, key=lambda p: _version_key(p.name), reverse=True)[:1])
+    return list(dict.fromkeys(baselines))
+
+
+def add_deltas(platforms: dict, files: list[Path], release_dir: Path, output: Path,
+               version: str, base_url: str, baselines: list[Path] | None,
+               public_key: dict | None = None) -> None:
+    if baselines is None:
+        baselines = default_delta_baselines(output, version, public_key)
+    if len(baselines) > 8:
+        raise SystemExit("At most 8 delta baselines are supported")
+    for baseline in baselines:
+        previous = baseline.name
+        if _version_key(previous) >= _version_key(version):
+            raise SystemExit("Delta baseline must be older than target")
+        for platform, pattern, builder, kind in (
+            ("windows", "LucimaTools-windows-x64-{}.zip", build_windows, "windows-file-delta-v1"),
+            ("android", "LucimaTools-android-{}.apk", build_android, "android-archive-delta-v1"),
+        ):
+            current = platforms.get(platform)
+            base = baseline / pattern.format(previous)
+            if current is None or not base.is_file():
+                continue
+            target = next(p for p in files if p.name == current["fileName"])
+            path = release_dir / f"LucimaTools-{platform}-{previous}-to-{version}.delta.zip"
+            temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                extra = builder(base, target, temporary, version)
+                if temporary.stat().st_size >= current["size"]:
+                    print(f"Delta omitted (full package is smaller): {platform} {previous}")
+                    continue
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            descriptor = artifact(path, base_url, version, kind)
+            descriptor.update(extra, fromVersion=previous)
+            current.setdefault("deltas", []).append(descriptor)
+            files.append(path)
+            print(f"Verified delta: {path.name} ({descriptor['size']} bytes)", flush=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", default=current_version())
-    parser.add_argument("--min-supported")
-    parser.add_argument("--note", action="append", default=[])
+    parser.add_argument("--min-supported", default=os.environ.get("LUCIMA_MIN_SUPPORTED"))
+    parser.add_argument("--release-dir", type=Path, help="Use already validated ZIP/APK files without repackaging")
+    parser.add_argument("--update-url", default=os.environ.get("LUCIMA_UPDATE_URL", ""))
     parser.add_argument("--windows-dir", type=Path)
     parser.add_argument("--android-apk", type=Path)
     parser.add_argument("--allow-empty", action="store_true")
@@ -146,15 +271,32 @@ def main() -> int:
     parser.add_argument("--private-key", type=Path, default=DEFAULT_PRIVATE_KEY)
     parser.add_argument("--public-key", type=Path, default=DEFAULT_PUBLIC_KEY)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--promote", type=Path, help="Promote a verified preview manifest locally; no rebuild or upload")
+    parser.add_argument("--delta-from", type=Path, action="append", help="Baseline directory (default: last 2 stable releases plus latest local candidate)")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--publish", action="store_true")
-    parser.add_argument("--server", default=os.environ.get("LUCIMA_UPDATE_SERVER", ""))
-    parser.add_argument("--remote-root", default=os.environ.get("LUCIMA_UPDATE_REMOTE_ROOT", ""))
+    parser.add_argument(
+        "--encyclopedia-resources", type=Path,
+        help="JSON object merged into the signed manifest's optional resources field",
+    )
     args = parser.parse_args()
 
+    if args.promote:
+        destination = args.manifest
+        if destination == DEFAULT_MANIFEST:
+            destination = args.output_dir / "stable.json"
+        promote(args.promote.resolve(), destination.resolve(), args.output_dir.resolve(),
+                args.private_key.expanduser().resolve(), args.public_key.resolve())
+        return 0
+
     version = args.version.strip()
-    min_supported = (args.min_supported or version).strip()
+    if args.manifest.name == "stable.json":
+        raise SystemExit("Candidate cannot overwrite stable.json; use preview.json and --promote after testing")
+    stable_path = args.output_dir / "stable.json"
+    if stable_path.is_file() and verify_manifest_envelope(stable_path.read_bytes()).get("latestVersion") == version:
+        raise SystemExit("This version is already promoted to stable. Increment APP_VERSION before generating artifacts.")
+    previous = existing_manifest(args.manifest)
+    min_supported = str(args.min_supported or previous.get("minSupportedVersion") or "0.0.0").strip()
     if not SAFE_VERSION_RE.fullmatch(version) or not SAFE_VERSION_RE.fullmatch(min_supported):
         raise SystemExit("Version contains unsupported characters")
     if version != current_version():
@@ -165,13 +307,40 @@ def main() -> int:
         raise SystemExit(f"Update public key not found: {args.public_key}")
     if not args.base_url.strip():
         raise SystemExit("Update base URL is required; pass --base-url or LUCIMA_UPDATE_BASE_URL")
-    if args.publish and (not args.server.strip() or not args.remote_root.strip()):
-        raise SystemExit("Publishing requires --server/--remote-root or their LUCIMA_UPDATE_* environment variables")
+    parsed_base = urlsplit(args.base_url.strip())
+    if parsed_base.scheme not in {"https", "http"} or not parsed_base.hostname \
+            or parsed_base.username or parsed_base.password or parsed_base.query or parsed_base.fragment:
+        raise SystemExit("Update base URL must be an HTTP(S) address without credentials, query, or fragment")
+    if args.release_dir and (args.windows_dir or args.android_apk):
+        raise SystemExit("Use --release-dir or platform inputs, not both")
 
     release_dir = args.output_dir.resolve() / version
     release_dir.mkdir(parents=True, exist_ok=True)
     files: list[Path] = []
     platforms: dict[str, dict | None] = {"windows": None, "android": None}
+
+    if args.release_dir:
+        if not args.update_url:
+            raise SystemExit("--release-dir requires --update-url or LUCIMA_UPDATE_URL")
+        for platform, filename, kind in (
+            ("windows", f"LucimaTools-windows-x64-{version}.zip", "windows-portable-zip"),
+            ("android", f"LucimaTools-android-{version}.apk", "android-apk"),
+        ):
+            path = args.release_dir.resolve() / filename
+            if not path.is_file():
+                continue
+            if platform == "android":
+                validate_android(path, args.update_url)
+            else:
+                with zipfile.ZipFile(path) as archive:
+                    names = archive.namelist()
+                    if "LucimaTools.exe" not in names or any(
+                        name != "LucimaTools.exe" and not name.startswith("_internal/") for name in names
+                    ):
+                        raise SystemExit("Invalid Windows release archive")
+                    expected_endpoint(archive.read("_internal/update-endpoint.json"), args.update_url, "Windows release")
+            platforms[platform] = artifact(path, args.base_url.strip(), version, kind)
+            files.append(path)
 
     if args.windows_dir:
         windows_zip = release_dir / f"LucimaTools-windows-x64-{version}.zip"
@@ -191,29 +360,43 @@ def main() -> int:
     if not files and not (args.allow_empty and args.development):
         raise SystemExit("No release artifacts supplied; use --allow-empty only for development")
 
+    add_deltas(platforms, files, release_dir, args.output_dir.resolve(), version,
+               args.base_url.strip(), args.delta_from,
+               public_key=json.loads(args.public_key.read_text(encoding="utf-8")))
+
+    resources = previous.get("resources")
+    if args.encyclopedia_resources:
+        resources_path = args.encyclopedia_resources.expanduser().resolve()
+        if not resources_path.is_file():
+            raise SystemExit(f"Encyclopedia resources file not found: {resources_path}")
+        try:
+            resources = json.loads(resources_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Invalid encyclopedia resources JSON: {resources_path}") from exc
+        if not isinstance(resources, dict):
+            raise SystemExit("Encyclopedia resources must be a JSON object")
+
     payload = {
         "schema": 1,
-        "channel": "stable",
+        "channel": "preview",
         "development": bool(args.development),
         "latestVersion": version,
         "minSupportedVersion": min_supported,
         "publishedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "notes": [str(note).strip() for note in args.note if str(note).strip()],
+        "notes": release_notes(version),
         "platforms": platforms,
     }
+    if resources is not None:
+        payload["resources"] = resources
     envelope = sign_payload(
         payload, args.private_key.expanduser().resolve(), args.public_key.resolve()
     )
-    args.manifest.parent.mkdir(parents=True, exist_ok=True)
-    args.manifest.write_text(
-        json.dumps(envelope, ensure_ascii=True, indent=2) + "\n", encoding="utf-8"
-    )
+    write_manifest(args.manifest, envelope)
+    write_manifest(release_dir / "candidate.json", envelope)
+    write_checksums(release_dir)
     print(f"Signed manifest: {args.manifest.resolve()}")
     for path in files:
         print(f"Artifact: {path} ({path.stat().st_size} bytes, sha256 {file_sha256(path)})")
-    if args.publish:
-        publish(args.server, args.remote_root, args.manifest.resolve(), files, version)
-        print(f"Published {version} to {args.base_url.rstrip('/')}/stable.json")
     return 0
 
 

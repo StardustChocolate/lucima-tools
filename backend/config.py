@@ -1,14 +1,10 @@
 """全局配置常量。
 
-代理有三种模式（proxy_mode）：
-  - "system"（默认）：跟随系统代理。Windows 读注册表里的 IE/系统代理（Clash 等
-    开启"系统代理"时会写这里）；读不到就直连——此时若 Clash 开的是 TUN/虚拟网卡
-    模式，流量仍会被网卡层截走，所以"跟随系统"能同时兼容这两种常见用法，用户
-    只需开关代理软件，无需在本工具里配置。Android 上直连（靠系统 VPN/TUN 截流）。
-  - "manual"：使用用户手填的地址（代理在别的机器/端口时用）。
-  - "direct"：强制直连。
+网络请求统一跟随系统代理。Windows 读取系统代理设置，Android 由系统 VPN/TUN 接管；
+系统代理地址在进程内短暂缓存，避免每个请求重复读取。
+旧版代理设置字段仅保留兼容，不再提供手动切换。
 
-设置持久化在 settings.json（数据目录）。环境变量 ARK_PROXY 若存在则初始为 manual。
+设置持久化在 settings.json（数据目录）。
 """
 from __future__ import annotations
 
@@ -32,8 +28,13 @@ TEST_SERVER = os.environ.get("ARK_TEST_SERVER", "").lower() in ("1", "true", "ye
 _DATA_DIR = Path(os.environ.get("ARK_DATA_DIR", Path(__file__).resolve().parent.parent))
 _SETTINGS_FILE = _DATA_DIR / "settings.json"
 _SETTINGS_LOCK = threading.RLock()
+_FRONTEND_SETTINGS_KEY = "frontend_settings"
+_FRONTEND_SETTINGS_MAX_BYTES = 8 * 1024 * 1024
 
-_DEFAULT_MANUAL = "http://127.0.0.1:7890"
+_PROXY_CACHE_TTL_SECONDS = 5.0
+_proxy_cache_lock = threading.RLock()
+_proxy_cache_value = ""
+_proxy_cache_expires_at = 0.0
 
 
 def _load_settings() -> dict:
@@ -62,6 +63,41 @@ def _save_settings(data: dict) -> bool:
             return False
 
 
+def load_frontend_settings() -> dict[str, str]:
+    """Return persistent frontend preferences stored in settings.json."""
+    value = _load_settings().get(_FRONTEND_SETTINGS_KEY) or {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): item
+        for key, item in value.items()
+        if isinstance(key, str) and isinstance(item, str)
+    }
+
+
+def save_frontend_settings(value: dict) -> dict[str, str]:
+    """Replace persistent frontend preferences stored in settings.json."""
+    if not isinstance(value, dict):
+        raise ValueError("前端设置必须是对象")
+    normalized = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            raise ValueError("前端设置键和值必须是字符串")
+        normalized[key] = item
+    try:
+        encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise ValueError("前端设置不是有效 JSON") from error
+    if len(encoded) > _FRONTEND_SETTINGS_MAX_BYTES:
+        raise ValueError("前端设置超过 8 MB 限制")
+    with _SETTINGS_LOCK:
+        settings = _load_settings()
+        settings[_FRONTEND_SETTINGS_KEY] = normalized
+        if not _save_settings(settings):
+            raise RuntimeError("无法保存前端设置，请检查数据目录写入权限")
+    return normalized
+
+
 def _purge_legacy_passwords() -> dict:
     """升级到 Token 登录时立即移除旧版可逆 Base64 密码。"""
     with _SETTINGS_LOCK:
@@ -82,16 +118,112 @@ def _purge_legacy_passwords() -> dict:
 
 # 运行时内存态。迁移必须早于任何账号读取，避免旧密码继续留在磁盘。
 _settings = _purge_legacy_passwords()
-_env_proxy = os.environ.get("ARK_PROXY")
-# 模式：env 指定了代理→manual；否则用存档；再否则默认 system（跟随系统）
-PROXY_MODE: str = (
-    "manual" if _env_proxy else _settings.get("proxy_mode", "system")
+
+# Requests are serialized per game client and separated by a small randomized
+# delay to reduce the chance of triggering server-side rate limits.
+def _as_bool(value, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+REQUEST_DELAY_ENABLED: bool = _as_bool(_settings.get("request_delay_enabled"), True)
+REQUEST_DELAY_MS: int = 300
+REQUEST_DELAY_JITTER: int = 20
+
+
+def _bounded_number(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(minimum, min(maximum, number))
+
+
+REQUEST_DELAY_MS = _bounded_number(
+    _settings.get("request_delay_ms", REQUEST_DELAY_MS), REQUEST_DELAY_MS, 0, 60000
 )
-# 手动地址（manual 模式用）
-MANUAL_PROXY: str = _env_proxy or _settings.get("proxy") or _DEFAULT_MANUAL
+REQUEST_DELAY_JITTER = _bounded_number(
+    _settings.get("request_delay_jitter", REQUEST_DELAY_JITTER), REQUEST_DELAY_JITTER, 0, 100
+)
+
+# 自动重登默认关闭，避免在用户仍使用游戏客户端时意外顶号。
+AUTO_RELOGIN_ENABLED: bool = _as_bool(_settings.get("auto_relogin_enabled"), False)
+AUTO_RELOGIN_DELAY_SECONDS: int = _bounded_number(
+    _settings.get("auto_relogin_delay_seconds", 300), 300, 1, 86400
+)
 
 
-def _system_proxy() -> str:
+def get_request_delay_config() -> dict:
+    """Return pacing settings used between repeated task iterations."""
+    return {
+        "enabled": bool(REQUEST_DELAY_ENABLED),
+        "ms": int(REQUEST_DELAY_MS),
+        "jitter": int(REQUEST_DELAY_JITTER),
+    }
+
+
+def set_request_delay_config(enabled=None, delay_ms=None, jitter_percent=None) -> dict:
+    """Update and persist repeated-task pacing settings.
+
+    ``None`` leaves an individual value unchanged so older callers of
+    ``/api/config`` remain compatible.
+    """
+    global REQUEST_DELAY_ENABLED, REQUEST_DELAY_MS, REQUEST_DELAY_JITTER
+    if enabled is not None:
+        REQUEST_DELAY_ENABLED = _as_bool(enabled, REQUEST_DELAY_ENABLED)
+    if delay_ms is not None:
+        REQUEST_DELAY_MS = _bounded_number(delay_ms, REQUEST_DELAY_MS, 0, 60000)
+    if jitter_percent is not None:
+        REQUEST_DELAY_JITTER = _bounded_number(
+            jitter_percent, REQUEST_DELAY_JITTER, 0, 100
+        )
+    settings = _load_settings()
+    settings["request_delay_enabled"] = bool(REQUEST_DELAY_ENABLED)
+    settings["request_delay_ms"] = int(REQUEST_DELAY_MS)
+    settings["request_delay_jitter"] = int(REQUEST_DELAY_JITTER)
+    if not _save_settings(settings):
+        raise RuntimeError("无法保存请求延时设置，请检查数据目录写入权限")
+    return get_request_delay_config()
+
+
+def get_auto_relogin_config() -> dict:
+    """Return the opt-in disconnected-session recovery settings."""
+    return {
+        "enabled": bool(AUTO_RELOGIN_ENABLED),
+        "delaySeconds": int(AUTO_RELOGIN_DELAY_SECONDS),
+    }
+
+
+def set_auto_relogin_config(enabled=None, delay_seconds=None) -> dict:
+    """Update and persist automatic re-login settings."""
+    global AUTO_RELOGIN_ENABLED, AUTO_RELOGIN_DELAY_SECONDS
+    if enabled is None and delay_seconds is None:
+        return get_auto_relogin_config()
+    with _SETTINGS_LOCK:
+        new_enabled = _as_bool(enabled, AUTO_RELOGIN_ENABLED)
+        new_delay = _bounded_number(delay_seconds, AUTO_RELOGIN_DELAY_SECONDS, 1, 86400)
+        settings = _load_settings()
+        settings["auto_relogin_enabled"] = new_enabled
+        settings["auto_relogin_delay_seconds"] = new_delay
+        if not _save_settings(settings):
+            raise RuntimeError("无法保存自动重登设置，请检查数据目录写入权限")
+        AUTO_RELOGIN_ENABLED = new_enabled
+        AUTO_RELOGIN_DELAY_SECONDS = new_delay
+    return get_auto_relogin_config()
+# 保留常量名供旧日志/调用方读取，但模式固定为 system。
+PROXY_MODE: str = "system"
+
+
+def _read_system_proxy() -> str:
     """读取系统代理（Windows 注册表 IE 设置）。读不到返回空串。"""
     if PLATFORM != "windows":
         return ""  # Android 等：直连，靠系统 VPN/TUN 截流
@@ -122,37 +254,52 @@ def _system_proxy() -> str:
         return ""
 
 
-def get_proxy() -> str:
-    """按当前模式解析出实际代理地址（空串=直连）。每次调用实时读取。"""
-    if PROXY_MODE == "direct":
+def _system_proxy() -> str:
+    """读取系统代理并缓存 5 秒；不会发起网络请求。"""
+    global _proxy_cache_value, _proxy_cache_expires_at
+    if PLATFORM != "windows":
         return ""
-    if PROXY_MODE == "manual":
-        return MANUAL_PROXY
-    return _system_proxy()  # "system"
+    now = time.monotonic()
+    with _proxy_cache_lock:
+        if now < _proxy_cache_expires_at:
+            return _proxy_cache_value
+        value = _read_system_proxy()
+        _proxy_cache_value = value
+        _proxy_cache_expires_at = now + _PROXY_CACHE_TTL_SECONDS
+        return value
+
+
+def clear_proxy_cache() -> None:
+    """让测试或宿主代理切换立即重新读取系统设置。"""
+    global _proxy_cache_expires_at
+    with _proxy_cache_lock:
+        _proxy_cache_expires_at = 0.0
+
+
+def get_proxy() -> str:
+    """返回系统代理地址（空串=直连）。不会发起网络请求。"""
+    return _system_proxy()
 
 
 def get_proxy_config() -> dict:
-    """给前端展示：当前模式 + 手动地址 + 当前实际生效的代理。"""
-    return {"mode": PROXY_MODE, "manual": MANUAL_PROXY, "effective": get_proxy()}
+    """兼容旧 API 的代理摘要；代理模式始终是 system。"""
+    return {"mode": "system", "manual": "", "effective": get_proxy()}
 
 
 def set_proxy_config(mode: str | None = None, manual: str | None = None) -> dict:
-    """更新代理模式/手动地址并持久化。"""
-    global PROXY_MODE, MANUAL_PROXY
-    if mode in ("system", "manual", "direct"):
-        PROXY_MODE = mode
-    if manual is not None:
-        MANUAL_PROXY = manual.strip() or _DEFAULT_MANUAL
-    s = _load_settings()
-    s["proxy_mode"] = PROXY_MODE
-    s["proxy"] = MANUAL_PROXY
-    _save_settings(s)
+    """兼容旧设置接口，但忽略手动代理参数并固定为 system。"""
+    with _SETTINGS_LOCK:
+        settings = _load_settings()
+        if settings.get("proxy_mode") != "system" or "proxy" in settings:
+            settings["proxy_mode"] = "system"
+            settings.pop("proxy", None)
+            _save_settings(settings)
     return get_proxy_config()
 
 
-# 兼容旧接口（Android 桥可能仍调 set_proxy）
+# 兼容旧 Android 桥；传入的地址不再改变代理。
 def set_proxy(proxy: str) -> str:
-    set_proxy_config(mode="manual", manual=proxy)
+    set_proxy_config()
     return get_proxy()
 
 
@@ -161,8 +308,74 @@ def data_dir() -> Path:
     return _DATA_DIR
 
 
+def default_download_directory() -> Path:
+    """Return the platform's default user-visible download directory."""
+    if PLATFORM == "windows":
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+            )
+            try:
+                value, _ = winreg.QueryValueEx(
+                    key, "{374DE290-123F-4565-9164-39C4925E467B}"
+                )
+            finally:
+                winreg.CloseKey(key)
+            resolved = Path(os.path.expandvars(str(value))).expanduser()
+            if str(resolved):
+                return resolved
+        except Exception:
+            pass
+    return Path.home() / "Downloads"
+
+
+def get_download_directory() -> Path:
+    value = str(_load_settings().get("download_directory") or "").strip()
+    return Path(value).expanduser() if value else default_download_directory()
+
+
+def set_download_directory(value: str | None) -> Path:
+    """Persist a custom Windows-style directory; blank restores the default."""
+    with _SETTINGS_LOCK:
+        settings = _load_settings()
+        raw = str(value or "").strip()
+        if raw:
+            path = Path(os.path.expandvars(raw)).expanduser()
+            if not path.is_absolute():
+                raise ValueError("下载路径必须是绝对路径")
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise ValueError(f"无法创建下载目录：{error}") from error
+            if not path.is_dir():
+                raise ValueError("下载路径不是文件夹")
+            settings["download_directory"] = str(path)
+        else:
+            settings.pop("download_directory", None)
+        if not _save_settings(settings):
+            raise RuntimeError("无法保存下载路径，请检查数据目录写入权限")
+    return get_download_directory()
+
+
 def get_ignored_update_version() -> str:
     return str(_load_settings().get("ignored_update_version") or "")
+
+
+def get_update_channel() -> str:
+    return "preview" if _load_settings().get("update_channel") == "preview" else "stable"
+
+
+def set_update_channel(channel: str) -> None:
+    if channel not in {"stable", "preview"}:
+        raise ValueError("无效的更新通道")
+    with _SETTINGS_LOCK:
+        settings = _load_settings()
+        settings["update_channel"] = channel
+        settings.pop("ignored_update_version", None)
+        if not _save_settings(settings):
+            raise RuntimeError("无法保存更新通道")
 
 
 def set_ignored_update_version(version: str) -> None:
@@ -271,6 +484,20 @@ def save_account(email: str, *, auth: dict | None | object = _AUTH_UNSET,
         if not _save_settings(s):
             raise RuntimeError("无法保存账号设置，请检查数据目录写入权限")
 
+
+def load_redeem_codes() -> dict:
+    """Return the persisted shared redeem-code cache."""
+    value = _load_settings().get("redeem_codes") or {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def save_redeem_codes(value: dict) -> None:
+    """Persist the shared redeem-code cache without touching accounts."""
+    with _SETTINGS_LOCK:
+        settings = _load_settings()
+        settings["redeem_codes"] = dict(value or {})
+        if not _save_settings(settings):
+            raise RuntimeError("cannot save redeem code cache")
 
 def delete_account(email: str) -> None:
     with _SETTINGS_LOCK:

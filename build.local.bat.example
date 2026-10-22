@@ -1,0 +1,5 @@
+@echo off
+REM Copy this file to build.local.bat and fill in the local update endpoints.
+REM build.local.bat is ignored by Git and must never be committed.
+if not defined LUCIMA_UPDATE_BASE_URL set "LUCIMA_UPDATE_BASE_URL=https://download-host.example"
+if not defined LUCIMA_UPDATE_URL set "LUCIMA_UPDATE_URL=%LUCIMA_UPDATE_BASE_URL%/releases/stable.json"

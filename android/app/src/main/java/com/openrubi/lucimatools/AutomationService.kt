@@ -34,6 +34,7 @@ class AutomationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        serviceRunning = true
         createChannel()
     }
 
@@ -51,6 +52,7 @@ class AutomationService : Service() {
 
     override fun onDestroy() {
         releaseLocks()
+        serviceRunning = false
         super.onDestroy()
     }
 
@@ -98,11 +100,13 @@ class AutomationService : Service() {
     // ---------- 唤醒锁 ----------
     @Suppress("WakelockTimeout")   // 常驻唤醒锁：挂机跑长任务，故意不设超时（用户已知情选择）
     private fun acquireLocks() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         if (wakeLock == null) {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG)
         }
         wakeLock?.let { if (!it.isHeld) it.acquire() }
+        wakeLockHeld = wakeLock?.isHeld == true
+        refreshBatteryOptimizationState(this)
 
         if (wifiLock == null) {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -113,11 +117,14 @@ class AutomationService : Service() {
             wifiLock = wm.createWifiLock(mode, WIFILOCK_TAG)
         }
         wifiLock?.let { if (!it.isHeld) it.acquire() }
+        wifiLockHeld = wifiLock?.isHeld == true
     }
 
     private fun releaseLocks() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wifiLock?.let { if (it.isHeld) it.release() }
+        wakeLockHeld = false
+        wifiLockHeld = false
     }
 
     companion object {
@@ -125,6 +132,28 @@ class AutomationService : Service() {
         private const val NOTIF_ID = 1001
         private const val WAKELOCK_TAG = "LucimaTools:automation"
         private const val WIFILOCK_TAG = "LucimaTools:automation-wifi"
+
+        @Volatile private var serviceRunning = false
+        @Volatile private var wakeLockHeld = false
+        @Volatile private var wifiLockHeld = false
+        @Volatile private var batteryOptimizationIgnored = false
+
+        /** Read by the embedded Python scheduler and included in developer diagnostics. */
+        @JvmStatic
+        fun schedulerDiagnostics(): String =
+            "platform=android service=${if (serviceRunning) "running" else "stopped"} " +
+                "wakeLock=${if (wakeLockHeld) "held" else "released"} " +
+                "wifiLock=${if (wifiLockHeld) "held" else "released"} " +
+                "batteryExempt=${if (batteryOptimizationIgnored) "yes" else "no"}"
+
+        fun refreshBatteryOptimizationState(ctx: Context) {
+            batteryOptimizationIgnored = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                true
+            } else {
+                val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+                pm.isIgnoringBatteryOptimizations(ctx.packageName)
+            }
+        }
 
         /** 启动前台服务（Activity 调用）。O+ 用 startForegroundService。 */
         fun start(ctx: Context) {

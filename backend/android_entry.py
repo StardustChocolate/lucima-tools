@@ -1,6 +1,6 @@
 """Android (Chaquopy) 端的 Python 入口。
 
-Kotlin 侧通过 Chaquopy 调用 start(...)：先把运行时目录/资源根/代理写入
+Kotlin 侧通过 Chaquopy 调用 start(...)：先把运行时目录/资源根写入
 环境变量（必须在 import config 之前，因为 config 在导入时读取它们），
 再启动标准库 HTTP 服务。服务在本调用线程里 serve_forever——Kotlin 应在
 后台线程调用本函数。登录统一由本地 HTTP API 完成，不再需要 Android JS 桥。
@@ -10,22 +10,19 @@ from __future__ import annotations
 import os
 
 
-def start(data_dir: str, asset_root: str, proxy: str = "", port: int = 27843):
+def start(data_dir: str, asset_root: str, proxy: str = "", port: int = 27843, apk_path: str = ""):
     """初始化环境并启动服务器（阻塞）。由 Kotlin 后台线程调用。"""
     os.environ["ARK_PLATFORM"] = "android"
     os.environ["ARK_DATA_DIR"] = data_dir
     os.environ["ARK_ASSET_ROOT"] = asset_root
-    if proxy:
-        os.environ["ARK_PROXY"] = proxy
-
+    os.environ["ARK_ANDROID_APK_PATH"] = apk_path
     # 延迟导入：确保上面的环境变量先生效
-    from . import config, server
-    if proxy:
-        config.set_proxy(proxy)
+    from . import server
     server.serve(port=port, host="127.0.0.1")
 
 
 def set_proxy(proxy: str) -> str:
+    """兼容旧 Android 桥；代理始终由系统 VPN/TUN 接管。"""
     from . import config
     return config.set_proxy(proxy)
 

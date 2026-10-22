@@ -4,8 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>LucimaTools · 璐茜玛的深层幻影</title>
-  <link rel="icon" type="image/png" href="/static/assets/app-icon.png?v=76">
-  <link rel="stylesheet" href="/static/style.css?v=157">
+  <link rel="icon" type="image/png" href="/assets/app-icon.png?v=77">
+  <link rel="stylesheet" href="/static/style.css?v=244">
+  <link rel="stylesheet" href="/static/encyclopedia-card.css?v=5">
 </head>
 <body>
   <!-- Lucide interface icons (ISC): local sprite, colored through currentColor. -->
@@ -31,6 +32,12 @@
     </symbol>
     <symbol id="nav-wrench" viewBox="0 0 24 24">
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+    </symbol>
+    <symbol id="nav-users" viewBox="0 0 24 24">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
     </symbol>
     <symbol id="nav-scroll-text" viewBox="0 0 24 24">
       <path d="M15 12h-5"></path>
@@ -70,6 +77,18 @@
     <symbol id="ui-chevron-down" viewBox="0 0 24 24">
       <path d="m6 9 6 6 6-6"></path>
     </symbol>
+    <symbol id="ui-arrow-left" viewBox="0 0 24 24">
+      <path d="M19 12H5m7 7-7-7 7-7"></path>
+    </symbol>
+    <symbol id="ui-zoom-in" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35M11 8v6M8 11h6"></path>
+    </symbol>
+    <symbol id="ui-zoom-out" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35M8 11h6"></path>
+    </symbol>
+    <symbol id="ui-star" viewBox="0 0 24 24">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+    </symbol>
     <symbol id="ui-trash-2" viewBox="0 0 24 24">
       <path d="M3 6h18"></path>
       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
@@ -77,10 +96,78 @@
       <path d="M10 11v6"></path>
       <path d="M14 11v6"></path>
     </symbol>
+    <symbol id="ui-square-pen" viewBox="0 0 24 24">
+      <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+      <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path>
+    </symbol>
+    <symbol id="ui-upload" viewBox="0 0 24 24">
+      <path d="M12 3v12"></path>
+      <path d="m17 8-5-5-5 5"></path>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    </symbol>
+    <symbol id="ui-download" viewBox="0 0 24 24">
+      <path d="M12 15V3"></path>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <path d="m7 10 5 5 5-5"></path>
+    </symbol>
+    <symbol id="ui-gift" viewBox="0 0 24 24">
+      <rect x="3" y="8" width="18" height="4" rx="1"></rect>
+      <path d="M12 8v13M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"></path>
+      <path d="M12 8H7.5A2.5 2.5 0 1 1 10 5.5L12 8Zm0 0h4.5A2.5 2.5 0 1 0 14 5.5L12 8Z"></path>
+    </symbol>
+    <symbol id="ui-folder-open" viewBox="0 0 24 24">
+      <path d="m6 14 1.5-2.9A2 2 0 0 1 9.3 10H20a2 2 0 0 1 1.8 2.9l-2.3 4.5A3 3 0 0 1 16.8 19H5a3 3 0 0 1-3-3V5a2 2 0 0 1 2-2h3.2a2 2 0 0 1 1.4.6L10 5h8a2 2 0 0 1 2 2v3"></path>
+    </symbol>
+    <symbol id="ui-rotate-cw" viewBox="0 0 24 24">
+      <path d="M21 12a9 9 0 1 1-3-6.7L21 8"></path>
+      <path d="M21 3v5h-5"></path>
+    </symbol>
+    <symbol id="ui-rotate-ccw" viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+      <path d="M3 3v5h5"></path>
+    </symbol>
+    <symbol id="ui-save" viewBox="0 0 24 24">
+      <path d="M15.2 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.8z"></path>
+      <path d="M17 21v-8H7v8"></path>
+      <path d="M7 3v5h8"></path>
+    </symbol>
+    <symbol id="ui-timer" viewBox="0 0 24 24">
+      <line x1="10" x2="14" y1="2" y2="2"></line>
+      <line x1="12" x2="15" y1="14" y2="11"></line>
+      <circle cx="12" cy="14" r="8"></circle>
+    </symbol>
+    <symbol id="ui-mysterious-realm" viewBox="0 0 24 24">
+      <path d="m12 2 5 10-5 10-5-10Z"></path>
+      <circle cx="12" cy="12" r="1.5"></circle>
+      <path d="M8 6a8 8 0 0 0-4 10m12-10a8 8 0 0 1 4 10"></path>
+      <path d="m5.5 8-2-2m15 2 2-2"></path>
+      <path d="m4 16-2 3h5m13-3 2 3h-5"></path>
+    </symbol>
+    <symbol id="ui-circle-check" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="m9 12 2 2 4-4"></path>
+    </symbol>
+    <symbol id="ui-x" viewBox="0 0 24 24">
+      <path d="M18 6 6 18"></path>
+      <path d="m6 6 12 12"></path>
+    </symbol>
+    <symbol id="ui-check" viewBox="0 0 24 24">
+      <path d="M4 12 10 18 20 6"></path>
+    </symbol>
+    <symbol id="ui-triangle-alert" viewBox="0 0 24 24">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path>
+      <path d="M12 9v4"></path>
+      <path d="M12 17h.01"></path>
+    </symbol>
     <symbol id="ui-circle-arrow-up" viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="10"></circle>
       <path d="m16 12-4-4-4 4"></path>
       <path d="M12 16V8"></path>
+    </symbol>
+    <symbol id="ui-circle-help" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="M9.09 9a3 3 0 1 1 5.83 1c0 2-3 3-3 3"></path>
+      <path d="M12 17h.01"></path>
     </symbol>
   </svg>
   <!-- ===================== 登录视图 ===================== -->
@@ -127,6 +214,7 @@
         <button class="nav-item active" data-section="info"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-layout-dashboard"></use></svg></span><span class="ni-label">基本信息</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="auto"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-refresh-cw"></use></svg></span><span class="ni-label">自动任务</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="manual"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-crosshair"></use></svg></span><span class="ni-label">主动任务</span><span class="ni-dot"></span></button>
+        <button class="nav-item" data-section="guild"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-users"></use></svg></span><span class="ni-label">佣兵团</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="toolbox"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-wrench"></use></svg></span><span class="ni-label">工具箱</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="logs"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-scroll-text"></use></svg></span><span class="ni-label">运行日志</span><span class="ni-badge hidden" id="logBadge">0</span><span class="ni-dot"></span></button>
         <button class="nav-item" data-section="settings"><span class="ni-icon"><svg aria-hidden="true"><use href="#nav-settings"></use></svg></span><span class="ni-label">系统设置</span><span class="ni-dot"></span></button>
@@ -148,7 +236,11 @@
       <header class="topbar">
         <button class="menu-btn" id="menuBtn">☰</button>
         <div class="crumb" id="crumb">基本信息</div>
-        <div class="pill" id="connPill">● 未连接</div>
+        <div class="pill connection-indicator" id="connPill">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connStatus" role="status" aria-live="polite" aria-atomic="true">未连接</span>
+          <button class="act-options-refresh connection-retry" type="button" id="reconnectBtn" title="重新登录" aria-label="重新登录" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button>
+        </div>
       </header>
 
       <div class="content" id="content">
@@ -191,11 +283,124 @@
           </div>
         </section>
 
+        <section class="section" id="section-guild">
+          <div class="card guild-info-card">
+            <div class="guild-profile">
+              <span class="guild-avatar hidden" id="guildAvatar" role="img" aria-label="佣兵团头像"><img class="guild-avatar-frame hidden" id="guildFrame" alt=""><img class="guild-avatar-icon hidden" id="guildIcon" alt=""></span>
+              <div class="guild-profile-copy">
+                <h3 id="guildName">未选择账号</h3>
+                <div class="guild-stats hidden" id="guildStats"><span>等级 <strong id="guildLevel">—</strong></span><span>人数 <strong id="guildMembers">—</strong></span></div>
+              </div>
+              <button class="act-options-refresh" type="button" id="guildRefresh" title="刷新佣兵团" aria-label="刷新佣兵团" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-rotate-cw"></use></svg></button>
+            </div>
+          </div>
+          <div class="card guild-auto-card">
+            <div class="card-title"><span class="dot"></span>自动任务</div>
+            <div class="guild-auto-list">
+              <label class="auto-item guild-signin-row guild-task-row" for="guildAutoSignin">
+                <span class="tinfo"><span class="tname">自动签到</span><span class="tdesc">日签奖励可领取时自动领取</span><span class="tnext" id="guildSigninState" role="status" aria-live="polite">每日首次进入佣兵团会自动报到</span></span>
+                <input class="switch-in" id="guildAutoSignin" type="checkbox" role="switch" disabled><span class="switch" aria-hidden="true"></span>
+              </label>
+              <div class="auto-item has-body guild-task-row" id="guildDonateRow">
+                <div class="auto-head">
+                  <span class="tinfo"><span class="tname">自动捐赠</span><span class="tdesc">每日捐赠所选资源，可自定义保留数量用于周任务</span><span class="tnext" id="guildDonateState" role="status" aria-live="polite">等待同步捐赠状态</span></span>
+                  <button class="mini" id="guildDonateOptions" type="button" aria-expanded="false" aria-controls="guildDonateBody">选项 ▸</button>
+                  <label class="switch-wrap" for="guildAutoDonate">
+                    <input class="switch-in" id="guildAutoDonate" type="checkbox" role="switch" aria-label="自动捐赠" disabled><span class="switch" aria-hidden="true"></span>
+                  </label>
+                </div>
+                <div class="auto-body hidden" id="guildDonateBody">
+                  <div class="arena-wrap">
+                    <div class="bt-opts" id="guildDonateChoices"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="auto-item has-body guild-task-row" id="guildAidRow">
+                <div class="auto-head">
+                  <span class="tinfo"><span class="tname">自动援助</span><span class="tdesc">每日发布求助，自动援助团员所需的材料</span><span class="tnext" id="guildAidState" role="status" aria-live="polite">等待同步援助状态</span></span>
+                  <button class="mini" id="guildAidOptions" type="button" aria-expanded="false" aria-controls="guildAidBody">选项 ▸</button>
+                  <label class="switch-wrap" for="guildAutoAid">
+                    <input class="switch-in" id="guildAutoAid" type="checkbox" role="switch" aria-label="自动援助" disabled><span class="switch" aria-hidden="true"></span>
+                  </label>
+                </div>
+                <div class="auto-body hidden" id="guildAidBody">
+                  <div class="arena-wrap guild-aid-options">
+                    <div class="guild-aid-request">
+                      <span class="guild-aid-label">发布求助</span>
+                      <div class="guild-aid-item" id="guildAidItem"></div>
+                    </div>
+                    <div class="guild-aid-scope"><span class="guild-aid-label">援助范围</span><div class="bt-opts" id="guildAidChoices"></div></div>
+                  </div>
+                </div>
+              </div>
+              <div class="auto-item has-body guild-task-row guild-store-row" id="guildStoreRow">
+                <div class="auto-head">
+                  <span class="tinfo"><span class="tname">团员商店</span><span class="tdesc">自动购买所选周限购、月限购商品</span><span class="tnext" id="guildStoreState" role="status" aria-live="polite">请在选项中选择商品</span></span>
+                  <button class="mini" id="guildStoreOptions" type="button" aria-expanded="false" aria-controls="guildStoreBody">选项 ▸</button>
+                  <label class="switch-wrap" for="guildAutoStore"><input class="switch-in" id="guildAutoStore" type="checkbox" role="switch" aria-label="团员商店自动购买" disabled><span class="switch" aria-hidden="true"></span></label>
+                </div>
+                <div class="auto-body hidden" id="guildStoreBody">
+                  <div class="arena-wrap"><div class="guild-store-balances" id="guildStoreBalances"></div><div id="guildStoreGoods"></div></div>
+                </div>
+              </div>
+              <div class="auto-item has-body guild-task-row guild-store-row" id="guildCaptainStoreRow">
+                <div class="auto-head">
+                  <span class="tinfo"><span class="tname">团长商店</span><span class="tdesc">按 Buff 时间和商店限购自动购买</span><span class="tnext" id="guildCaptainStoreState" role="status" aria-live="polite">请选择商品</span></span>
+                  <button class="mini" id="guildCaptainStoreOptions" type="button" aria-expanded="false" aria-controls="guildCaptainStoreBody">选项 ▸</button>
+                  <label class="switch-wrap" for="guildAutoCaptainStore"><input class="switch-in" id="guildAutoCaptainStore" type="checkbox" role="switch" aria-label="团长商店自动购买" disabled><span class="switch" aria-hidden="true"></span></label>
+                </div>
+                <div class="auto-body hidden" id="guildCaptainStoreBody">
+                  <div class="arena-wrap"><div class="guild-store-balances" id="guildCaptainStoreBalances"></div><div class="guild-store-grid" id="guildCaptainStoreGoods"></div></div>
+                </div>
+              </div>
+              <div class="auto-item has-body guild-task-row" id="guildWeeklyRow">
+                <div class="auto-head">
+                  <span class="tinfo"><span class="tname">周任务</span><span class="tdesc">自动领取已完成的个人周任务与全团积分奖励</span><span class="tnext" id="guildWeeklyState" role="status" aria-live="polite">等待同步周任务</span></span>
+                  <button class="mini" id="guildWeeklyDetails" type="button" aria-expanded="false" aria-controls="guildWeeklyBody">任务 ▸</button>
+                  <label class="switch-wrap" for="guildAutoWeekly">
+                    <input class="switch-in" id="guildAutoWeekly" type="checkbox" role="switch" aria-label="自动领取周任务奖励" disabled><span class="switch" aria-hidden="true"></span>
+                  </label>
+                </div>
+                <div class="auto-body hidden" id="guildWeeklyBody">
+                  <div class="arena-wrap guild-weekly-details">
+                    <div class="guild-weekly-heading">个人任务</div>
+                    <div id="guildWeeklyTasks" class="guild-weekly-tasks"></div>
+                    <div class="guild-weekly-heading">全团积分 <span id="guildWeeklyScore">—</span></div>
+                    <div id="guildWeeklyTiers" class="guild-weekly-tiers"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card guild-manual-card">
+            <div class="card-title"><span class="dot"></span>主动任务</div>
+            <div class="auto-item has-body guild-task-row guild-store-row" id="guildManualStoreRow">
+              <div class="auto-head">
+                <span class="tinfo"><span class="tname">团员商店</span><span class="tdesc">手动购买限次商品与羁绊强化材料</span></span>
+                <button class="mini" id="guildManualStoreOptions" type="button" aria-expanded="false" aria-controls="guildManualStoreBody">商店 ▸</button>
+              </div>
+              <div class="auto-body hidden" id="guildManualStoreBody">
+                <div class="arena-wrap"><div class="guild-store-balances" id="guildManualStoreBalances"></div><div id="guildManualStoreGoods" class="guild-store-grid"></div></div>
+              </div>
+            </div>
+            <div class="auto-item guild-task-row guild-score-row" id="guildScoreRow">
+              <div class="auto-head">
+                <span class="tinfo">
+                  <span class="guild-score-heading"><span class="tname">获取团积分</span><span class="guild-score-warning" title="该功能非常规功能，请在明确功能含义的情况下执行，建议使用非正式账号"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-triangle-alert"></use></svg>非常规功能</span></span>
+                  <span class="tdesc">重复领取已完成的周任务，直至全团积分满足全部奖励条件。重复领取只会增加团积分，不会增加奖励</span>
+                  <span class="tnext" id="guildScoreState" role="status" aria-live="polite">等待同步全团积分</span>
+                </span>
+                <button class="mini guild-score-start" id="guildScoreStart" type="button" disabled>开始</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- 自动任务 -->
         <section class="section" id="section-auto">
           <div class="card">
             <div class="card-title"><span class="dot"></span>自动功能</div>
-            <p class="card-note">登录后按开关执行，可每小时自动重跑。月签到 / 活动签到 / 助战好友为登录必跑项，无需开关。</p>
+            <p class="card-note">登录后按开关执行，各任务按条件自动运行。助战好友为登录必跑项，无需开关；每日签到包含月历、月卡与活动签到，打开开关后在新登录、每日快照刷新或手动刷新重新登录后执行；每日/周成就需打开开关，并在选项中勾选要领取的类型，随任务状态更新自动检测。</p>
             <div class="auto-list" id="autoList"></div>
           </div>
         </section>
@@ -213,18 +418,23 @@
           <div class="toolbox-home" id="toolboxHome">
             <div class="tool-grid">
               <button class="tool-tile tool-tile-primary" type="button" data-tool="equipment-filter">
-                <span class="tool-icon" aria-hidden="true"><img src="/assets/ui/equipment.png" alt=""></span>
+                <span class="tool-icon" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/equipment.png" alt=""></span>
                 <span class="tool-tile-copy"><strong>装备过滤器</strong><small>管理装备筛选方案</small></span>
+                <span class="tool-arrow" aria-hidden="true">→</span>
+              </button>
+              <button class="tool-tile" type="button" data-tool="encyclopedia">
+                <span class="tool-icon" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/hero-illustrated.png" alt=""></span>
+                <span class="tool-tile-copy"><strong>图鉴查询</strong><small>按属性与职业浏览团员</small></span>
+                <span class="tool-arrow" aria-hidden="true">→</span>
+              </button>
+              <button class="tool-tile" type="button" data-tool="background-limit-test">
+                <span class="tool-icon tool-icon-svg" aria-hidden="true"><svg><use href="#ui-timer"></use></svg></span>
+                <span class="tool-tile-copy"><strong>后台计时测试</strong><small>比较应用内外计时</small></span>
                 <span class="tool-arrow" aria-hidden="true">→</span>
               </button>
               <div class="tool-tile tool-tile-muted" aria-disabled="true">
                 <span class="tool-icon" aria-hidden="true">✦</span>
                 <span class="tool-tile-copy"><strong>自动配装</strong><small>即将上线</small></span>
-                <span class="tool-status">SOON</span>
-              </div>
-              <div class="tool-tile tool-tile-muted" aria-disabled="true">
-                <span class="tool-icon" aria-hidden="true">◈</span>
-                <span class="tool-tile-copy"><strong>图鉴查询</strong><small>即将上线</small></span>
                 <span class="tool-status">SOON</span>
               </div>
             </div>
@@ -233,7 +443,7 @@
           <div class="tool-page hidden" id="equipmentFilterPage">
             <div class="tool-page-head">
               <button class="tool-back" type="button" id="toolboxBack">← <span>返回工具箱</span></button>
-              <div class="tool-page-title"><span class="tool-icon small" aria-hidden="true"><img src="/assets/ui/equipment.png" alt=""></span><h2>装备过滤器</h2></div>
+              <div class="tool-page-title"><span class="tool-icon small" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/equipment.png" alt=""></span><h2>装备过滤器</h2></div>
               <span class="preview-badge">预览</span>
             </div>
             <div class="filter-workspace">
@@ -327,6 +537,91 @@
               </div>
             </div>
           </div>
+
+          <div class="tool-page hidden" id="backgroundLimitTestPage">
+            <div class="tool-page-head">
+              <button class="tool-back" type="button" id="backgroundTestBack">← <span>返回工具箱</span></button>
+              <div class="tool-page-title"><span class="tool-icon small tool-icon-svg" aria-hidden="true"><svg><use href="#ui-timer"></use></svg></span><h2>后台计时测试</h2></div>
+            </div>
+
+            <div class="background-test-console">
+              <div class="background-test-status" id="backgroundTestStatus"><i></i><span>未开始</span></div>
+              <div class="background-test-intro">应用内计时按调度计划记录；应用外计时按真实时间戳计算。</div>
+              <div class="background-test-clock-grid">
+                <div class="background-test-clock-card"><span>应用内计时</span><strong id="backgroundTestActive">00:00:00.0</strong><small>调度计划经过时间</small></div>
+                <div class="background-test-clock-card"><span>应用外计时</span><strong id="backgroundTestReal">00:00:00.0</strong><small>真实时间戳间隔</small></div>
+              </div>
+              <div class="background-test-actions">
+                <button class="btn primary" id="backgroundTestStart" type="button">开始</button>
+                <button class="btn background-test-stop" id="backgroundTestStop" type="button" disabled>停止</button>
+              </div>
+              <div class="background-test-error" id="backgroundTestError" role="status" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <div class="tool-page hidden" id="encyclopediaPage">
+            <div class="tool-page-head encyclopedia-page-head">
+              <button class="tool-back" type="button" id="encyclopediaBack">← <span>返回工具箱</span></button>
+              <div class="tool-page-title"><span class="tool-icon small" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/hero-illustrated.png" alt=""></span><h2>图鉴查询</h2></div>
+            </div>
+
+            <div class="encyclopedia-filter-panel" aria-label="图鉴筛选器">
+              <div class="encyclopedia-filter-group">
+                <span class="encyclopedia-filter-label">属性</span>
+                <div class="encyclopedia-filter-options" id="encyclopediaElementFilters"></div>
+              </div>
+              <div class="encyclopedia-filter-group">
+                <span class="encyclopedia-filter-label">职业</span>
+                <div class="encyclopedia-filter-options" id="encyclopediaJobFilters"></div>
+              </div>
+              <div class="encyclopedia-filter-group">
+                <span class="encyclopedia-filter-label">星级</span>
+                <div class="encyclopedia-filter-options" id="encyclopediaStarFilters"></div>
+              </div>
+              <div class="encyclopedia-filter-group encyclopedia-status-filter-group">
+                <span class="encyclopedia-filter-label">状态</span>
+                <div class="encyclopedia-status-filter-controls">
+                  <button class="encyclopedia-status-filter-button" id="encyclopediaStatusFilterButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="encyclopediaStatusModal" disabled>
+                    <span>选择状态</span><svg aria-hidden="true"><use href="#ui-chevron-down"></use></svg>
+                  </button>
+                  <div class="encyclopedia-status-selected-icons" id="encyclopediaStatusSelectedIcons" role="list" aria-label="已选状态"></div>
+                </div>
+              </div>
+              <div class="encyclopedia-filter-meta"><span>已筛选：</span><strong id="encyclopediaResultCount">—</strong><span> / </span><strong id="encyclopediaTotalCount">—</strong></div>
+            </div>
+
+            <div class="encyclopedia-preview-panel">
+              <div class="encyclopedia-grid" id="encyclopediaGrid" aria-live="polite"></div>
+              <div class="encyclopedia-empty hidden" id="encyclopediaEmpty">没有符合条件的团员</div>
+            </div>
+          </div>
+
+          <div class="tool-page hidden" id="encyclopediaDetailPage">
+            <div class="tool-page-head encyclopedia-page-head encyclopedia-detail-page-head">
+              <button class="tool-back" type="button" id="encyclopediaDetailBack">← <span>返回图鉴</span></button>
+              <div class="tool-page-title"><span class="tool-icon small" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/hero-illustrated.png" alt=""></span><h2>角色图鉴</h2></div>
+              <div class="encyclopedia-detail-actions">
+              <div class="encyclopedia-zoom-controls" role="group" aria-label="图鉴卡片缩放">
+                <button type="button" data-encyclopedia-zoom="out" title="缩小卡片" aria-label="缩小卡片"><svg aria-hidden="true"><use href="#ui-zoom-out"></use></svg></button>
+                <span class="encyclopedia-zoom-value" id="encyclopediaZoomValue" aria-label="当前缩放比例">100%</span>
+                <button type="button" data-encyclopedia-zoom="in" title="放大卡片" aria-label="放大卡片"><svg aria-hidden="true"><use href="#ui-zoom-in"></use></svg></button>
+                <button type="button" data-encyclopedia-zoom="reset" title="恢复默认比例" aria-label="恢复默认比例"><svg aria-hidden="true"><use href="#ui-rotate-ccw"></use></svg></button>
+              </div>
+              <div class="encyclopedia-mode" role="group" aria-label="立绘模式">
+                <button type="button" data-encyclopedia-mode="static" aria-pressed="true">静态</button>
+                <button type="button" data-encyclopedia-mode="dynamic" aria-pressed="false">动态</button>
+              </div>
+              <button class="encyclopedia-save-image" type="button" id="encyclopediaSaveImage" disabled><svg aria-hidden="true"><use href="#ui-download"></use></svg><span>保存图片</span></button>
+              </div>
+            </div>
+            <article class="encyclopedia-card" id="encyclopediaCard">
+              <header class="encyclopedia-card-head">
+                <div class="encyclopedia-card-heading"><span class="eyebrow" id="encyclopediaCardId">H---</span><h2 id="encyclopediaCardTitle">—</h2><span class="encyclopedia-card-en" id="encyclopediaCardNameEn"></span></div>
+                <button class="icon-button encyclopedia-card-close" type="button" id="encyclopediaCardClose" title="返回图鉴" aria-label="返回图鉴"><svg aria-hidden="true"><use href="#ui-arrow-left"></use></svg></button>
+              </header>
+              <div class="encyclopedia-card-body" id="encyclopediaCardBody"></div>
+            </article>
+          </div>
         </section>
 
         <!-- 运行日志 -->
@@ -348,59 +643,100 @@
           <div class="card">
             <div class="card-title">
               <span class="dot"></span>开发者日志
-              <button class="mini" id="copyDevLogBtn">复制开发者日志</button>
+              <button class="mini icon-text-button" id="saveDevLogBtn"><svg aria-hidden="true"><use href="#ui-save"></use></svg><span>保存</span></button>
             </div>
           </div>
         </section>
 
         <!-- 系统设置 -->
         <section class="section" id="section-settings">
-          <div class="card">
-            <div class="card-title"><span class="dot"></span>主题色彩</div>
-            <p class="card-note">选择一个预设主题色，或自定义主色与辅色。设置会记住在本机。</p>
-            <div class="swatch-row" id="swatchRow"></div>
-            <div class="custom-color">
-              <label class="cc-item"><span>主色</span><input type="color" id="accentPick"></label>
-              <label class="cc-item"><span>辅色</span><input type="color" id="accent2Pick"></label>
-              <label class="cc-item mode"><span>明暗</span>
-                <div class="seg" id="modeSeg">
-                  <button data-mode="dark" class="active">暗色</button>
-                  <button data-mode="light">亮色</button>
+          <h3 class="settings-heading">外观与文件</h3>
+          <div class="card settings-group">
+            <div class="settings-row settings-row-block">
+              <div class="settings-row-copy"><b>主题色彩</b><small>选择预设主题，或自定义主色与辅色。</small></div>
+              <div class="settings-row-content">
+                <div class="swatch-row" id="swatchRow"></div>
+                <div class="custom-color">
+                  <label class="cc-item"><span>主色</span><input type="color" id="accentPick"></label>
+                  <label class="cc-item"><span>辅色</span><input type="color" id="accent2Pick"></label>
+                  <label class="cc-item mode"><span>明暗</span>
+                    <div class="seg" id="modeSeg">
+                      <button data-mode="dark" class="active">暗色</button>
+                      <button data-mode="light">亮色</button>
+                    </div>
+                  </label>
                 </div>
-              </label>
+              </div>
+            </div>
+            <div class="settings-row settings-row-block">
+              <div class="settings-row-copy"><b>下载路径</b><small>保存图鉴图片等导出文件的位置。</small></div>
+              <div class="settings-row-content">
+                <div class="field download-path-field">
+                  <div class="download-path-row">
+                    <input id="downloadPathInput" type="text" aria-label="下载路径" autocomplete="off" spellcheck="false">
+                    <button class="btn ghost download-path-button" id="browseDownloadPathBtn" type="button" title="浏览下载路径" aria-label="浏览下载路径"><svg aria-hidden="true"><use href="#ui-folder-open"></use></svg><span>浏览</span></button>
+                    <button class="mini download-path-button" id="resetDownloadPathBtn" type="button" title="恢复默认下载路径" aria-label="恢复默认下载路径"><svg aria-hidden="true"><use href="#ui-rotate-ccw"></use></svg><span>恢复默认</span></button>
+                  </div>
+                </div>
+                <div class="download-path-notice" id="downloadPathNotice" role="status"></div>
+              </div>
             </div>
           </div>
-          <div class="card">
-            <div class="card-title"><span class="dot"></span>网络代理</div>
-            <p class="card-note">游戏服务器有地区限制，需经代理访问。推荐「跟随系统代理」：像浏览器一样自动使用代理软件（Clash 等）的设置，你只需开关代理软件，无需在这里配置。</p>
-            <div class="proxy-modes" id="proxyModes">
-              <label class="pm-opt"><input type="radio" name="proxyMode" value="system"><span class="pm-box"></span>
-                <span class="pm-txt"><b>跟随系统代理</b><small>自动使用系统/代理软件设置，兼容 Clash 系统代理与 TUN 模式</small></span></label>
-              <label class="pm-opt"><input type="radio" name="proxyMode" value="manual"><span class="pm-box"></span>
-                <span class="pm-txt"><b>手动指定</b><small>代理在其它机器或端口时使用</small></span></label>
-              <label class="pm-opt"><input type="radio" name="proxyMode" value="direct"><span class="pm-box"></span>
-                <span class="pm-txt"><b>直连</b><small>不经代理（仅在已全局翻墙时可用）</small></span></label>
+
+          <h3 class="settings-heading">运行与任务</h3>
+          <div class="card settings-group">
+            <div class="settings-row settings-row-block">
+              <div class="settings-row-copy"><b>请求延时</b><small>连续任务请求之间的等待时间，降低触发 too many request 的概率。</small></div>
+              <div class="settings-row-content">
+                <div class="request-delay-controls" id="requestDelayControls">
+                  <label class="request-delay-toggle">
+                    <span>启用请求延时</span>
+                    <span class="target-score-toggle"><input id="requestDelayEnabled" type="checkbox" checked><span class="target-score-switch" aria-hidden="true"></span></span>
+                  </label>
+                  <div class="request-delay-fields">
+                    <label class="request-delay-field"><span>延时时间</span><div class="request-delay-input"><input id="requestDelayMs" type="number" min="0" max="60000" step="50" value="300" inputmode="numeric"><b>ms</b></div></label>
+                    <label class="request-delay-field"><span>浮动范围</span><div class="request-delay-input"><input id="requestDelayJitter" type="number" min="0" max="100" step="1" value="20" inputmode="numeric"><b>%</b></div></label>
+                  </div>
+                </div>
+                <div class="request-delay-notice" id="requestDelayNotice" role="status"></div>
+              </div>
             </div>
-            <div class="field" id="proxyManualField">
-              <label>代理地址</label>
-              <input id="proxyInput" type="text" placeholder="http://127.0.0.1:7890" autocomplete="off">
+            <div class="settings-row settings-row-block">
+              <div class="settings-row-copy"><b>自动重登</b><small>断线后等待设定时间自动重登，可能将游戏客户端顶下线。</small></div>
+              <div class="settings-row-content">
+                <label class="request-delay-toggle auto-relogin-toggle"><span>断线后自动重新登录</span><span class="target-score-toggle"><input id="autoReloginEnabled" type="checkbox"><span class="target-score-switch" aria-hidden="true"></span></span></label>
+                <div class="request-delay-fields auto-relogin-fields" id="autoReloginFields">
+                  <label class="request-delay-field"><span>等待时间</span><div class="request-delay-input"><input id="autoReloginDelay" type="number" min="1" max="1440" step="1" value="5" inputmode="numeric" disabled><b>分钟</b></div></label>
+                </div>
+                <div class="request-delay-notice" id="autoReloginNotice" role="status"></div>
+              </div>
             </div>
-            <button class="btn primary" id="saveProxyBtn">保存代理设置</button>
-            <div id="proxyNotice"></div>
           </div>
+
           <!-- 开发者模式入口：一个没有任何标签/提示/按钮的输入框，输对口令才显出下面
                的控制台卡片。故意不写 placeholder、不加说明文字。口令在后端校验
                （backend/config.py DEV_PASSPHRASE），前端不写死。 -->
           <div class="dev-gate"><input id="devGate" type="text" spellcheck="false"
                  autocomplete="off" autocapitalize="off"></div>
           <div class="card" id="devConsoleCard" style="display:none">
-            <div class="card-title"><span class="dot"></span>开发者模式 · 协议控制台</div>
+            <div class="card-title"><span class="dot"></span>开发者模式</div>
+            <div class="settings-row dev-update-settings">
+              <div class="settings-row-copy"><b id="devUpdateChannelLabel">更新通道</b></div>
+              <div class="settings-row-content">
+                <div class="dev-update-controls">
+                  <div id="devUpdateChannel"></div>
+                  <button class="act-options-refresh dev-update-refresh" type="button" id="devUpdateCheckBtn" title="检查更新" aria-label="检查更新"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-rotate-cw"></use></svg></button>
+                </div>
+                <div class="dev-hint dev-update-status" id="devUpdateChannelStatus" role="status"></div>
+              </div>
+            </div>
+            <div class="dev-section-title">协议控制台</div>
             <p class="card-note dev-warn">直接向游戏服务器发任意请求，用于抓协议、核对报文。
-              <b>请求会真实生效</b>：买东西真扣货币、卖装备真卖掉，不可撤销。响应原样显示，不做任何解析或写回。</p>
+              <b>请求会真实生效</b>。</p>
             <div class="dev-history">
               <div class="dev-history-head">
                 <span>后台请求历史</span>
-                <small>最近 5 条</small>
+                <small>保留最近 30 条 · 显示 10 条</small>
               </div>
               <div class="dev-history-list" id="devHistoryList">
                 <div class="dev-history-empty">等待请求记录</div>
@@ -420,10 +756,10 @@
             </div>
             <div class="dev-row">
               <label class="bt-opt"><input type="checkbox" id="devUseAuth" checked>
+                <span class="check-box" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 12 10 18 20 6"></path></svg></span>
                 <span>自动补 AID / SessionID</span></label>
               <button class="mini" id="devLoopAddBtn">加入循环</button>
               <button class="btn primary" id="devSendBtn">发送请求</button>
-              <button class="mini" id="devCopyBtn">复制收发</button>
             </div>
             <section class="dev-loop-panel">
               <div class="dev-loop-head">
@@ -488,9 +824,10 @@
           <div class="card">
             <div class="card-title"><span class="dot"></span>信息</div>
             <div class="about-list">
-              <div class="about-row"><span class="about-k">开发者</span><span class="about-v">巧克力、花崎桜雪</span></div>
-              <div class="about-row"><span class="about-k">GitHub</span><span class="about-v">https://github.com/StardustChocolate/lucima-tools</span></div>
-              <div class="about-row"><span class="about-k">交流群</span><span class="about-v">1032070842</span></div>
+              <div class="about-row"><span class="about-k">开发</span><span class="about-v">巧克力、花崎桜雪、一拳</span></div>
+              <div class="about-row"><span class="about-k">GitHub</span><a class="about-v" href="https://github.com/StardustChocolate/lucima-tools" target="_blank" rel="noopener noreferrer">https://github.com/StardustChocolate/lucima-tools</a></div>
+              <div class="about-row"><span class="about-k">QQ群</span><a class="about-v" href="https://qm.qq.com/q/YsvXane7Wq" target="_blank" rel="noopener noreferrer">1032070842</a></div>
+              <div class="about-row"><span class="about-k">Discord</span><a class="about-v" href="https://discord.com/invite/NnTce6zvKY" target="_blank" rel="noopener noreferrer">NnTce6zvKY</a></div>
             </div>
           </div>
           <div class="card">
@@ -529,27 +866,59 @@
     </main>
   </div>
 
-  <div class="scheme-import-modal hidden" id="schemeImportModal" role="dialog" aria-modal="true" aria-labelledby="schemeImportTitle">
-    <button class="scheme-import-backdrop" type="button" data-import-close aria-label="关闭导入窗口"></button>
-    <div class="scheme-import-dialog">
+  <div class="message-toast-region" id="messageToastRegion" aria-live="polite" aria-atomic="true"></div>
+
+  <div class="scheme-import-modal encyclopedia-status-modal hidden" id="encyclopediaStatusModal" role="dialog" aria-modal="true" aria-labelledby="encyclopediaStatusTitle" aria-describedby="encyclopediaStatusHint">
+    <button class="scheme-import-backdrop" type="button" data-encyclopedia-status-apply tabindex="-1" aria-label="应用状态筛选并关闭"></button>
+    <div class="scheme-import-dialog encyclopedia-status-dialog">
       <div class="scheme-import-head">
-        <div>
-          <h3 id="schemeImportTitle">导入筛选方案</h3>
-          <span id="schemeImportTarget"></span>
-        </div>
-        <button class="scheme-import-close" type="button" data-import-close title="关闭" aria-label="关闭">×</button>
+        <div><h3 id="encyclopediaStatusTitle">按状态筛选</h3><span id="encyclopediaStatusHint">匹配任意一种已选状态即可；未选择则不限状态。</span></div>
+        <button class="scheme-import-close" type="button" data-encyclopedia-status-close title="关闭" aria-label="关闭状态筛选">×</button>
       </div>
-      <textarea id="schemeImportText" spellcheck="false" placeholder="粘贴导出的方案 JSON" aria-label="方案 JSON"></textarea>
-      <div class="scheme-import-error" id="schemeImportError" role="alert"></div>
-      <div class="scheme-import-actions">
-        <button class="scheme-import-cancel" type="button" data-import-close>取消</button>
-        <button class="scheme-import-confirm" id="schemeImportConfirm" type="button">导入方案</button>
+      <div class="encyclopedia-status-body">
+        <section class="encyclopedia-status-group" aria-labelledby="encyclopediaStatusBuffTitle">
+          <h4 id="encyclopediaStatusBuffTitle"><span class="encyclopedia-status-tone buff" aria-hidden="true"></span>增益状态 <small>Buff</small></h4>
+          <div class="encyclopedia-status-options" id="encyclopediaStatusBuffOptions"></div>
+        </section>
+        <section class="encyclopedia-status-group" aria-labelledby="encyclopediaStatusDebuffTitle">
+          <h4 id="encyclopediaStatusDebuffTitle"><span class="encyclopedia-status-tone debuff" aria-hidden="true"></span>减益状态 <small>Debuff</small></h4>
+          <div class="encyclopedia-status-options" id="encyclopediaStatusDebuffOptions"></div>
+        </section>
+      </div>
+      <div class="encyclopedia-status-footer">
+        <span id="encyclopediaStatusSelectionCount" role="status" aria-live="polite">已选 0 种状态</span>
+        <div class="scheme-import-actions">
+          <button class="scheme-import-cancel" id="encyclopediaStatusClear" type="button">清空</button>
+          <button class="scheme-import-cancel" id="encyclopediaStatusCancel" type="button" data-encyclopedia-status-close>取消</button>
+          <button class="scheme-import-confirm" id="encyclopediaStatusApply" type="button">应用筛选</button>
+        </div>
       </div>
     </div>
   </div>
 
+  <div class="scheme-import-modal scheme-rename-modal hidden" id="schemeRenameModal" role="dialog" aria-modal="true" aria-labelledby="schemeRenameTitle">
+    <button class="scheme-import-backdrop" type="button" data-rename-close aria-label="关闭重命名窗口"></button>
+    <div class="scheme-import-dialog scheme-rename-dialog">
+      <div class="scheme-import-head">
+        <h3 id="schemeRenameTitle">重命名方案</h3>
+        <button class="scheme-import-close" type="button" data-rename-close title="关闭" aria-label="关闭">×</button>
+      </div>
+      <label class="scheme-rename-field" for="schemeRenameInput">
+        <span>方案名称</span>
+        <input id="schemeRenameInput" type="text" maxlength="32" lang="zh-CN" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" aria-label="方案名称">
+      </label>
+      <div class="scheme-import-error" id="schemeRenameError" role="alert"></div>
+      <div class="scheme-import-actions">
+        <button class="scheme-import-cancel" type="button" data-rename-close>取消</button>
+        <button class="scheme-import-confirm" id="schemeRenameConfirm" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <input id="schemeImportFile" type="file" accept=".json,application/json" hidden>
+
   <div class="confirm-modal hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
-    <button class="confirm-backdrop" type="button" data-confirm-cancel aria-label="取消删除"></button>
+    <button class="confirm-backdrop" type="button" data-confirm-cancel aria-label="取消"></button>
     <div class="confirm-dialog">
       <div class="confirm-icon" aria-hidden="true"><svg><use href="#ui-trash-2"></use></svg></div>
       <div class="confirm-copy">
@@ -559,6 +928,28 @@
       <div class="confirm-actions">
         <button class="confirm-cancel" type="button" data-confirm-cancel>取消</button>
         <button class="confirm-danger" id="confirmAction" type="button">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="desktop-close-modal hidden" id="desktopCloseModal" role="dialog" aria-modal="true" aria-labelledby="desktopCloseTitle">
+    <div class="desktop-close-backdrop" data-desktop-close-cancel aria-hidden="true"></div>
+    <div class="desktop-close-dialog">
+      <div class="desktop-close-head">
+        <div class="desktop-close-mark" aria-hidden="true"><svg><use href="#nav-log-out"></use></svg></div>
+        <div class="desktop-close-copy">
+          <h3 id="desktopCloseTitle">确认退出？</h3>
+        </div>
+      </div>
+      <label class="desktop-close-tray" for="desktopCloseTray">
+        <input id="desktopCloseTray" type="checkbox">
+        <span class="desktop-close-check" aria-hidden="true"><svg><use href="#ui-check"></use></svg></span>
+        <span class="desktop-close-tray-copy"><b>最小化到托盘</b><small>继续在后台运行</small></span>
+      </label>
+      <div class="desktop-close-error" id="desktopCloseError" role="alert"></div>
+      <div class="desktop-close-actions">
+        <button class="desktop-close-cancel" id="desktopCloseCancel" type="button">取消</button>
+        <button class="desktop-close-confirm" id="desktopCloseConfirm" type="button">确认</button>
       </div>
     </div>
   </div>
@@ -590,6 +981,15 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=163"></script>
+  <script src="/static/encyclopedia-scaling.js?v=1"></script>
+  <script src="/static/encyclopedia-palette.js?v=1"></script>
+  <script src="/static/encyclopedia-card.js?v=3"></script>
+  <script src="/static/encyclopedia-framing.js?v=1"></script>
+  <script src="/static/encyclopedia-player.js?v=6"></script>
+  <script src="/static/encyclopedia-media.js?v=3"></script>
+  <script src="/static/encyclopedia-export.js?v=4"></script>
+  <script src="/static/app.js?v=257"></script>
+  <script src="/static/guild.js?v=9"></script>
+  <script src="/static/guild-store.js?v=3"></script>
 </body>
 </html>

@@ -37,6 +37,10 @@ datas = [
 ]
 if update_url:
     datas.append((update_endpoint, "."))
+for name in ("encyclopedia-endpoint.json", "redeem-codes-endpoint.json"):
+    endpoint_path = os.path.join(ROOT, name)
+    if os.path.isfile(endpoint_path):
+        datas.append((endpoint_path, "."))
 # backend 下全部 json 数据表（新增数据文件无需再改本 spec）
 datas += [(p, "backend") for p in glob.glob(os.path.join(ROOT, "backend", "*.json"))]
 assert any(p.endswith("item_names.json") for p, _ in datas), "backend/item_names.json 缺失"
@@ -48,6 +52,9 @@ d, b, h = collect_all("webview")
 datas += d
 binaries += b
 hiddenimports += h
+# abyss_battle imports websockets lazily so PyInstaller cannot discover it from
+# the normal module graph.
+hiddenimports += ["websockets", "websockets.legacy", "websockets.legacy.client"]
 
 block_cipher = None
 

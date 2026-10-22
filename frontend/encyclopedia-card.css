@@ -1,0 +1,1302 @@
+/* Ark2 archive-card styles. Keep the source layout and effects intact. */
+/* Restore HTML defaults inside the card. SVG presentation attributes must
+   remain intact: resetting them would erase masks, stars and badge geometry. */
+.encyclopedia-ark2,
+.encyclopedia-ark2 :where(:not(svg):not(svg *)) {
+  all: revert;
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.encyclopedia-ark2 {
+  --card-width: 1000px;
+  --card-min-height: 1200px;
+  --theme-color: rgb(238 78 72);
+  --soul-color: #70d6ff;
+  color-scheme: dark;
+  color: #edf4f6;
+  font-family: "Microsoft YaHei UI", "Noto Sans SC", "PingFang SC", sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: normal;
+  letter-spacing: normal;
+  -webkit-font-smoothing: auto;
+}
+.encyclopedia-ark2.archive-card {
+  --frame-fade-distance: 96px;
+  --portrait-width: 400px;
+  --portrait-height: 520px;
+  --frame-primary-color: var(--theme-black-90);
+  --frame-inner-color: var(--theme-gray-8d999b-58);
+  --frame-structure-color: var(--theme-gray-a9b4b6-82);
+  --frame-corner-color: var(--theme-white-88);
+  --glow-halo-color: var(--theme-transparent-58);
+  --glow-mid-color: var(--theme-white-68);
+  --glow-core-color: var(--theme-white-22);
+  --card-surface-color: var(--theme-surface);
+  position: relative;
+  isolation: isolate;
+  width: var(--card-width);
+  min-height: var(--card-min-height);
+  height: auto;
+  overflow: hidden;
+  background: var(--card-surface-color);
+}
+
+.encyclopedia-ark2 .portrait-layer {
+  position: absolute;
+  z-index: 0;
+  top: 30px;
+  right: 30px;
+  width: var(--portrait-width);
+  height: var(--portrait-height);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.encyclopedia-ark2 .portrait-canvas,
+.encyclopedia-ark2 .portrait-fallback {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.encyclopedia-ark2 .portrait-canvas {
+  opacity: 0;
+}
+
+.encyclopedia-ark2 .portrait-fallback {
+  position: absolute;
+  inset: 0;
+  object-fit: contain;
+  opacity: 0;
+}
+
+.encyclopedia-ark2 .portrait-layer[data-state="ready"] .portrait-canvas,
+.encyclopedia-ark2 .portrait-layer[data-state="fallback"] .portrait-fallback {
+  opacity: 1;
+}
+
+.encyclopedia-ark2.archive-card::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background:
+    linear-gradient(to bottom, var(--theme-transparent-42), transparent var(--frame-fade-distance)) top / 100% var(--frame-fade-distance) no-repeat,
+    linear-gradient(to top, var(--theme-transparent-42), transparent var(--frame-fade-distance)) bottom / 100% var(--frame-fade-distance) no-repeat,
+    linear-gradient(to right, var(--theme-transparent-42), transparent var(--frame-fade-distance)) left / var(--frame-fade-distance) 100% no-repeat,
+    linear-gradient(to left, var(--theme-transparent-42), transparent var(--frame-fade-distance)) right / var(--frame-fade-distance) 100% no-repeat;
+  content: "";
+  pointer-events: none;
+}
+
+.encyclopedia-ark2 .starfield {
+  position: absolute;
+  z-index: 0;
+  inset: 36px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.encyclopedia-ark2 .starfield__star {
+  position: absolute;
+  width: var(--star-size);
+  height: var(--star-size);
+  border-radius: 50%;
+  background: var(--star-color);
+  box-shadow: 0 0 var(--star-glow) var(--star-color);
+  opacity: var(--star-rest-opacity);
+  transform: scale(0.9);
+  animation: ark2-starfield-breathe var(--star-duration) ease-in-out var(--star-delay) infinite;
+  will-change: opacity, transform;
+}
+
+.encyclopedia-ark2 .starfield__star--neutral {
+  --star-color: rgb(226 239 244);
+}
+
+.encyclopedia-ark2 .starfield__star--cool {
+  --star-color: rgb(166 211 238);
+}
+
+.encyclopedia-ark2 .starfield__star--warm {
+  --star-color: rgb(255 226 183);
+}
+
+.encyclopedia-ark2 .starfield__star--theme {
+  --star-color: var(--theme-white-68);
+}
+
+@keyframes ark2-starfield-breathe {
+  0%,
+  100% {
+    opacity: var(--star-rest-opacity);
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: var(--star-peak-opacity);
+    transform: scale(1.06);
+  }
+}
+
+.encyclopedia-ark2 .frame-tech {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  pointer-events: none;
+}
+
+.encyclopedia-ark2 .frame-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.encyclopedia-ark2 .frame-path {
+  fill: none;
+  stroke: var(--frame-primary-color);
+  stroke-opacity: 0.72;
+  stroke-width: 6px;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  vector-effect: non-scaling-stroke;
+}
+
+.encyclopedia-ark2 .frame-path--upper-inner,
+.encyclopedia-ark2 .frame-path--lower-inner {
+  stroke: var(--frame-inner-color);
+  stroke-opacity: 0.62;
+  stroke-width: 4px;
+}
+
+.encyclopedia-ark2 .frame-inner-fade-stop {
+  stop-color: var(--frame-inner-color);
+}
+
+.encyclopedia-ark2 .frame-solid-trapezoid {
+  fill: var(--frame-structure-color);
+  fill-opacity: 0.7;
+}
+
+.encyclopedia-ark2 .frame-corner-line {
+  fill: var(--frame-corner-color);
+  fill-opacity: 0.76;
+}
+
+.encyclopedia-ark2 .frame-point-light {
+  mix-blend-mode: screen;
+}
+
+.encyclopedia-ark2 .frame-point-light--halo {
+  --point-light-color: var(--glow-halo-color);
+  --point-light-outer-width: 20px;
+  --point-light-inner-width: 14px;
+  --point-light-opacity: 0.9;
+  filter: url(#point-light-halo-filter);
+}
+
+.encyclopedia-ark2 .frame-point-light--mid {
+  --point-light-color: var(--glow-mid-color);
+  --point-light-outer-width: 10px;
+  --point-light-inner-width: 8px;
+  --point-light-opacity: 0.82;
+  filter: url(#point-light-mid-filter);
+}
+
+.encyclopedia-ark2 .frame-point-light--core {
+  --point-light-color: var(--glow-core-color);
+  --point-light-outer-width: 3px;
+  --point-light-inner-width: 2px;
+  --point-light-opacity: 0.96;
+}
+
+.encyclopedia-ark2 .point-light-stroke {
+  fill: none;
+  stroke: var(--point-light-color);
+  stroke-opacity: var(--point-light-opacity);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.encyclopedia-ark2 .point-light-stroke--outer {
+  stroke-width: var(--point-light-outer-width);
+}
+
+.encyclopedia-ark2 .point-light-stroke--inner {
+  stroke-width: var(--point-light-inner-width);
+}
+
+.encyclopedia-ark2 .point-light-fill {
+  fill: var(--point-light-color);
+  fill-opacity: var(--point-light-opacity);
+}
+
+.encyclopedia-ark2 .corner-badge {
+  fill: none;
+  pointer-events: none;
+}
+
+.encyclopedia-ark2 .badge-element-icon {
+  opacity: 0.94;
+  filter:
+    drop-shadow(0 0 3px var(--theme-white-78))
+    drop-shadow(0 0 8px var(--theme-transparent-62));
+}
+
+.encyclopedia-ark2 .badge-ring {
+  fill: rgba(var(--theme-rgb), var(--ring-opacity));
+  fill-rule: evenodd;
+  transform-box: view-box;
+  transform-origin: 126px 126px;
+  animation-duration: var(--duration);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.encyclopedia-ark2 .badge-ring--hollow {
+  fill: none;
+  stroke: rgba(var(--theme-rgb), var(--ring-opacity));
+  stroke-width: 2px;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.encyclopedia-ark2 .badge-ring--solid {
+  stroke: none;
+}
+
+.encyclopedia-ark2 .badge-ring--cw {
+  animation-name: ark2-badge-spin-cw;
+}
+
+.encyclopedia-ark2 .badge-ring--ccw {
+  animation-name: ark2-badge-spin-ccw;
+}
+
+@keyframes ark2-badge-spin-cw {
+  from { transform: rotate(var(--rotation)); }
+  to { transform: rotate(calc(var(--rotation) + 360deg)); }
+}
+
+@keyframes ark2-badge-spin-ccw {
+  from { transform: rotate(var(--rotation)); }
+  to { transform: rotate(calc(var(--rotation) - 360deg)); }
+}
+
+.encyclopedia-ark2 .card-content {
+  position: relative;
+  z-index: 3;
+  min-height: var(--card-min-height);
+}
+
+.encyclopedia-ark2 .character-identity {
+  position: absolute;
+  top: 50px;
+  left: 190px;
+  width: 360px;
+  text-align: center;
+}
+
+.encyclopedia-ark2 .character-stars {
+  position: absolute;
+  top: 184px;
+  left: 50px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  color: rgb(248 250 251);
+}
+
+.encyclopedia-ark2 .character-star {
+  display: block;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  overflow: visible;
+  fill: currentColor;
+  filter:
+    drop-shadow(0 0 2px var(--theme-transparent-82))
+    drop-shadow(0 0 6px var(--theme-transparent-48));
+}
+
+.encyclopedia-ark2 .character-job {
+  position: absolute;
+  top: 223px;
+  left: 50px;
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 8px;
+}
+
+.encyclopedia-ark2 .character-job__icon {
+  display: block;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  object-fit: contain;
+  filter:
+    drop-shadow(0 0 3px var(--theme-transparent-72))
+    drop-shadow(0 0 8px var(--theme-transparent-32));
+}
+
+.encyclopedia-ark2 .character-job__name {
+  color: rgb(248 250 251);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: 0 0 8px var(--theme-transparent-28);
+}
+
+.encyclopedia-ark2 .character-stats {
+  position: absolute;
+  top: 286px;
+  left: 50px;
+  width: 230px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: rgb(238 243 245);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.encyclopedia-ark2 .character-stats col:nth-child(1) {
+  width: 118px;
+}
+
+.encyclopedia-ark2 .character-stats col:nth-child(2) {
+  width: 56px;
+}
+
+.encyclopedia-ark2 .character-stats col:nth-child(3) {
+  width: 56px;
+}
+
+.encyclopedia-ark2 .character-stats th,
+.encyclopedia-ark2 .character-stats td {
+  height: 34px;
+  padding: 0;
+  border: 0;
+  font-weight: 700;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.encyclopedia-ark2 .character-stats thead th {
+  height: 28px;
+  color: rgb(248 250 251);
+  font-size: 16px;
+  text-shadow: 0 0 7px var(--theme-transparent-30);
+}
+
+.encyclopedia-ark2 .character-stats thead th:nth-child(3) {
+  color: var(--theme-white-38);
+}
+
+.encyclopedia-ark2 .character-stats th:nth-child(1),
+.encyclopedia-ark2 .character-stats td:nth-child(1),
+.encyclopedia-ark2 .character-stats th:nth-child(3),
+.encyclopedia-ark2 .character-stats td:nth-child(3) {
+  text-align: left;
+}
+
+.encyclopedia-ark2 .character-stats th:nth-child(2),
+.encyclopedia-ark2 .character-stats td:nth-child(2) {
+  padding-right: 5px;
+  text-align: right;
+}
+
+.encyclopedia-ark2 .character-stats th:nth-child(3),
+.encyclopedia-ark2 .character-stats td:nth-child(3) {
+  padding-left: 5px;
+}
+
+.encyclopedia-ark2 .character-stats tbody td {
+  text-shadow: 0 0 7px var(--theme-transparent-22);
+}
+
+.encyclopedia-ark2 .character-stats tbody td:nth-child(3) {
+  color: var(--theme-white-38);
+}
+
+.encyclopedia-ark2 .character-stat__label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+}
+
+.encyclopedia-ark2 .character-stat__label img {
+  display: block;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  object-fit: contain;
+  filter:
+    drop-shadow(0 0 2px var(--theme-transparent-70))
+    drop-shadow(0 0 6px var(--theme-transparent-28));
+}
+
+.encyclopedia-ark2 .character-potential {
+  position: absolute;
+  top: 286px;
+  left: 300px;
+  width: 260px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: rgb(238 243 245);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.encyclopedia-ark2 .character-potential col:nth-child(1) {
+  width: 64px;
+}
+
+.encyclopedia-ark2 .character-potential col:nth-child(2) {
+  width: 96px;
+}
+
+.encyclopedia-ark2 .character-potential col:nth-child(3) {
+  width: 100px;
+}
+
+.encyclopedia-ark2 .character-potential th,
+.encyclopedia-ark2 .character-potential td {
+  height: 34px;
+  padding: 0;
+  border: 0;
+  font-weight: 700;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.encyclopedia-ark2 .character-potential thead th {
+  height: 28px;
+  color: rgb(248 250 251);
+  font-size: 16px;
+  text-shadow: 0 0 7px var(--theme-transparent-30);
+}
+
+.encyclopedia-ark2 .potential-type,
+.encyclopedia-ark2 .potential-value {
+  display: flex;
+  align-items: center;
+}
+
+.encyclopedia-ark2 .potential-type {
+  gap: 5px;
+}
+
+.encyclopedia-ark2 .potential-type img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 5px var(--theme-transparent-32));
+}
+
+.encyclopedia-ark2 .potential-rank {
+  display: block;
+  width: auto;
+  height: 22px;
+  filter: drop-shadow(0 0 5px var(--theme-transparent-30));
+}
+
+.encyclopedia-ark2 .potential-value {
+  gap: 5px;
+  text-shadow: 0 0 7px var(--theme-transparent-22);
+}
+
+.encyclopedia-ark2 .potential-value img {
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 5px var(--theme-transparent-28));
+}
+
+.encyclopedia-ark2 .character-faction {
+  position: absolute;
+  top: 550px;
+  right: 30px;
+  width: 400px;
+  color: rgb(248 250 251);
+}
+
+.encyclopedia-ark2 .character-faction__identity {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.encyclopedia-ark2 .character-faction__icon {
+  display: block;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  object-fit: contain;
+  filter:
+    drop-shadow(0 0 3px var(--theme-transparent-68))
+    drop-shadow(0 0 10px var(--theme-transparent-30));
+}
+
+.encyclopedia-ark2 .character-faction__name {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0;
+  text-align: center;
+  text-shadow:
+    0 0 5px var(--theme-transparent-62),
+    0 0 12px var(--theme-transparent-30);
+}
+
+.encyclopedia-ark2 .character-skills {
+  position: absolute;
+  top: 636px;
+  left: 50px;
+  display: grid;
+  width: 900px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 20px;
+}
+
+.encyclopedia-ark2 .character-skill {
+  min-width: 0;
+  color: rgb(232 238 240);
+}
+
+.encyclopedia-ark2 .character-skill + .character-skill {
+  padding-left: 18px;
+  border-left: 1px solid var(--theme-transparent-30);
+}
+
+.encyclopedia-ark2 .character-skill__header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 68px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 12px;
+}
+
+.encyclopedia-ark2 .character-skill__icon {
+  display: block;
+  width: 68px;
+  height: 68px;
+  object-fit: contain;
+  filter:
+    drop-shadow(0 0 3px var(--theme-transparent-68))
+    drop-shadow(0 0 9px var(--theme-transparent-28));
+}
+
+.encyclopedia-ark2 .character-skill__summary {
+  display: grid;
+  grid-template-rows: minmax(27.5px, auto) 19px;
+  row-gap: 14px;
+  min-width: 0;
+}
+
+.encyclopedia-ark2 .character-skill__name {
+  margin: 0;
+  min-width: 0;
+  overflow: visible;
+  color: rgb(248 250 251);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: 0;
+  white-space: nowrap;
+  text-shadow: 0 0 8px var(--theme-transparent-28);
+}
+
+.encyclopedia-ark2 .character-skill__meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 0;
+  color: var(--theme-white-26);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.encyclopedia-ark2 .character-skill__resource,
+.encyclopedia-ark2 .character-skill__cooldown,
+.encyclopedia-ark2 .character-skill__special-resource {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.encyclopedia-ark2 .character-skill__cooldown {
+  margin-left: auto;
+}
+
+.encyclopedia-ark2 .character-skill__special-resource {
+  margin-top: 8px;
+  min-height: 20px;
+  color: var(--theme-white-26);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 20px;
+}
+
+.encyclopedia-ark2 .character-skill__special-resource--fighting-spirit {
+  color: rgb(255 157 76);
+}
+
+.encyclopedia-ark2 .character-skill__special-resource--focus {
+  color: rgb(244 211 82);
+}
+
+.encyclopedia-ark2 .character-skill__resource img,
+.encyclopedia-ark2 .character-skill__cooldown svg {
+  display: block;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
+  object-fit: contain;
+}
+
+.encyclopedia-ark2 .character-skill__resource img {
+  filter: drop-shadow(0 0 5px rgb(112 214 255 / 55%));
+}
+
+.encyclopedia-ark2 .character-skill__resource {
+  color: var(--soul-color);
+}
+
+.encyclopedia-ark2 .character-skill__cooldown svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px var(--theme-transparent-38));
+}
+
+.encyclopedia-ark2 .character-skill__description {
+  margin-top: 12px;
+  color: rgb(221 228 230);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.encyclopedia-ark2 .character-skill__description--with-special-resource {
+  margin-top: 6px;
+}
+
+.encyclopedia-ark2 .character-skill__description p,
+.encyclopedia-ark2 .character-skill__scaling p {
+  margin: 0;
+}
+
+.encyclopedia-ark2 .character-skill__description p + p {
+  margin-top: 6px;
+}
+
+.encyclopedia-ark2 .character-skill__description strong {
+  color: var(--theme-white-40);
+  font-weight: 800;
+}
+
+.encyclopedia-ark2 .character-skill__status-highlight {
+  font-weight: 800;
+}
+
+.encyclopedia-ark2 .character-skill__status-highlight--buff,
+.encyclopedia-ark2 .character-status--buff {
+  --status-color: rgb(79 211 164);
+  --status-white-40: var(--buff-white-40);
+  --status-white-55: var(--buff-white-55);
+  --status-white-62: var(--buff-white-62);
+  --status-transparent-8: var(--buff-transparent-8);
+  --status-transparent-10: var(--buff-transparent-10);
+  --status-transparent-18: var(--buff-transparent-18);
+  --status-transparent-32: var(--buff-transparent-32);
+  --status-transparent-38: var(--buff-transparent-38);
+  --status-transparent-60: var(--buff-transparent-60);
+}
+
+.encyclopedia-ark2 .character-skill__status-highlight--debuff,
+.encyclopedia-ark2 .character-status--debuff {
+  --status-color: rgb(244 104 115);
+  --status-white-40: var(--debuff-white-40);
+  --status-white-55: var(--debuff-white-55);
+  --status-white-62: var(--debuff-white-62);
+  --status-transparent-8: var(--debuff-transparent-8);
+  --status-transparent-10: var(--debuff-transparent-10);
+  --status-transparent-18: var(--debuff-transparent-18);
+  --status-transparent-32: var(--debuff-transparent-32);
+  --status-transparent-38: var(--debuff-transparent-38);
+  --status-transparent-60: var(--debuff-transparent-60);
+}
+
+.encyclopedia-ark2 .character-skill__status-highlight--neutral,
+.encyclopedia-ark2 .character-status--neutral {
+  --status-color: rgb(190 146 76);
+  --status-white-40: var(--neutral-white-40);
+  --status-white-55: var(--neutral-white-55);
+  --status-white-62: var(--neutral-white-62);
+  --status-transparent-8: var(--neutral-transparent-8);
+  --status-transparent-10: var(--neutral-transparent-10);
+  --status-transparent-18: var(--neutral-transparent-18);
+  --status-transparent-32: var(--neutral-transparent-32);
+  --status-transparent-38: var(--neutral-transparent-38);
+  --status-transparent-60: var(--neutral-transparent-60);
+}
+
+.encyclopedia-ark2 .character-skill__status-highlight--buff {
+  color: var(--status-white-55);
+}
+
+.encyclopedia-ark2 .character-skill__status-highlight--debuff {
+  color: var(--status-white-55);
+}
+
+.encyclopedia-ark2 .character-skill__status-highlight--neutral {
+  color: var(--status-white-62);
+  text-shadow: 0 0 5px var(--status-transparent-32);
+}
+
+.encyclopedia-ark2 .character-skill__statuses {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.encyclopedia-ark2 .character-status {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 6px 6px;
+  border: 1px solid var(--status-transparent-60);
+  border-left: 3px solid var(--status-color);
+  border-radius: 8px;
+  background: linear-gradient(105deg, var(--status-transparent-18), rgb(8 15 20 / 58%));
+  box-shadow: inset 0 0 16px var(--status-transparent-8), 0 0 10px var(--status-transparent-10);
+}
+
+.encyclopedia-ark2 .character-status__icon {
+  display: block;
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 5px var(--status-transparent-38));
+}
+
+.encyclopedia-ark2 .character-status__icon--empty {
+  visibility: hidden;
+}
+
+.encyclopedia-ark2 .character-status__body {
+  min-width: 0;
+}
+
+.encyclopedia-ark2 .character-status__name {
+  margin: 0;
+  color: var(--status-white-40);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.encyclopedia-ark2 .character-status__description {
+  margin: 2px 0 0;
+  color: rgb(218 227 229);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.encyclopedia-ark2 .character-skill__scaling {
+  margin-top: 10px;
+  padding-top: 4px;
+  color: var(--theme-gray-d9e0e2-25);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.encyclopedia-ark2 .character-skill__scaling h3,
+.encyclopedia-ark2 .character-skill__scaling h4 {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: inherit;
+  letter-spacing: 0;
+}
+
+.encyclopedia-ark2 .character-skill__scaling > h3 {
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.encyclopedia-ark2 .character-skill__scaling > h3,
+.encyclopedia-ark2 .character-skill__scaling .scaling-module-title {
+  color: var(--theme-white-78);
+}
+
+.encyclopedia-ark2 .character-auto-cast {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding-top: 4px;
+  color: rgb(217 224 226);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.encyclopedia-ark2 .character-auto-cast__title {
+  margin: 0 0 7px;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: left;
+  text-shadow:
+    0 0 4px var(--theme-transparent-72),
+    0 0 10px var(--theme-transparent-58);
+}
+
+.encyclopedia-ark2 .character-auto-cast__table {
+  --auto-cast-column-gap: 10px;
+  display: table;
+  margin-left: -8px;
+  width: fit-content;
+  max-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.encyclopedia-ark2 .character-auto-cast__header-row,
+.encyclopedia-ark2 .character-auto-cast__row {
+  display: table-row;
+}
+
+.encyclopedia-ark2 .character-auto-cast__header-row > div,
+.encyclopedia-ark2 .character-auto-cast__row > div {
+  display: table-cell;
+  vertical-align: top;
+  padding: 0 var(--auto-cast-column-gap) 0 0;
+}
+
+.encyclopedia-ark2 .character-auto-cast__header-row > div:first-child,
+.encyclopedia-ark2 .character-auto-cast__row > div:first-child {
+  padding-left: 8px;
+}
+
+.encyclopedia-ark2 .character-auto-cast__header-row > div:last-child,
+.encyclopedia-ark2 .character-auto-cast__row > div:last-child {
+  padding-right: 8px;
+}
+
+.encyclopedia-ark2 .character-auto-cast__row {
+  position: relative;
+  isolation: isolate;
+}
+
+.encyclopedia-ark2 .character-auto-cast__row > div {
+  padding-block: 2px;
+}
+
+/* Keep the glow inside a cell so it cannot become an extra table column. */
+.encyclopedia-ark2 .character-auto-cast__skill::before {
+  content: "";
+  position: absolute;
+  inset: 6px 16px;
+  z-index: -1;
+  border-radius: 999px;
+  background: var(--theme-transparent-16);
+  filter: blur(4px);
+  pointer-events: none;
+}
+
+.encyclopedia-ark2 .character-auto-cast__skill {
+  color: var(--theme-white-78);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.encyclopedia-ark2 .character-auto-cast__header {
+  color: var(--theme-white-78);
+  font-weight: 600;
+}
+
+.encyclopedia-ark2 .character-auto-cast__condition,
+.encyclopedia-ark2 .character-auto-cast__target {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.encyclopedia-ark2 .character-auto-cast__divider {
+  width: 100%;
+  margin-top: 5px;
+  color: var(--theme-white-55);
+  pointer-events: none;
+}
+
+.encyclopedia-ark2 .character-auto-cast__divider svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 20 / 1;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  filter: drop-shadow(0 0 6px var(--theme-transparent-58))
+          drop-shadow(0 0 13px var(--theme-transparent-38));
+}
+
+.encyclopedia-ark2 .character-auto-cast__divider-halo {
+  opacity: 0.46;
+  filter: blur(3px);
+  stroke-width: 8px;
+}
+
+.encyclopedia-ark2 .character-auto-cast__divider-core {
+  position: relative;
+}
+
+.encyclopedia-ark2 .character-auto-cast__divider-label {
+  fill: #fff;
+  stroke: none;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  filter: drop-shadow(0 0 4px var(--theme-transparent-76))
+          drop-shadow(0 0 10px var(--theme-transparent-52));
+}
+
+.encyclopedia-ark2 .character-auto-cast__credits {
+  margin: -1px auto 0;
+  width: 100%;
+  color: var(--theme-white-46);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-shadow: 0 0 6px var(--theme-transparent-34);
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  align-items: start;
+  gap: 24px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-line--developers {
+  text-align: left;
+  white-space: normal;
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-line--discord {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-label {
+  white-space: nowrap;
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-value {
+  color: #fff;
+  font-weight: 500;
+}
+
+.encyclopedia-ark2 a.character-auto-cast__credit-value {
+  overflow-wrap: anywhere;
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 24px;
+  margin: 3px auto 0;
+  width: 100%;
+}
+
+@media (max-width: 620px) {
+  .encyclopedia-ark2 .character-auto-cast__credit-main {
+    gap: 12px;
+  }
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-meta-item:first-child {
+  text-align: left;
+}
+
+.encyclopedia-ark2 .character-auto-cast__credit-meta-item:last-child {
+  text-align: left;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .encyclopedia-ark2 .character-auto-cast__credit-meta {
+    gap: 12px;
+  }
+}
+
+@media (max-width: 620px) {
+  .encyclopedia-ark2 .character-auto-cast__table {
+    --auto-cast-column-gap: 6px;
+  }
+}
+
+.encyclopedia-ark2 .character-skill__soul-description {
+  margin-top: 12px;
+  color: var(--soul-color);
+}
+
+.encyclopedia-ark2 .character-skill__soul-icons {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.encyclopedia-ark2 .character-skill__soul-icons img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.encyclopedia-ark2 .character-skill__soul-cost {
+  margin-left: 2px;
+  color: var(--soul-color);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 22px;
+}
+
+.encyclopedia-ark2 .character-skill__soul-text {
+  margin-top: 3px;
+  color: inherit;
+}
+
+.encyclopedia-ark2 .character-skill__soul-text strong {
+  color: inherit;
+}
+
+.encyclopedia-ark2 .character-facts {
+  position: absolute;
+  top: 184px;
+  left: 244px;
+  display: flex;
+  width: 326px;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.encyclopedia-ark2 .character-facts__row {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  column-gap: 0;
+}
+
+.encyclopedia-ark2 .character-facts__row:first-child {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 0;
+}
+
+.encyclopedia-ark2 .character-facts__row:first-child .character-fact {
+  gap: 7px;
+}
+
+.encyclopedia-ark2 .character-facts__row:first-child .character-fact--compact {
+  gap: 0;
+}
+
+.encyclopedia-ark2 .character-facts__row:last-child .character-fact:nth-child(2) {
+  grid-column: 2 / span 2;
+}
+
+.encyclopedia-ark2 .character-fact {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: rgb(238 243 245);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  text-shadow: 0 0 7px var(--theme-transparent-24);
+}
+
+.encyclopedia-ark2 .character-facts__row:first-child .character-fact__value {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.encyclopedia-ark2 .character-fact__icon {
+  display: block;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  object-fit: contain;
+  color: rgb(248 250 251);
+  filter:
+    drop-shadow(0 0 2px var(--theme-transparent-68))
+    drop-shadow(0 0 6px var(--theme-transparent-28));
+}
+
+.encyclopedia-ark2 .character-fact__icon--zodiac {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.encyclopedia-ark2 .character-name,
+.encyclopedia-ark2 .character-aliases,
+.encyclopedia-ark2 .character-counterpart {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.encyclopedia-ark2 .character-name {
+  color: rgb(246 248 249);
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1.16;
+  text-shadow:
+    0 0 5px var(--theme-transparent-82),
+    0 0 12px var(--theme-transparent-55),
+    0 0 24px var(--theme-transparent-30),
+    0 2px 2px rgb(0 0 0 / 0.5);
+}
+
+.encyclopedia-ark2 .character-aliases {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
+  color: var(--theme-gray-dce5e7-30);
+  column-gap: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  row-gap: 2px;
+}
+
+.encyclopedia-ark2 .character-counterpart {
+  margin-top: 3px;
+  color: var(--theme-white-52);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.encyclopedia-ark2 .character-data-error {
+  position: absolute;
+  top: 620px;
+  left: 50px;
+  right: 50px;
+  margin: 0;
+  color: #ffb4ae;
+  font-size: 16px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .encyclopedia-ark2 .frame-point-light {
+    display: none;
+  }
+
+  .encyclopedia-ark2 .starfield__star {
+    animation: none;
+    opacity: var(--star-rest-opacity);
+    transform: none;
+  }
+}
+
+.encyclopedia-ark2 .scaling-group {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.encyclopedia-ark2 .scaling-label { white-space: nowrap; }
+.encyclopedia-ark2 .scaling-value { min-width: 0; color: #fff; font-weight: 500; overflow-wrap: anywhere; }
+.encyclopedia-ark2 .scaling-group--branching { display: block; }
+.encyclopedia-ark2 .scaling-group--branching .scaling-label { display: block; margin-bottom: 2px; }
+.encyclopedia-ark2 .scaling-group--branching .scaling-value { display: block; }
+.encyclopedia-ark2 .scaling-group--property-rate { display: block; }
+.encyclopedia-ark2 .scaling-group--property-rate > .scaling-label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--theme-white-78);
+  font-weight: 600;
+}
+.encyclopedia-ark2 .scaling-group--property-rate > .scaling-value { display: block; }
+.encyclopedia-ark2 .scaling-property-label {
+  display: inline;
+  margin: 0;
+  color: var(--theme-white-55);
+  font: inherit;
+  font-weight: 600;
+}
+.encyclopedia-ark2 .scaling-addition { position: relative; display: block; }
+.encyclopedia-ark2 .scaling-soul-expression { display: block; word-break: keep-all; }
+.encyclopedia-ark2 .scaling-operator { position: absolute; right: 100%; white-space: pre; }
+.encyclopedia-ark2 .scaling-condition { color: inherit; font-size: inherit; font-weight: inherit; line-height: inherit; }
+.encyclopedia-ark2 .scaling-condition-header {
+  color: var(--theme-white-55);
+  font-weight: 600;
+}
+.encyclopedia-ark2 .scaling-soul,
+.encyclopedia-ark2 .scaling-module--soul .scaling-value { color: var(--soul-color); }
+.encyclopedia-ark2 .scaling-module { margin-top: 8px; line-height: 1.35; }
+.encyclopedia-ark2 .scaling-linked { padding: 0; border: 0; }
+.encyclopedia-ark2 .scaling-warning { margin-top: 8px; color: inherit; font-size: inherit; font-weight: inherit; }
+.encyclopedia-ark2 .scaling-warning summary { cursor: pointer; }
+
+/* The app's static mode freezes the sample effects along with the portrait. */
+.encyclopedia-ark2[data-static-mode="true"] *,
+.encyclopedia-ark2[data-static-mode="true"] *::before,
+.encyclopedia-ark2[data-static-mode="true"] *::after {
+  animation-play-state: paused !important;
+  transition: none !important;
+}

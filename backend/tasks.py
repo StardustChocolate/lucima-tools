@@ -9,8 +9,11 @@ import inspect
 import json
 import math
 import os
+import random
 import re
+import time
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable
@@ -128,46 +131,418 @@ def _date_str(v):
     return f"{dt.year:04d}/{dt.month}/{dt.day} {dt.hour}:{dt.minute}:{dt.second}"
 
 
-def task_month_signin(c: GameClient) -> dict:
-    """每日月签到。只需 AID+SessionID。奖励发放至邮箱。"""
-    try:
-        res = c.call("MonthSignInHandler.SignIn", c._auth_data())
-    except GameMessage as m:
-        ok = _is_done_msg(m.msg)
-        return {"ok": ok, "detail": ("今日已签到" if ok else f"签到失败：{m.msg}"), "raw": m.msg}
-    return {"ok": True, "detail": f"月签到成功（第 {res.get('NowDay')} 天），奖励已发至邮箱", "raw": res}
+def month_signin_status(runtime: dict | None = None, now_ms: int | None = None) -> dict:
+    """月历、月卡与活动签到只在每次成功登录后检查一次。"""
+    runtime = runtime or {}
+    checked = runtime.get("checkedRevision") == runtime.get("loginRevision", 1)
+    if checked:
+        return {"nextMs": runtime.get("stateRefreshAtMs"), "ready": False,
+                "note": "本次登录已签到，等待下次登录或刷新"}
+    return {"nextMs": None, "ready": True}
 
 
-def task_week_signin(c: GameClient) -> dict:
-    """活动周签到。需先从账号状态取当前签到记录再提交。"""
-    container = (c.account_state or {}).get("WeekSignInDataContainer", {})
-    records = container.get("WeekSignInDataList") or []
-    if not records:
-        return {"ok": False, "detail": "无可用的周签到活动", "raw": container}
+def task_month_signin(c: GameClient, params: dict | None = None,
+                      runtime: dict | None = None) -> dict:
+    """合并月历、月卡和活动签到，重试只补本次登录未完成的步骤。"""
+    runtime = runtime if runtime is not None else {}
+    if not month_signin_status(runtime)["ready"]:
+        return {"ok": True, "skipped": True, "detail": "本次登录已处理每日签到"}
+    revision = runtime.get("loginRevision", 1)
+    details, errors, raw = [], [], {}
 
-    results = []
-    for rec in records:
-        data = c._auth_data({
-            "_id": _oid(rec.get("_id")),
-            "SignInDay": rec.get("SignInDay"),
-            "ActivityID": rec.get("ActivityID"),
-            "CreateTime": _date_str(rec.get("CreateTime")),
-            "LastLoginTime": _date_str(rec.get("LastLoginTime")),
-            "LastSignInTime": _date_str(rec.get("LastSignInTime")),
-            "LastContinuousSignInTime": _date_str(rec.get("LastContinuousSignInTime")),
-        })
-        try:
-            res = c.call("WeekSignInHandler.SignIn", data)
-            results.append({"activity": rec.get("ActivityID"), "day": res.get("SignInDay")})
-        except GameMessage as m:
-            if _is_done_msg(m.msg):
-                results.append({"activity": rec.get("ActivityID"), "done": m.msg})
+    # 各领取步骤分别记成功版本，重试只补未完成的步骤。
+    if runtime.get("calendarCheckedRevision") != revision:
+        previous = c.account_state.get("MonthSignInData") if isinstance(c.account_state, dict) else None
+        previous_day = previous.get("NowDay") if isinstance(previous, dict) else None
+        previous_time = _ms(previous.get("LastSignInTime")) if isinstance(previous, dict) else None
+        if _signin_is_today(previous_time, _signin_now_ms(c.account_state or {}, runtime)):
+            runtime["calendarCheckedRevision"] = revision
+            raw["calendar"] = {"skipped": True, "NowDay": previous_day}
+            details.append("今日已完成月历签到")
+        else:
+            try:
+                res = c.call("MonthSignInHandler.SignIn", c._auth_data())
+                if not isinstance(res, dict):
+                    raise GameError("月历签到响应格式异常")
+            except GameMessage as message:
+                raw["calendar"] = message.msg
+                if _is_done_msg(message.msg):
+                    runtime["calendarCheckedRevision"] = revision
+                    details.append("今日已完成月历签到")
+                else:
+                    errors.append(f"月历签到失败：{message.msg}")
+            except Exception as error:
+                errors.append(f"月历签到失败：{error}")
             else:
-                results.append({"activity": rec.get("ActivityID"), "error": m.msg})
-        except GameError as e:
-            results.append({"activity": rec.get("ActivityID"), "error": str(e)})
-    signed = [r for r in results if "error" not in r]
-    return {"ok": bool(signed), "detail": f"周签到处理 {len(signed)}/{len(results)} 个活动", "raw": results}
+                _sync_signin_time(runtime, res)
+                runtime["calendarCheckedRevision"] = revision
+                runtime["pendingMailRevision"] = revision
+                raw["calendar"] = res
+                if isinstance(c.account_state, dict):
+                    calendar = c.account_state.setdefault("MonthSignInData", {})
+                    if isinstance(calendar, dict):
+                        calendar.update({key: res[key] for key in ("_id", "NowDay", "LastSignInTime")
+                                         if key in res})
+                day = f"（第 {res['NowDay']} 天）" if res.get("NowDay") is not None else ""
+                unchanged = (previous_day is not None and previous_day == res.get("NowDay")
+                             and previous_time is not None and previous_time == _ms(res.get("LastSignInTime")))
+                details.append(f"今日已完成月历签到{day}，本次未新增签到记录" if unchanged
+                               else f"月历签到成功{day}，奖励已发至邮箱")
+
+    if runtime.get("statusCheckedRevision") != revision:
+        try:
+            res = c.call("ServerStatusHandler.Query", c._auth_data())
+            if not isinstance(res, dict):
+                raise GameError("账户每日奖励响应格式异常")
+        except Exception as error:
+            errors.append(f"月卡日奖励查询失败：{error}")
+        else:
+            _sync_signin_time(runtime, res)
+            runtime["statusCheckedRevision"] = revision
+            raw["accountStatus"] = res
+            if res.get("HasMail"):
+                runtime["pendingMailRevision"] = revision
+            # Event=None、无 Drop.Items 都是正常响应，仍完成本次登录检查。
+            drop = res.get("Drop")
+            items: dict = {}
+            _collect_items(drop.get("Items") or [] if isinstance(drop, dict) else [], items)
+            details.append(f"月卡日奖励已到账：{_fmt_items(items)}" if items
+                           else "月卡日奖励已检查，本次无直接奖励")
+
+    activity_result = _task_activity_signins(c, runtime)
+    raw["activities"] = activity_result["raw"]
+    if activity_result["detail"]:
+        (details if activity_result["ok"] else errors).append(activity_result["detail"])
+
+    # 月历和活动签到成功后都需要查邮件，多项成功合并成一次邮箱查询。
+    if runtime.get("pendingMailRevision") == revision:
+        try:
+            mails = _query_mail(c)
+        except Exception as error:
+            errors.append(f"奖励邮件查询失败：{error}")
+        else:
+            runtime.pop("pendingMailRevision", None)
+            raw["mail"] = {"count": len(mails)}
+
+    complete = (runtime.get("calendarCheckedRevision") == revision
+                and runtime.get("statusCheckedRevision") == revision
+                and runtime.get("activityCheckedRevision") == revision
+                and runtime.get("pendingMailRevision") != revision)
+    if complete and not errors:
+        runtime["checkedRevision"] = revision
+    if errors:
+        errors.append(f"{TASK_RETRY_MS // 60_000} 分钟后重试未完成步骤")
+    return {"ok": complete and not errors, "retryable": bool(errors),
+            "detail": "；".join(details + errors), "raw": raw}
+
+
+DAILY_QUEST_IDS = (
+    "DailyScore10",
+    "DailyScore20",
+    "DailyScore30",
+    "DailyScore50",
+    "DailyScore80",
+    "DailyScore100",
+)
+DAILY_QUEST_THRESHOLDS = {
+    static_id: int(static_id.removeprefix("DailyScore"))
+    for static_id in DAILY_QUEST_IDS
+}
+WEEKLY_QUEST_IDS = (
+    "WeekScore20",
+    "WeekScore40",
+    "WeekScore60",
+    "WeekScore80",
+    "WeekScore100",
+    "WeekScore120",
+)
+ACHIEVEMENT_GROUPS = {
+    "daily": ("每日成就", DAILY_QUEST_IDS),
+    "weekly": ("每周成就", WEEKLY_QUEST_IDS),
+}
+
+
+def achievement_options(params: dict | None = None) -> dict[str, bool]:
+    params = params if isinstance(params, dict) else {}
+    return {"daily": bool(params.get("daily", True)),
+            "weekly": bool(params.get("weekly", True))}
+
+
+def _daily_quest_list(state: dict, *, create: bool = False) -> list[dict]:
+    if not isinstance(state, dict):
+        return []
+    container = state.get("QuestContainer")
+    if isinstance(container, dict) and isinstance(container.get("Quests"), list):
+        return container["Quests"]
+    if isinstance(state.get("Quests"), list):
+        return state["Quests"]
+    if create:
+        container = state.setdefault("QuestContainer", {})
+        if isinstance(container, dict):
+            container["Quests"] = []
+            return container["Quests"]
+    return []
+
+
+def daily_achievement_status(state: dict) -> dict:
+    """Read daily-score progress from the cached QuestContainer without a request."""
+    return _score_achievement_status(state, DAILY_QUEST_IDS)
+
+
+def weekly_achievement_status(state: dict) -> dict:
+    """Read weekly-score progress from the cached QuestContainer without a request."""
+    return _score_achievement_status(state, WEEKLY_QUEST_IDS)
+
+
+def _score_achievement_status(state: dict, quest_ids: tuple[str, ...]) -> dict:
+    records = {
+        quest.get("StaticID"): quest
+        for quest in _daily_quest_list(state)
+        if isinstance(quest, dict) and quest.get("StaticID") in quest_ids
+    }
+    score = max((int(quest.get("Count") or 0) for quest in records.values()), default=0)
+    claimable = [
+        static_id for static_id in quest_ids
+        if (records.get(static_id) or {}).get("IsFinish")
+        and not (records.get(static_id) or {}).get("IsRewarded")
+    ]
+    claimed = [
+        static_id for static_id in quest_ids
+        if (records.get(static_id) or {}).get("IsRewarded")
+    ]
+    return {
+        "available": bool(records),
+        "score": score,
+        "claimableIds": claimable,
+        "claimedIds": claimed,
+        "records": records,
+    }
+
+
+def _merge_daily_quests(c: GameClient, results: list[dict]) -> None:
+    """Merge RewardQuest quest states into the cached QuestContainer."""
+    state = c.account_state
+    if not isinstance(state, dict):
+        return
+    quests = _daily_quest_list(state, create=True)
+    by_id = {
+        quest.get("StaticID"): quest
+        for quest in quests
+        if isinstance(quest, dict) and quest.get("StaticID")
+    }
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        for quest in (result.get("Quests") or []):
+            if not isinstance(quest, dict):
+                continue
+            static_id = quest.get("StaticID")
+            if not static_id:
+                continue
+            current = by_id.get(static_id)
+            if current is None:
+                quests.append(dict(quest))
+                by_id[static_id] = quests[-1]
+            else:
+                current.update(quest)
+
+
+def task_daily_achievement(c: GameClient, params: dict | None = None) -> dict:
+    """Claim only the selected daily/weekly score rewards, using cached progress."""
+    options = achievement_options(params)
+    results = [
+        _claim_score_rewards(c, label, quest_ids)
+        for period, (label, quest_ids) in ACHIEVEMENT_GROUPS.items()
+        if options[period]
+    ]
+    if not results:
+        return {"ok": True, "skipped": True, "detail": "未勾选每日或每周成就，跳过领取"}
+    if len(results) == 1:
+        return results[0]
+    return {
+        "ok": all(result["ok"] for result in results),
+        "skipped": all(result.get("skipped") for result in results),
+        "detail": "；".join(result["detail"] for result in results),
+        "raw": [result["raw"] for result in results if "raw" in result],
+    }
+
+
+def _claim_score_rewards(client: GameClient, label: str, quest_ids: tuple[str, ...], *,
+                         score_label: str = "积分") -> dict:
+    status = _score_achievement_status(client.account_state or {}, quest_ids)
+    if not status["available"]:
+        return {"ok": True, "skipped": True,
+                "detail": f"账号快照中没有{label}进度，跳过领取"}
+    claimable = status["claimableIds"]
+    if not claimable:
+        return {
+            "ok": True,
+            "skipped": True,
+            "detail": f"{label}{score_label} {status['score']}，暂无可领取阶段",
+        }
+
+    payload = client._auth_data({
+        "RewardQuestInfos": [
+            {"ID": static_id, "Index": 0}
+            for static_id in claimable
+        ],
+        "CommodityID": "",
+    })
+    try:
+        response = client.call("QuestHandler.RewardQuest", payload)
+    except GameMessage as message:
+        done = _is_done_msg(message.msg)
+        return {
+            "ok": done,
+            "detail": (f"{label}奖励已领取或暂无可领取奖励"
+                       if done else f"{label}领取失败：{message.msg}"),
+            "raw": message.msg,
+        }
+
+    results = response.get("Results") or []
+    _merge_daily_quests(client, results)
+    claimed_ids = []
+    items: dict = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        for quest in (result.get("Quests") or []):
+            if not isinstance(quest, dict):
+                continue
+            static_id = quest.get("StaticID")
+            if (static_id in claimable and quest.get("IsRewarded")
+                    and static_id not in claimed_ids):
+                claimed_ids.append(static_id)
+        _collect_items((result.get("Drop") or {}).get("Items"), items)
+
+    if not claimed_ids:
+        return {"ok": False,
+                "detail": f"{label}领奖响应未确认任何阶段已领取", "raw": response}
+    return {
+        "ok": True,
+        "detail": f"{label}{score_label} {status['score']}，已领取 {len(claimed_ids)} 项奖励：{_fmt_items(items)}",
+        "raw": response,
+    }
+
+
+_ACTIVITY_SIGNIN_DATES = ("CreateTime", "LastLoginTime", "LastSignInTime", "LastContinuousSignInTime")
+_ACTIVITY_SIGNIN_DAYS = 7  # catalog 115657 的全部 65 种签到均为 7 天。
+
+
+def _sync_signin_time(runtime: dict, response: dict) -> None:
+    try:
+        server_ms = int(float(response["Utc"]) * 1000)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return
+    runtime["serverTimeMs"] = server_ms
+    runtime["serverTimeSyncedAtMs"] = int(time.time() * 1000)
+    runtime["serverTimeLoginRevision"] = runtime.get("loginRevision", 1)
+
+
+def _signin_now_ms(state: dict, runtime: dict) -> int:
+    now_ms = int(time.time() * 1000)
+    revision = runtime.get("loginRevision", 1)
+    if (runtime.get("serverTimeLoginRevision") == revision
+            and runtime.get("serverTimeMs") is not None and runtime.get("serverTimeSyncedAtMs") is not None):
+        return runtime["serverTimeMs"] + now_ms - runtime["serverTimeSyncedAtMs"]
+    try:
+        return int(float(state["Utc"]) * 1000) + now_ms - runtime["stateSyncedAtMs"]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return now_ms
+
+
+def _signin_is_today(value, now_ms: int) -> bool:
+    stamp = _ms(value)
+    if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
+        return False
+    # 记录与服务器 Utc 使用同一 UTC 日期，北京时间 08:00 换日。
+    return stamp // 86_400_000 == now_ms // 86_400_000
+
+
+def _signin_timestamp(value) -> int | float:
+    stamp = _ms(value)
+    if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
+        raise GameError("活动签到时间字段异常")
+    return stamp
+
+
+def _task_activity_signins(c: GameClient, runtime: dict) -> dict:
+    """登录后跳过已签满七天或当天已签的活动，其余按快照提交。"""
+    revision = runtime.get("loginRevision", 1)
+    if runtime.get("activityCheckedRevision") == revision:
+        return {"ok": True, "detail": "", "raw": []}
+    if runtime.get("activityLoginRevision") != revision:
+        runtime["activityLoginRevision"] = revision
+        runtime["activityCompleted"] = {}
+    completed = runtime["activityCompleted"]
+    state = c.account_state or {}
+    container = state.get("WeekSignInDataContainer") or {}
+    if not isinstance(container, dict):
+        return {"ok": False, "detail": "活动签到：容器格式异常", "raw": []}
+    records = container.get("WeekSignInDataList", [])
+    if not isinstance(records, list):
+        return {"ok": False, "detail": "活动签到：列表格式异常", "raw": []}
+    results, details, errors = [], [], []
+    for index, record in enumerate(list(records)):
+        try:
+            if not isinstance(record, dict):
+                raise GameError("活动签到记录格式异常")
+            key = _oid(record.get("_id"))
+            if not isinstance(key, str) or not key:
+                raise GameError("活动签到记录缺少 ID")
+            if completed.get(key) == revision:
+                continue
+            activity = record.get("ActivityID")
+            if not isinstance(activity, str) or not activity.strip():
+                raise GameError("活动签到记录缺少活动 ID")
+            day = record.get("SignInDay")
+            if type(day) is not int or day < 0:
+                raise GameError("活动签到天数字段异常")
+            if day >= _ACTIVITY_SIGNIN_DAYS:
+                completed[key] = revision
+                continue
+            if _signin_is_today(record.get("LastSignInTime"), _signin_now_ms(state, runtime)):
+                completed[key] = revision
+                continue
+            data = {"_id": key, "SignInDay": day, "ActivityID": activity}
+            for field in _ACTIVITY_SIGNIN_DATES:
+                _signin_timestamp(record.get(field))
+                data[field] = _date_str(record[field])
+            try:
+                response = c.call("WeekSignInHandler.SignIn", c._auth_data(data))
+            except GameMessage as message:
+                # 已有采集记录确认该精确消息表示奖励领完；其它错误仍重试。
+                if message.msg.strip() != "Reward is Finish":
+                    raise
+                completed[key] = revision
+                details.append("活动签到：奖励已全部领取")
+                results.append({"activity": activity, "day": day,
+                                "rewarded": False, "finished": True})
+                continue
+            if (not isinstance(response, dict) or response.get("ActivityID") != record["ActivityID"]
+                    or _oid(response.get("_id")) != key or type(response.get("SignInDay")) is not int
+                    or response["SignInDay"] < record["SignInDay"]):
+                raise GameError("活动签到响应未确认对应记录")
+            for field in _ACTIVITY_SIGNIN_DATES:
+                _signin_timestamp(response.get(field))
+            updated = {field: deepcopy(response[field])
+                       for field in ("_id", "SignInDay", "ActivityID", *_ACTIVITY_SIGNIN_DATES)}
+            records[index] = updated
+            _sync_signin_time(runtime, response)
+            completed[key] = revision
+            runtime["pendingMailRevision"] = revision
+            advanced = response["SignInDay"] > record["SignInDay"]
+            details.append(f"活动签到：第 {response['SignInDay']} 天奖励已发至邮箱" if advanced
+                           else "活动签到：今日登录已记录，未新增签到奖励")
+            results.append({"activity": record["ActivityID"], "day": response["SignInDay"],
+                            "rewarded": advanced})
+        except Exception as error:
+            errors.append(f"活动签到：失败，{error}")
+    if not errors:
+        runtime["activityCheckedRevision"] = revision
+    if not details and not errors:
+        details.append("活动签到：已检查，暂无需处理的活动")
+    return {"ok": not errors, "detail": "；".join(details + errors), "raw": results}
 
 
 def _mail_id(m: dict):
@@ -180,22 +555,143 @@ def _expiry_ms(m: dict):
     return e.get("$date") if isinstance(e, dict) else e
 
 
-def task_send_meal(c: GameClient) -> dict:
-    """月卡/定时投喂：触发 TimingMealHandler.SentMeal（只需 AID+SessionID）。
+MEAL_TIMEZONE = timezone(timedelta(hours=8))
+MEAL_BOUNDARY_GRACE_MS = 60_000  # 08/20 点后留一分钟，避开客户端/服务器时差及餐次边界。
+TASK_RETRY_MS = 5 * 60_000
+MEAL_RETRY_MS = TASK_RETRY_MS
 
-    与月签到/周签到同样的模式——这个动作本身不直接给奖励，而是把"距上次投递以来
-    累计的定时邮件"发进邮箱（月卡 GIFTMonth01/02/03、午/晚餐 Lunch/Dinner），
-    之后靠"一键领邮件"领取。游戏客户端在主界面会自动调它；我们做成登录必跑任务，
-    这样登录后月卡/餐食奖励就会自动发到邮箱，等领邮件时一并领到。
 
-    响应 Drop 为空（奖励在邮件里）、只更新 LastSentMailTime + HasMail。
+def _meal_window(now_ms: int) -> tuple[str, int, int]:
+    """当前体力发放时段（东八区）；午夜至 08:00 仍属于前一天的夜间。"""
+    current = datetime.fromtimestamp(now_ms / 1000, MEAL_TIMEZONE)
+    start = current.replace(hour=8, minute=0, second=0, microsecond=0)
+    if current.hour >= 20:
+        start = start.replace(hour=20)
+        meal_id = "Dinner"
+    elif current.hour < 8:
+        start = (start - timedelta(days=1)).replace(hour=20)
+        meal_id = "Dinner"
+    else:
+        meal_id = "Lunch"
+    start_ms = int(start.timestamp() * 1000)
+    return meal_id, start_ms, start_ms + 12 * 3600_000
+
+
+def _meal_sent_in_window(state: dict, start_ms: int, end_ms: int) -> bool:
+    value = _ms((state.get("TimingMailData") or {}).get("LastSentMailTime"))
+    return isinstance(value, (int, float)) and start_ms <= value < end_ms
+
+
+def send_meal_status(state: dict, runtime: dict | None = None,
+                     now_ms: int | None = None) -> dict:
+    """纯读取的餐食档期，供任务、调度、界面倒计时共用。
+
+    上午跟随账号快照刷新；新登录、重新开启开关或手动刷新可立即检查当前餐次。
+    夜间体力独立排在 20:01，不等下一次快照。查询失败只重试确认邮件。
     """
+    runtime = runtime or {}
+    now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    _meal_id, start_ms, end_ms = _meal_window(now_ms)
+    confirming = runtime.get("pendingMailWindowMs") == start_ms
+    delivered = (_meal_sent_in_window(state or {}, start_ms, end_ms)
+                 or runtime.get("confirmedWindowMs") == start_ms)
+    check_after = runtime.get("checkAfterMs", now_ms)
+    fresh_check = _meal_window(int(check_after))[1] == start_ms
+
+    current = datetime.fromtimestamp(now_ms / 1000, MEAL_TIMEZONE)
+    morning = current.replace(hour=8, minute=10, second=0, microsecond=0)
+    if current >= morning:
+        morning += timedelta(days=1)
+    refresh_ms = runtime.get("stateRefreshAtMs") or int(morning.timestamp() * 1000)
+    dinner = current.replace(hour=20, minute=1, second=0, microsecond=0)
+    if current >= dinner:
+        dinner += timedelta(days=1)
+    next_dinner_ms = int(dinner.timestamp() * 1000)
+
+    retry_ms = ((runtime.get("nextRetryMs") or 0)
+                if runtime.get("retryWindowMs") == start_ms else 0)
+    if confirming or (not delivered and (_meal_id == "Dinner" or fresh_check)):
+        next_ms = max(start_ms + MEAL_BOUNDARY_GRACE_MS, retry_ms)
+    else:
+        # 当前时段已投递，或日间体力尚待今日快照。调度器会先刷新快照，再执行本任务。
+        next_ms = min(refresh_ms, next_dinner_ms)
+    return {"nextMs": next_ms, "ready": now_ms >= next_ms,
+            "confirming": confirming, "retrying": retry_ms > now_ms}
+
+
+def _query_mail(c: GameClient) -> list[dict]:
+    """查询并合并最新邮件缓存，不领取奖励；沿用登录窗口最老邮件作为游标。"""
+    state = c.account_state
+    container = state.setdefault("MailContainer", {})
+    window = [mail for mail in (container.get("Mails") or []) if isinstance(mail, dict)]
+    by_id = {_mail_id(mail): mail for mail in window if _mail_id(mail)}
+    oldest = min(window, key=lambda mail: _ms(mail.get("SentTime")) or 0) if window else None
+    cursor = (_mail_id(oldest) or "") if oldest else ""
+    response = c.call("MailHandler.QueryNewestMails", c._auth_data({"MailID": cursor}))
+    for mail in response.get("Mails") or []:
+        if isinstance(mail, dict) and _mail_id(mail):
+            by_id[_mail_id(mail)] = mail
+    container["Mails"] = list(by_id.values())
+    return container["Mails"]
+
+
+def _meal_mail_matches(mail: dict, meal_id: str, start_ms: int, end_ms: int) -> bool:
+    sent_ms = _ms(mail.get("SentTime"))
+    if (mail.get("StaticID") != meal_id or not isinstance(sent_ms, (int, float))
+            or not start_ms <= sent_ms < end_ms):
+        return False
+    items: dict = {}
+    _collect_items((mail.get("DropResult") or {}).get("Items") or [], items)
+    return items.get("3", 0) >= 50
+
+
+def task_send_meal(c: GameClient, params: dict | None = None,
+                   runtime: dict | None = None) -> dict:
+    """投递当前餐次的 50 体力并查询邮件确认，不领取邮件，不处理月卡。"""
+    runtime = runtime if runtime is not None else {}
+    now_ms = int(time.time() * 1000)
+    status = send_meal_status(c.account_state or {}, runtime, now_ms)
+    if not status["ready"]:
+        return {"ok": True, "skipped": True, "detail": "未到每日体力检查时间"}
+    meal_id, start_ms, end_ms = _meal_window(now_ms)
+    label = "日间" if meal_id == "Lunch" else "夜间"
+
+    def retry(detail: str, raw=None) -> dict:
+        runtime["nextRetryMs"] = int(time.time() * 1000) + MEAL_RETRY_MS
+        runtime["retryWindowMs"] = start_ms
+        return {"ok": False, "retryable": True,
+                "detail": f"{detail}，{MEAL_RETRY_MS // 60_000} 分钟后重试", "raw": raw}
+
+    if not status["confirming"]:
+        try:
+            response = c.call("TimingMealHandler.SentMeal", c._auth_data())
+        except GameMessage as message:
+            if not _is_done_msg(message.msg):
+                return retry(f"{label}体力投递失败：{message.msg}", message.msg)
+            response = {}
+        except Exception as error:
+            return retry(f"{label}体力投递失败：{error}")
+        # 登录快照和接口响应的字段名不同，必须写回登录字段才可在下轮正确去重。
+        timing = response.get("TimingMealData")
+        if isinstance(timing, dict):
+            c.account_state.setdefault("TimingMailData", {}).update(timing)
+        if _meal_sent_in_window(c.account_state, start_ms, end_ms):
+            runtime["pendingMailWindowMs"] = start_ms
+
+    # 原客户端成功后无条件查邮件，HasMail=false 不能作为跳过依据。
     try:
-        c.call("TimingMealHandler.SentMeal", c._auth_data())
-    except GameMessage as m:
-        ok = _is_done_msg(m.msg)
-        return {"ok": ok, "detail": ("月卡/餐食已投递" if ok else f"投递失败：{m.msg}"), "raw": m.msg}
-    return {"ok": True, "detail": "月卡奖励已发放至邮箱（请领邮件领取）", "raw": None}
+        mails = _query_mail(c)
+    except Exception as error:
+        return retry(f"{label}体力邮件查询失败：{error}")
+    match = next((mail for mail in mails
+                  if _meal_mail_matches(mail, meal_id, start_ms, end_ms)), None)
+    if match is None:
+        return retry(f"尚未查询到{label}的 50 体力邮件")
+    runtime["confirmedWindowMs"] = start_ms
+    for field in ("pendingMailWindowMs", "nextRetryMs", "retryWindowMs"):
+        runtime.pop(field, None)
+    return {"ok": True, "detail": f"{label} 50 体力已发放至邮箱",
+            "raw": {"meal": meal_id, "mailId": _mail_id(match)}}
 
 
 def task_claim_mail(c: GameClient) -> dict:
@@ -211,30 +707,11 @@ def task_claim_mail(c: GameClient) -> dict:
     import time
     now_ms = time.time() * 1000
 
-    # 先收集登录窗口里的邮件
-    by_id: dict[str, dict] = {}
-    window = (c.account_state or {}).get("MailContainer", {}).get("Mails", [])
-    for m in window:
-        mid = _mail_id(m)
-        if mid:
-            by_id[mid] = m
-
-    # 用窗口里最老的一封当游标，QueryNewestMails 会返回比它更新的全部邮件（含它之后所有）。
-    def _sent_ms(m):
-        s = m.get("SentTime")
-        return s.get("$date") if isinstance(s, dict) else (s or 0)
-    cursor = ""
-    if window:
-        oldest = min(window, key=_sent_ms)
-        cursor = _mail_id(oldest) or ""
     try:
-        q = c.call("MailHandler.QueryNewestMails", c._auth_data({"MailID": cursor}))
-        for m in q.get("Mails", []):
-            mid = _mail_id(m)
-            if mid:
-                by_id[mid] = m
+        mails = _query_mail(c)
     except GameMessage:
-        pass
+        mails = (c.account_state or {}).get("MailContainer", {}).get("Mails") or []
+    by_id = {_mail_id(mail): mail for mail in mails if _mail_id(mail)}
 
     # 未领 + 未过期
     valid, expired = [], 0
@@ -351,10 +828,46 @@ def _fmt_clock(ms) -> str:
     return dt.strftime("%m-%d %H:%M")
 
 
+TESSERACT_MAX_CHARGES = 3
+TESSERACT_CHARGE_MS = 86_400_000
+
+
+def _starforce_next_ms(lab: dict, time_field: str):
+    next_ms = _ms(lab.get(time_field))
+    if time_field == "NextCanReceiveTesseractTime" and next_ms is not None:
+        # ArkStarForceLabData.ChargedCanReceiveTesseractTime: the base timestamp
+        # stays unchanged by a charge; each used charge subtracts one day.
+        next_ms -= int(lab.get("TesseractChargeCount") or 0) * TESSERACT_CHARGE_MS
+    return next_ms
+
+
+def tesseract_charge_status(lab: dict, now_ms: int) -> dict:
+    used = int(lab.get("TesseractChargeCount") or 0)
+    charge = {"used": used, "max": TESSERACT_MAX_CHARGES,
+              "exhausted": used >= TESSERACT_MAX_CHARGES,
+              "nextMs": None, "ready": False}
+    done_ms = _starforce_next_ms(lab, "NextCanReceiveTesseractTime")
+    cooldown_ms = _ms(lab.get("NextCanChargeTime"))
+    if charge["exhausted"]:
+        return charge
+    if done_ms is None or cooldown_ms is None:
+        charge["note"] = "加速状态未同步"
+    elif done_ms <= now_ms:
+        charge["note"] = "已完成，等待领取"
+    elif done_ms - now_ms <= TESSERACT_CHARGE_MS:
+        charge["note"] = "剩余生产时间不超过24小时，等待领取"
+    elif max(now_ms, cooldown_ms + 1) >= done_ms - TESSERACT_CHARGE_MS:
+        charge["note"] = "本周期无需再加速"
+    else:
+        # CanChargeTesseract uses NowTime > NextCanChargeTime (strict).
+        charge.update(nextMs=cooldown_ms + 1, ready=now_ms > cooldown_ms)
+    return charge
+
+
 def _make_starforce_task(display: str, time_field: str, route: str):
     def _task(c: GameClient) -> dict:
         lab = (c.account_state or {}).get("ArkStarForceLabData", {}) or {}
-        next_ms = _ms(lab.get(time_field))
+        next_ms = _starforce_next_ms(lab, time_field)
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
         if next_ms is not None and now_ms < next_ms:
@@ -380,7 +893,7 @@ def _make_starforce_task(display: str, time_field: str, route: str):
         new_lab = res.get("ArkStarForceLabData")
         if new_lab is not None and c.account_state is not None:
             c.account_state["ArkStarForceLabData"] = new_lab
-        new_next = _ms((new_lab or {}).get(time_field))
+        new_next = _starforce_next_ms(new_lab or {}, time_field)
         nxt = f"（下次 {_fmt_clock(new_next)}）" if new_next else ""
         return {"ok": True, "lines": [f"领取了 {got}{nxt}"], "detail": f"领取了 {got}", "raw": res}
 
@@ -395,15 +908,9 @@ _claim_tesseract = _make_starforce_task(*STARFORCE_REWARDS[2])
 # ---- 技能模块的额外机制：生产途中可"加速" ----
 # 官方文案(loc UI_Ark_SeedFarmTips): "每7天可生产 1 个技能模块，可以透过加速来缩短生产
 # 时间，且生产途中可以加速 3 次"；UI_Ark_24HDecreased = "减少24小时" → 每次 -24h。
-# 实抓 ChargeTesseract: data 只要 {AID,SessionID}，响应只回刷新后的 ArkStarForceLabData
-# （无 Drop、无 CostItems=免费），把 NextCanReceiveTesseractTime 提前、
-# TesseractChargeCount +1、NextCanChargeTime = now + 24h(两次加速的冷却)。
-# **额度按生产周期计**: RewardTesseract 的响应里 TesseractChargeCount 归 0（实抓佐证），
-# 所以 count 是"本周期已用次数"而非剩余次数。
-TESSERACT_MAX_CHARGES = 3
-# 两次加速之间的冷却(小时)。服务器下发 NextCanChargeTime 为准，这里只用于加速被拒时
-# 本地退避（实抓: 加速/领取后 NextCanChargeTime 都 = 当时 + 24h）。
-TESSERACT_CHARGE_GAP_H = 24
+# 客户端 ArkStarForceLabData: 加速只增加 TesseractChargeCount 并更新冷却；
+# 实际完成时间按原始时间减去次数×24h 计算。剩余时间必须 >24h 才能再加速。
+# 次数按生产周期计，领取后由服务器重置，不在本地推算新周期。
 
 
 def _charge_tesseract(c: GameClient) -> tuple[str, str]:
@@ -414,26 +921,23 @@ def _charge_tesseract(c: GameClient) -> tuple[str, str]:
         "reject"  = 发了请求但被服务器拒（要让用户看见）
     """
     lab = (c.account_state or {}).get("ArkStarForceLabData", {}) or {}
-    used = int(lab.get("TesseractChargeCount") or 0)
-    quota = f"{used}/{TESSERACT_MAX_CHARGES}"
-    if used >= TESSERACT_MAX_CHARGES:
-        return "quiet", f"本周期加速已用完（{quota}），跳过"
-
-    next_ms = _ms(lab.get("NextCanChargeTime"))
     now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-    if next_ms is not None and now_ms < next_ms:
-        return "quiet", f"加速冷却中（已用 {quota}），下次可加速 {_fmt_clock(next_ms)}"
+    status = tesseract_charge_status(lab, now_ms)
+    used = status["used"]
+    quota = f"{used}/{TESSERACT_MAX_CHARGES}"
+    if not status["ready"]:
+        if status["exhausted"]:
+            return "quiet", f"本周期加速已用完（{quota}），跳过"
+        if status.get("note"):
+            return "quiet", status["note"]
+        return "quiet", f"加速冷却中（已用 {quota}），下次可加速 {_fmt_clock(status['nextMs'])}"
 
     try:
         res = c.call("ArkStarForceLabHandler.ChargeTesseract", c._auth_data())
     except GameMessage as m:
-        # 被拒时本地把冷却推后 24h（= 游戏侧真实冷却）再重试：巡检 5 分钟一轮，
-        # 不退避会一直重试刷屏；而挂机会话可能连开数天，也不能就此永久放弃
-        # ——领取过早时游戏有"保养期"，现在拒、过后可能就允许了。
-        if c.account_state is not None:
-            c.account_state.setdefault("ArkStarForceLabData", {})[
-                "NextCanChargeTime"] = {"$date": now_ms + TESSERACT_CHARGE_GAP_H * 3600_000}
-        return "reject", f"加速被拒：{m.msg}（{TESSERACT_CHARGE_GAP_H} 小时后再试）"
+        # Account.run_due records the tool's retryAtMs separately from the
+        # authoritative lab snapshot, just as for the other automatic tasks.
+        return "reject", f"加速被拒：{m.msg}（{TASK_RETRY_MS // 60_000} 分钟后再试）"
 
     # 写回刷新后的实验室状态：同会话内下次巡检据新的 NextCanChargeTime/次数判断
     new_lab = res.get("ArkStarForceLabData")
@@ -441,7 +945,7 @@ def _charge_tesseract(c: GameClient) -> tuple[str, str]:
         c.account_state["ArkStarForceLabData"] = new_lab
     lab = new_lab or {}
     now_used = int(lab.get("TesseractChargeCount") or used + 1)
-    done_ms = _ms(lab.get("NextCanReceiveTesseractTime"))
+    done_ms = _starforce_next_ms(lab, "NextCanReceiveTesseractTime")
     tail = f"，预计 {_fmt_clock(done_ms)} 完成" if done_ms else ""
     return "charged", f"已加速 1 次（-24 小时，{now_used}/{TESSERACT_MAX_CHARGES}）{tail}"
 
@@ -449,7 +953,7 @@ def _charge_tesseract(c: GameClient) -> tuple[str, str]:
 def task_tesseract(c: GameClient) -> dict:
     """技能模块：到点即领；未到点则顺手加速（每周期 3 次、每次 -24h、间隔 24h）。
 
-    加速有可能把完成时间提前到当下，所以加速成功后立刻再试领一次。
+    加速后按服务器返回的新状态重新检查领取时间。
     """
     res = _claim_tesseract(c)
     if not res.get("skipped"):
@@ -487,6 +991,7 @@ def task_dispatch(c: GameClient) -> dict:
     lines: list[str] = []
     counter: dict = {}
     redispatched = 0
+    reward_failed = False
     no_stamina = False
     latest_hc = None  # 最新一次响应带回的 ArkHighCommandData，循环后写回
 
@@ -505,10 +1010,12 @@ def task_dispatch(c: GameClient) -> dict:
             res = c.call("ArkHighCommandHandler.RewardQuest",
                          c._auth_data({"QuestStaticID": sid}))
         except GameMessage as m:
+            reward_failed = True
             lines.append(f"{sid}：领取失败（{m.msg}）")
             continue
         if res.get("ArkHighCommandData") is not None:
             latest_hc = res["ArkHighCommandData"]
+            c.account_state["ArkHighCommandData"] = latest_hc
         got = {}
         _collect_items((res.get("Drop", {}) or {}).get("Items", []), got)
         for k, v in got.items():
@@ -526,6 +1033,7 @@ def task_dispatch(c: GameClient) -> dict:
             redispatched += 1
             if dres.get("ArkHighCommandData") is not None:
                 latest_hc = dres["ArkHighCommandData"]
+                c.account_state["ArkHighCommandData"] = latest_hc
             # 用响应里的新完成时间提示
             newq = next((x for x in (dres.get("ArkHighCommandData", {}) or {}).get("DispatchedQuests", [])
                          if x.get("StaticID") == sid), None)
@@ -542,12 +1050,16 @@ def task_dispatch(c: GameClient) -> dict:
         c.account_state["ArkHighCommandData"] = latest_hc
 
     if not counter and redispatched == 0:
+        if reward_failed:
+            return {"ok": False, "retryable": True, "lines": lines,
+                    "detail": "部分派遣奖励领取失败"}
         return {"ok": True, "skipped": True, "lines": lines or ["无可领取的派遣"],
                 "detail": "派遣无可领取"}
     detail = (f"派遣领取 {_fmt_items(counter)}" if counter else "派遣处理完成")
     if no_stamina:
         detail += "（体力不足，部分未续派）"
-    return {"ok": True, "lines": lines, "detail": detail, "raw": None}
+    return {"ok": not reward_failed, "retryable": reward_failed,
+            "lines": lines, "detail": detail, "raw": None}
 
 
 # ============ 秘密商店 ============
@@ -917,12 +1429,12 @@ def _secret_shop_records(state: dict) -> list:
     return [r for r in recs if r.get("Store") == SECRET_STORE_ID]
 
 
-# 秘密商店免费刷新的冷却：1 小时。
+# 秘密商店免费刷新：游戏冷却为 1 小时，工具额外等待 1 秒再发请求。
 # 依据（两侧互相印证，不是猜的）：用户在游戏内刷新后看到冷却显示 59 分钟（秒数进位即 1h）；
 # 抓包侧 IsUseGold=0 成功时货架年龄为 1.01h / 2.78h，而刚刷完 5 分钟内再免费刷必被拒。
 # 拒绝时服务器回明文 `CantReset`（2026-07-30 在真实账号上连发 3 次实测：第 1 次成功、
 # 第 2/3 次均 CantReset，不扣钻不扣金币）。
-SHOP_FREE_COOLDOWN_MS = 60 * 60 * 1000
+SHOP_FREE_COOLDOWN_MS = (60 * 60 + 1) * 1000
 
 
 def secret_shop_next_free(state: dict) -> int | None:
@@ -986,6 +1498,47 @@ def _buy_from_shelf(c: GameClient, records: list, wanted: list, counter: dict) -
             continue
         _collect_items((res.get("Drop", {}) or {}).get("Items", []), counter)
     return errors
+
+
+def _equipment_matches_in_shelf(records: list, scheme: dict | None) -> list[dict]:
+    """返回当前秘密商店货架中命中方案的 85 级传说装备卡片。"""
+    if not isinstance(scheme, dict):
+        return []
+    matches = []
+    for idx, rec in enumerate(records):
+        if rec.get("BuyCount"):
+            continue
+        equip = _record_equipment(rec)
+        if equip is None or not _is_level_85_legendary(equip):
+            continue
+        if equipment_matches_filter_scheme(equip, scheme):
+            card = parse_equipment(equip)
+            card["index"] = idx
+            matches.append(card)
+    return matches
+
+
+def _buy_equipment_matches(c: GameClient, records: list, cards: list[dict]) -> tuple[int, list[str]]:
+    """自动购买命中的装备档位，返回(成功数量, 逐档失败说明)。"""
+    errors = []
+    bought = 0
+    for card in cards:
+        try:
+            idx = int(card.get("index"))
+        except (TypeError, ValueError):
+            errors.append("命中装备购买失败：货架位置无效")
+            continue
+        if idx < 0 or idx >= len(records):
+            errors.append("命中装备购买失败：货架已失效")
+            continue
+        rec = records[idx]
+        try:
+            c.call("StoreHandler.BuyCommodity", _buy_payload(c, rec))
+            bought += 1
+        except GameMessage as message:
+            label = "·".join(str(x) for x in (card.get("setCN"), card.get("slotCN")) if x)
+            errors.append(f"{label or '命中装备'}购买失败：{message.msg}")
+    return bought, errors
 
 
 # ---- 钻石刷商店：原子接口（前端编排循环，严格保证"上一次买完再刷下一次") ----
@@ -1329,10 +1882,26 @@ def task_shop_free(c: GameClient, params: dict | None = None) -> dict:
     """
     params = params or {}
     wanted = [str(x) for x in (params.get("wanted") or DEFAULT_SHOP_WANTED)]
+    equipment_scheme = params.get("equipmentScheme")
+    equipment_mode = str(params.get("equipmentMode") or "display")
+    if equipment_mode not in {"display", "auto"}:
+        equipment_mode = "display"
 
     counter: dict = {}
-    errors = _buy_from_shelf(
-        c, _secret_shop_records(c.account_state or {}), wanted, counter)
+    equipment_bought = 0
+    current_records = _secret_shop_records(c.account_state or {})
+    errors = _buy_from_shelf(c, current_records, wanted, counter)
+    # 自动购买模式也要先处理登录快照里上一轮留下的命中装备，避免刷新前覆盖货架。
+    if isinstance(equipment_scheme, dict) and equipment_mode == "auto":
+        try:
+            bought, buy_errors = _buy_equipment_matches(
+                c, current_records, _equipment_matches_in_shelf(current_records, equipment_scheme))
+            equipment_bought += bought
+            errors.extend(buy_errors)
+        except UnknownEquipmentError as error:
+            return {"ok": False, "error": f"装备 StaticID={error.static_id} 不在图鉴数据中，无法判定是否为85级传说",
+                    "bought": counter, "boughtLines": [], "legendaryMatches": [],
+                    "detail": "装备筛选失败"}
     note = ""
     try:
         res = c.call("StoreHandler.ResetRandomStore",
@@ -1342,25 +1911,55 @@ def task_shop_free(c: GameClient, params: dict | None = None) -> dict:
             note = "（注意：本次刷新产生了扣费）"
     except GameMessage as m:
         # 免费额度未恢复：服务器回明文 `CantReset`（2026-07-30 真机实测，不扣任何货币）。
-        # 正常情况下调度已按货架 LastResetTime+1h 闸门过，不该走到这里；真走到了说明
+        # 正常情况下调度已按货架 LastResetTime+1h1s 闸门过，不该走到这里；真走到了说明
         # 档期算早了或货架被游戏客户端刷过。当前货架已在刷新请求前检查，
         # 因此这里只跳过刷新，不再重复使用缓存货架。
         if "cantreset" in m.msg.replace(" ", "").lower():
+            pending_matches = []
+            if isinstance(equipment_scheme, dict) and equipment_mode == "display":
+                try:
+                    pending_matches = _equipment_matches_in_shelf(current_records, equipment_scheme)
+                except UnknownEquipmentError as error:
+                    return {"ok": False,
+                            "error": f"装备 StaticID={error.static_id} 不在图鉴数据中，无法判定是否为85级传说",
+                            "detail": "装备筛选失败"}
             lines = []
             if counter:
                 lines.append(f"购买 {_fmt_items(counter)}")
             lines.extend(errors)
             if counter or errors:
                 lines.append("免费刷新冷却中（服务器：CantReset），本轮跳过")
+            if pending_matches:
+                lines.append(f"当前货架命中 {len(pending_matches)} 件85级传说装备，等待查看")
             return {
                 "ok": True,
                 "skipped": not bool(counter or errors),
                 "detail": "；".join(lines),
                 "lines": lines,
+                "equipmentMode": equipment_mode,
+                "legendaryMatches": pending_matches,
+                "legendaries": pending_matches,
+                "records": current_records,
             }
         raise
 
     errors.extend(_buy_from_shelf(c, records, wanted, counter))
+
+    legendary_matches = []
+    if isinstance(equipment_scheme, dict):
+        try:
+            legendary_matches = _equipment_matches_in_shelf(records, equipment_scheme)
+            if equipment_mode == "auto" and legendary_matches:
+                bought, buy_errors = _buy_equipment_matches(c, records, legendary_matches)
+                equipment_bought += bought
+                errors.extend(buy_errors)
+                # 自动购买后不再把同一批卡片显示为待处理。
+                legendary_matches = []
+        except UnknownEquipmentError as error:
+            return {"ok": False,
+                    "error": f"装备 StaticID={error.static_id} 不在图鉴数据中，无法判定是否为85级传说",
+                    "bought": counter, "boughtLines": [], "legendaryMatches": [], "records": records,
+                    "detail": "装备筛选失败"}
 
     lines = []
     if counter:
@@ -1368,58 +1967,66 @@ def task_shop_free(c: GameClient, params: dict | None = None) -> dict:
     elif not errors:
         lines.append(f"本次无可购买的目标道具{note}")
     lines.extend(errors)
+    if equipment_bought:
+        lines.append(f"自动购买 {equipment_bought} 件85级传说装备")
+    if legendary_matches:
+        lines.append(f"命中 {len(legendary_matches)} 件85级传说装备，等待查看")
     detail = "；".join(lines) if lines else "本次无可购买的目标道具"
-    return {"ok": True, "lines": lines, "detail": detail}
+    return {"ok": True, "lines": lines, "detail": detail,
+            "records": records,
+            "equipmentMode": equipment_mode, "legendaryMatches": legendary_matches,
+            "legendaries": legendary_matches}
 
 
-# ============ 商店购买（VIP礼包 / 友情 / 荣誉勋章） ============
-# 三个固定货架商店（loc: T_Commodity_PageTag_VIPGIFT_VIP0=VIP礼包 /
-# T_Store_Name_FriendShip=友情 / T_Store_Name_MedalHonor=荣誉勋章）。
-# 与秘密商店不同：这三家的货架是**静态档位**，商品内容不随机，所以账号快照里的
+# ============ 商店购买（静态货架） ============
+# 与秘密商店不同：这些货架是**静态档位**，商品内容不随机，所以账号快照里的
 # 记录(StoreRecordContainer)只带购买计数、不带 DropResult —— "这档卖什么/多少钱"
-# 全在客户端静态表里，流量里看不到。故本模块的货架 = 三个来源合并：
-#   ① backend/commodity_names.json —— 官方档位名 + 限购文案，提供"有哪些档、叫什么"
-#   ② COMMODITY_PRICE —— 实抓验证过的价格与产出（下方逐档标注来源）
-#   ③ 账号快照的 StoreRecordContainer.Records —— 提供购买必需的 `_id` 与已购次数
-# ⚠️ 缺 ② 的档位一律**不可选**：三家里有整套角色降临礼包（loc 标"每个帐号只能购买
+# 全在客户端静态表里，流量里看不到。故本模块的货架 = 四个来源合并：
+#   ① backend/commodity_names.json —— 官方档位名，提供"叫什么"
+#   ② backend/commodity_catalog.json —— 从 sd_Commodity.txt 自动生成的限购周期与次数
+#   ③ COMMODITY_PRICE —— 实抓/官方表验证过的价格与产出
+#   ④ 账号快照的 StoreRecordContainer.Records —— 提供购买必需的 `_id` 与已购次数
+# ⚠️ 缺 ③ 的档位一律**不可选**：商店里有整套角色降临礼包（loc 标"每个帐号只能购买
 # 1次""无法于招募中获得"），极可能是真钱 IAP 档，价格未知就点下去风险不可控。
-# ⚠️ 缺 ③ 的档位也不可选：购买请求必须回传服务器下发的整条 Record（含 Mongo _id），
-# 快照里没有就无法构造，猜 _id 只会被服务器拒。
 BUY_STORES = [
     {"id": "VIPGift", "name": "VIP 礼包", "currency": "1"},
     {"id": "FriendShip", "name": "友情", "currency": "24"},
     {"id": "MedalHonor", "name": "荣誉勋章", "currency": "26"},
+    {"id": "Normal", "name": "一般", "currency": "25"},
+    {"id": "OathCertificate", "name": "誓约之证", "currency": "22"},
 ]
 
 # 货架白名单（用户定：只放这些档，其余不进 UI）。
-#   cost: (货币StaticID, 单价)    gain: [(产出StaticID, 单份数量)]    limit: 每日限购份数
-# 价格与产出来自 game.ero-labs.tech_buy.har 实抓（2026-07-29，账号 654211306b03755f04d2bbaf）：
+#   cost: (货币StaticID, 单价)    gain: [(产出StaticID, 单份数量)]
+# 限购规则不在这里维护，统一读取自动生成的 commodity_catalog.json。
+# 原有价格与产出来自 game.ero-labs.tech_buy.har 实抓（2026-07-29）：
 # 每条都是"请求 Count=N → 响应 CostItems/Drop"换算出的单份值，MedalHonor2 是
 # Count=3 花 90 得 120能源 → 单价 30、单份 40。
+# 新增星源粉末/誓约之证档位直接读取并核对 sd_Commodity.txt 的价格与产出字段。
 # ⚠️ VIPQuick4 未实抓，价格按用户确认"与前三个同价"、产出按"比 3 多五张快速战斗券"。
-# ⚠️ limit 为 None = 每日限购次数未确认，UI 只显示已购次数、不显示 N/M。
 COMMODITY_PRICE = {
-    "VIPGIFT_VIPQuick1": {"cost": ("1", 500), "gain": [("110", 10), ("3", 30)], "limit": 1},
-    "VIPGIFT_VIPQuick2": {"cost": ("1", 500), "gain": [("110", 15), ("3", 30)], "limit": 1},
-    "VIPGIFT_VIPQuick3": {"cost": ("1", 500), "gain": [("110", 20), ("3", 30)], "limit": 1},
-    "VIPGIFT_VIPQuick4": {"cost": ("1", 500), "gain": [("110", 25), ("3", 30)], "limit": 1},
-    # 友情四档均为每日 1 次（用户确认）
-    "FriendShip3": {"cost": ("24", 100), "gain": [("3", 40)], "limit": 1},
-    "FriendShip4": {"cost": ("24", 100), "gain": [("4", 5)], "limit": 1},
-    "FriendShip10": {"cost": ("24", 1000), "gain": [("1", 100000)], "limit": 1},
-    "FriendShip11": {"cost": ("24", 100), "gain": [("110", 5)], "limit": 1},
-    # limit=3 由用户确认（游戏内该档每日可买 3 次）；抓包里也确实出现过 Count:3 的请求
-    "MedalHonor2": {"cost": ("26", 30), "gain": [("3", 40)], "limit": 3},
-    # ⚠️ MedalHonor1 = 技能模块：**价格 150 是用户在游戏内读的，未经抓包验证**（没有
-    # 任何抓包记录过这档的 CostItems）。档位身份是排除法定的：用户 LV41 号的荣誉勋章
-    # 商店只有 MedalHonor1/2 两条记录，2 已实抓是能源，而该商店除能源与六部位芯片
-    # (3~10) 外只剩技能模块。
-    # ⚠️ **限购是"每周 1 次"而非每日**（用户确认；也与快照吻合：能源档每日重置，
-    # MedalHonor1 在 07-21 购买后到 07-24 仍未重置）。limit=1 用于显示"购买 N/1"，
-    # 但 bought 要等服务器周重置才归零——买过之后会一直显示 购买 0/1 直到下周。
+    "VIPGIFT_VIPQuick1": {"cost": ("1", 500), "gain": [("110", 10), ("3", 30)]},
+    "VIPGIFT_VIPQuick2": {"cost": ("1", 500), "gain": [("110", 15), ("3", 30)]},
+    "VIPGIFT_VIPQuick3": {"cost": ("1", 500), "gain": [("110", 20), ("3", 30)]},
+    "VIPGIFT_VIPQuick4": {"cost": ("1", 500), "gain": [("110", 25), ("3", 30)]},
+    "FriendShip3": {"cost": ("24", 100), "gain": [("3", 40)]},
+    "FriendShip4": {"cost": ("24", 100), "gain": [("4", 5)]},
+    "FriendShip10": {"cost": ("24", 1000), "gain": [("1", 100000)]},
+    "FriendShip11": {"cost": ("24", 100), "gain": [("110", 5)]},
+    "MedalHonor2": {"cost": ("26", 30), "gain": [("3", 40)]},
+    # MedalHonor1 = 技能模块，价格与产出已经由 sd_Commodity.txt 交叉确认。
     # name: loc 未收录该档时的显示名（我们自己起的标签，非官方文案）。
-    "MedalHonor1": {"cost": ("26", 150), "gain": [("34", 1)], "limit": 1,
-                    "name": "技能模块"},
+    "MedalHonor1": {"cost": ("26", 150), "gain": [("34", 1)], "name": "技能模块"},
+    # 以下档位来自 sd_Commodity.txt，并由 game.ero-labs.art-buycommodity.har 验证购买结构。
+    "Normal22": {"cost": ("25", 10000), "gain": [("B057", 1)]},
+    "OathCertificate3": {"cost": ("22", 15), "gain": [("34", 1)]},
+    "OathCertificate12": {"cost": ("22", 12), "gain": [("B057", 1)]},
+    "OathCertificate5": {"cost": ("22", 4), "gain": [("AC01", 1)]},
+    "OathCertificate6": {"cost": ("22", 12), "gain": [("AC02", 1)]},
+    "OathCertificate7": {"cost": ("22", 3), "gain": [("EC41", 1)]},
+    "OathCertificate8": {"cost": ("22", 9), "gain": [("EC42", 1)]},
+    "OathCertificate9": {"cost": ("22", 3), "gain": [("EC51", 1)]},
+    "OathCertificate10": {"cost": ("22", 9), "gain": [("EC52", 1)]},
 }
 
 # 每家商店要显示的档位与顺序（白名单，用户定）
@@ -1428,6 +2035,11 @@ STORE_GOODS = {
                 "VIPGIFT_VIPQuick3", "VIPGIFT_VIPQuick4"],
     "FriendShip": ["FriendShip3", "FriendShip4", "FriendShip11", "FriendShip10"],
     "MedalHonor": ["MedalHonor1", "MedalHonor2"],
+    "Normal": ["Normal22"],
+    "OathCertificate": ["OathCertificate3", "OathCertificate12",
+                        "OathCertificate5", "OathCertificate6",
+                        "OathCertificate7", "OathCertificate8",
+                        "OathCertificate9", "OathCertificate10"],
 }
 
 # 卡片上要不要单独列"礼包内容"。只有 VIP 礼包需要——它的档名是礼包名（"VIP快速战斗
@@ -1437,7 +2049,7 @@ STORE_SHOW_GAIN = {"VIPGift"}
 
 # 账号快照里没有该档记录时的提示（不同商店原因不同）：
 # VIP 礼包有 VIP 等级门槛（loc UI_VIPGIFT_VIPLess="须达到VIP{0}才可购买!"），
-# 友情/荣誉勋章没有等级门槛，记录只是"还没生成"。两者都仍然尝试购买，由服务器裁决。
+# 其余静态货架没有记录时通常只是"还没生成"，仍然尝试购买并由服务器裁决。
 NO_RECORD_HINT = {
     "VIPGift": "账号上找不到该礼包，可能是 VIP 等级不足",
     "FriendShip": "账号上还没有该档记录，可直接尝试购买",
@@ -1445,6 +2057,7 @@ NO_RECORD_HINT = {
 }
 
 _COMMODITY_NAMES = None
+_COMMODITY_CATALOG = None
 
 
 def _commodity_names() -> dict:
@@ -1458,6 +2071,20 @@ def _commodity_names() -> dict:
         except Exception:
             _COMMODITY_NAMES = {}
     return _COMMODITY_NAMES
+
+
+def _commodity_catalog() -> dict:
+    """读取由官方 sd_Commodity.txt 生成的限购规则索引。"""
+    global _COMMODITY_CATALOG
+    if _COMMODITY_CATALOG is None:
+        p = os.path.join(os.path.dirname(__file__), "commodity_catalog.json")
+        try:
+            with open(p, encoding="utf-8") as f:
+                payload = json.load(f)
+            _COMMODITY_CATALOG = payload.get("commodities", {})
+        except Exception:
+            _COMMODITY_CATALOG = {}
+    return _COMMODITY_CATALOG
 
 
 def _gain_text(gain: list) -> str:
@@ -1496,10 +2123,10 @@ def _synth_record(sid: str, store: str) -> dict:
 
 
 def store_shelves(state: dict) -> list[dict]:
-    """三个商店的货架（白名单档位 × 账号快照）。供前端渲染卡片。
+    """静态商店货架（白名单档位 × 账号快照）。供前端渲染卡片。
 
-    每档：{id, name, tip, icon, gainText, cost:{item,name,count},
-           bought, limit, remain, hasRecord, hint}
+    每档：{id, name, tip, icon, gainText, cost:{item,name,count}, resetType,
+           bought, limit, remain, lastResetTime, hasRecord, hint}
     货架档位由 STORE_GOODS 白名单固定（用户只要这些档），所以每档都有价格与产出。
     **不返回"能否购买"的判断**——用户定：售罄/快照缺记录都照发请求，由服务器裁决，
     把它的原话显示出来。本地拦人只会像 FriendShip10 那样误判（快照没记录≠不能买）。
@@ -1511,15 +2138,19 @@ def store_shelves(state: dict) -> list[dict]:
             recs[str(sid)] = r
 
     catalog = _commodity_names()
+    rules = _commodity_catalog()
     out = []
     for store in BUY_STORES:
         goods = []
         for sid in STORE_GOODS.get(store["id"], []):
             meta = catalog.get(sid, {})
+            rule = rules.get(sid)
+            if not isinstance(rule, dict) or rule.get("store") != store["id"]:
+                raise GameError(f"商品 {sid} 的官方限购规则缺失或商店不匹配")
             price = COMMODITY_PRICE[sid]
             rec = recs.get(sid)
             gain = price["gain"]
-            limit = price.get("limit")
+            limit = rule.get("limit")
             bought = int((rec or {}).get("BuyCount") or 0)
 
             goods.append({
@@ -1535,6 +2166,8 @@ def store_shelves(state: dict) -> list[dict]:
                          "count": price["cost"][1]},
                 "bought": bought,
                 "limit": limit,
+                "resetType": rule.get("resetType"),
+                "lastResetTime": _ms((rec or {}).get("LastResetTime")),
                 # 剩余可购次数（游戏内"购买 N/M"的 N 是**剩余**而非已买，用户确认）
                 "remain": (max(0, limit - bought) if limit is not None else None),
                 "hasRecord": rec is not None,
@@ -1568,7 +2201,10 @@ def store_buy(c: GameClient, picks: list[dict]) -> dict:
         sid = str(pick.get("id") or "")
         count = max(1, int(pick.get("count") or 1))
         meta = _commodity_names().get(sid, {})
-        name = meta.get("name") or sid
+        price = COMMODITY_PRICE.get(sid, {})
+        name = meta.get("name") or price.get("name") or (
+            _gain_text(price.get("gain") or []) if price else sid
+        )
 
         if sid not in COMMODITY_PRICE:
             errors.append(f"{name}：不在货架白名单内，已跳过")
@@ -1609,10 +2245,184 @@ def store_buy(c: GameClient, picks: list[dict]) -> dict:
 # 逐步增加。使用快速扫荡功能时，会消耗你持有的意识同步器」——消耗量=当前持有量，
 # 请求体里没有数量字段，由服务器结算（实抓：持有 3 个 → CostItems 3 个、余额归 0）。
 _ABYSS_RE = re.compile(r"^Abyss_(\d+)$")
+# 虚构深渊与虚拟幻境是两个独立玩法，不能将 Abyss_N 当作战斗关卡兼容。
+_ABYSS_BATTLE_RE = re.compile(r"^MysteriousRealm_(\d+)$")
+ABYSS_REWARD_QUEST_IDS = tuple(f"FantasyStar{index}" for index in range(1, 11))
 # 门槛层数（用户定）：不到这一层不扫，免得把同步器浪费在低层低产出上
 ABYSS_MIN_FLOOR = 80
 SYNC_ITEM_SID = "39"          # 意识同步器
 ABYSS_SWEEP_ROUTE = "SceneHandler.PurityScene"
+
+
+def abyss_claim_rewards(c: GameClient) -> dict:
+    """Batch the finished FantasyStar stages, matching the client's reward button."""
+    return _claim_score_rewards(c, "虚构深渊", ABYSS_REWARD_QUEST_IDS, score_label="星数")
+
+
+def _abyss_scene_records(state: dict | None) -> dict[str, dict]:
+    """Select open stages, including a first attempt without a saved SceneData.
+
+    Scene.PreScene names the required cleared stage. Missing SceneData uses the
+    client's observed first-attempt defaults; it is not persisted until settlement.
+    """
+    if not state:
+        return {}
+    from .abyss_state import activity_open, metadata
+
+    records = {}
+    for scene in (state or {}).get("SceneDataContainer", {}).get("Scenes", []):
+        if isinstance(scene, dict) and scene.get("StaticID"):
+            records.setdefault(str(scene["StaticID"]), scene)
+    cleared = {sid for sid, scene in records.items()
+               if isinstance(scene.get("Stars"), list) and scene["Stars"] and scene["Stars"][0]}
+    tables = metadata()["tables"]
+    now = time.time()
+    result = {}
+    for sid, definition in tables["Scene"].items():
+        if not _ABYSS_BATTLE_RE.fullmatch(sid) or not tables["Fantasy"].get(sid):
+            continue
+        prerequisites = str(definition.get("PreScene") or "").split("~")
+        if sid not in records and any(pre and pre not in cleared for pre in prerequisites):
+            continue
+        if not all(activity_open(identifier, state, now=now, tables=tables)
+                   for identifier in str(definition.get("ActivityIDs") or "").split("~")):
+            continue
+        if not any(all(activity_open(identifier, state, now=now, tables=tables)
+                       for identifier in row["ActivityIDs"]) for row in tables["Fantasy"][sid]):
+            continue
+        result[sid] = records.get(sid) or {"StaticID": sid, "Stars": [0, 0, 0], "PassCount": 0}
+    return result
+
+
+def abyss_scenes(state: dict | None) -> list[dict]:
+    """Return current Fictional Abyss stages allowed by progress and activity."""
+    result = []
+    for sid, scene in _abyss_scene_records(state).items():
+        floor = int(_ABYSS_BATTLE_RE.fullmatch(sid).group(1))
+        stars = scene.get("Stars")
+        result.append({
+            "id": sid,
+            "floor": floor,
+            "name": f"第 {floor} 关",
+            "stars": list(stars) if isinstance(stars, list) else [],
+            "passCount": int(scene.get("PassCount") or 0),
+            "cleared": bool(stars and stars[0]),
+        })
+    return sorted(result, key=lambda scene: scene["floor"])
+
+
+def abyss_scene_effects(state: dict, scene_id: str) -> dict:
+    """Describe the two waves using the same active Fantasy row as battle."""
+    from .abyss_state import fantasy_config
+
+    fantasy = fantasy_config(scene_id, state)
+    result = {}
+    for index, wave in enumerate(("upper", "lower")):
+        buffs = fantasy["Waves"][index].get("Buffs") or {}
+        groups = {}
+        for source, group in (("Bs", "bonuses"), ("DBs", "restrictions")):
+            groups[group] = []
+            for buff in buffs.get(source) or []:
+                identifier = buff["B"]
+                description = _localized_text(f"T_Status_Description_{identifier}")
+                groups[group].append({"id": identifier,
+                                      "description": description or "效果说明暂缺",
+                                      "descriptionMissing": description is None})
+        result[wave] = groups
+    return result
+
+
+def abyss_role_briefs(state: dict | None) -> list[dict]:
+    """Project warehouse roles for the Abyss team picker.
+
+    ``roleId`` is the per-instance database id used by RolePosMap and battle
+    payloads.  ``staticId`` is kept separately for avatar/name lookup; using it as
+    the reference would be ambiguous for accounts owning duplicate instances.
+    """
+    result = []
+    roles = (state or {}).get("RoleDataContainer", {}).get("Roles", [])
+    for role in roles:
+        if not isinstance(role, dict):
+            continue
+        role_id = _oid(role.get("_id"))
+        static_id = str(role.get("StaticID") or "")
+        if not role_id or not static_id:
+            continue
+        skills = []
+        for skill in (role.get("Skills") or {}).get("Skills", []):
+            if isinstance(skill, dict) and skill.get("StaticID"):
+                skills.append({"staticId": str(skill["StaticID"]),
+                               "level": int(skill.get("Level") or 0)})
+        result.append({
+            "roleId": str(role_id),
+            "staticId": static_id,
+            "name": item_name(static_id),
+            "level": role.get("LV"),
+            "star": role.get("Star"),
+            "imprint": role.get("ImprintLV"),
+            "awaken": role.get("AwakenLV"),
+            "skills": skills,
+        })
+    result.sort(key=lambda row: (-int(row.get("star") or 0),
+                                 -int(row.get("level") or 0), row["staticId"], row["roleId"]))
+    return result
+
+
+def normalize_abyss_config(state: dict | None, scene_id, waves) -> dict:
+    """Validate and normalize the two-wave Abyss team configuration."""
+    scene_id = str(scene_id or "").strip()
+    scene = next((s for s in abyss_scenes(state) if s["id"] == scene_id), None)
+    if scene is None:
+        raise GameError("请选择账号已解锁的虚构深渊关卡")
+
+    if isinstance(waves, dict):
+        source = [waves.get("upper"), waves.get("lower")]
+    elif isinstance(waves, list):
+        source = list(waves[:2])
+    else:
+        raise GameError("上下半队伍配置格式无效")
+    if len(source) != 2:
+        raise GameError("虚构深渊必须配置上半和下半两队")
+
+    by_id = {
+        str(_oid(role.get("_id"))): role
+        for role in ((state or {}).get("RoleDataContainer", {}).get("Roles", []))
+        if isinstance(role, dict) and _oid(role.get("_id"))
+    }
+    by_static: dict[str, list[str]] = {}
+    for role_id, role in by_id.items():
+        by_static.setdefault(str(role.get("StaticID") or ""), []).append(role_id)
+    used: set[str] = set()
+    normalized = []
+    for label, row in zip(("upper", "lower"), source):
+        if isinstance(row, dict):
+            slots = [row.get(str(i), row.get(i)) for i in range(4)]
+        elif isinstance(row, list):
+            slots = list(row[:4]) + [None] * max(0, 4 - len(row))
+        else:
+            slots = [None] * 4
+        output = []
+        for value in slots[:4]:
+            if value in (None, ""):
+                output.append(None)
+                continue
+            if isinstance(value, dict):
+                value = value.get("roleId") or value.get("id") or value.get("staticId")
+            role_id = str(value)
+            # Accept StaticID for convenience when an account has one instance;
+            # duplicate instances must use the explicit roleId exposed by options.
+            if role_id not in by_id and len(by_static.get(role_id, [])) == 1:
+                role_id = by_static[role_id][0]
+            if role_id not in by_id:
+                raise GameError(f"{label}队伍包含不属于当前账号的角色")
+            if role_id in used:
+                raise GameError("同一角色不能同时编入上下半")
+            used.add(role_id)
+            output.append(role_id)
+        if not any(output):
+            raise GameError(f"{label}队伍至少需要 1 名角色")
+        normalized.append(output)
+    return {"sceneId": scene_id, "waves": {"upper": normalized[0], "lower": normalized[1]}}
 
 
 def _item_count(state: dict, sid: str) -> int:
@@ -1686,6 +2496,67 @@ def task_abyss_sweep(c: GameClient) -> dict:
     if cost:
         line += f"（消耗 {_fmt_items(cost)}）"
     return {"ok": True, "lines": [line], "detail": line, "raw": res}
+
+
+def task_abyss_auto(c: GameClient, params: dict | None = None) -> dict:
+    """Run the two-wave battle through the client-derived decision engine."""
+    # Keep the import local: the executor shares battle snapshot helpers here.
+    from .abyss_battle import run_abyss_battle
+    from .abyss_state import enabled, metadata
+    from . import config
+
+    params = params or {}
+    if not enabled(params.get("autoAdvance")):
+        return run_abyss_battle(c, params)
+
+    tables = metadata()["tables"]
+    sequence = sorted((sid for sid in tables["Scene"]
+                       if _ABYSS_BATTLE_RE.fullmatch(sid) and tables["Fantasy"].get(sid)),
+                      key=lambda sid: int(_ABYSS_BATTLE_RE.fullmatch(sid).group(1)))
+    selected = str(params.get("sceneId") or "")
+    if selected not in sequence:
+        raise GameError("请选择有效的虚构深渊关卡")
+    waves = deepcopy(params.get("waves") or {})
+    cancel = params.get("_cancel_event")
+    completed, lines = [], []
+    last_result = {}
+    last_scene_id = ""
+
+    def finish(ok, detail):
+        return {**last_result, "ok": ok, "detail": detail, "lines": [*lines, detail],
+                "completedScenes": completed, "lastSceneId": last_scene_id}
+
+    for index, scene_id in enumerate(sequence[sequence.index(selected):]):
+        label = f"第 {int(_ABYSS_BATTLE_RE.fullmatch(scene_id).group(1))} 关"
+        try:
+            if cancel is not None and cancel.is_set():
+                raise GameError("自动推关已中止")
+            if index:
+                delay = config.get_request_delay_config()
+                seconds = (delay["ms"] / 1000 * random.uniform(1 - delay["jitter"] / 100,
+                                                              1 + delay["jitter"] / 100)
+                           if delay["enabled"] else 0)
+                if cancel is not None:
+                    if cancel.wait(seconds):
+                        raise GameError("自动推关已中止")
+                elif seconds:
+                    time.sleep(seconds)
+            normalized = normalize_abyss_config(c.account_state or {}, scene_id, waves)
+            last_scene_id = scene_id
+            last_result = run_abyss_battle(c, {**params, **normalized})
+            if not last_result.get("ok"):
+                lines.append(f"{label}：战斗失败")
+                return finish(False, f"自动推关已停止：{label}挑战失败，已通关 {len(completed)} 关")
+            scene = next((row for row in abyss_scenes(c.account_state or {}) if row["id"] == scene_id), None)
+            if not scene or not scene["cleared"]:
+                raise GameError(f"未确认{label}的通关结算")
+            completed.append(scene_id)
+            lines.append(f"{label}：已通关")
+        except GameError as error:
+            detail = (f"自动推关已中止，已通关 {len(completed)} 关" if cancel is not None and cancel.is_set()
+                      else f"自动推关已停止：{label}，{error}")
+            return finish(False, detail)
+    return finish(True, f"自动推关完成：已通关 {len(completed)} 关，已到达最后一关")
 
 
 # ============ 每日免费招募（常规招募的免费额度） ============
@@ -1864,6 +2735,23 @@ SWEEP_KINDS = {
 
 # StaticID 末位数字 -> 战斗请求 EquipmentMap 的键名(抓包实测: 武1头2铠3项4戒5鞋6)。
 _BATTLE_SLOT_KEY = {"1": "Weapon", "2": "Head", "3": "Body", "4": "Necklace", "5": "Ring", "6": "Shoes"}
+_BATTLE_SLOT_NAME = {"weapon": "Weapon", "helmet": "Head", "armor": "Body",
+                     "necklace": "Necklace", "ring": "Ring", "boots": "Shoes"}
+_EQUIP_REF_CACHE: dict | None = None
+
+
+def _battle_equip_slot(static_id: str) -> str | None:
+    """Resolve the equipment slot from the static catalog, with legacy fallback."""
+    global _EQUIP_REF_CACHE
+    if _EQUIP_REF_CACHE is None:
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "equip_ref.json"), encoding="utf-8") as fh:
+                _EQUIP_REF_CACHE = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            _EQUIP_REF_CACHE = {}
+    ref = _EQUIP_REF_CACHE.get(str(static_id)) or {}
+    slot = _BATTLE_SLOT_NAME.get(str(ref.get("slot") or "").lower())
+    return slot or _BATTLE_SLOT_KEY.get(str(static_id)[-1:])
 
 
 def _find_by_oid(items: list, target_id: str, id_field: str = "_id"):
@@ -1893,7 +2781,7 @@ def _build_role_for_battle(state: dict, role_id: str) -> dict:
     for eq in state.get("EquipmentContainer", {}).get("Datas", []):
         if _oid(eq.get("EquipRole")) != role_id:
             continue
-        key = _BATTLE_SLOT_KEY.get(str(eq.get("StaticID", ""))[-1:])
+        key = _battle_equip_slot(str(eq.get("StaticID", "")))
         if key:
             eq_map[key] = _to_send_format(eq)
     if eq_map:
@@ -1913,16 +2801,70 @@ def list_teams(c: GameClient) -> list[dict]:
 #   活动关卡(带助战):             IsRestart=1 IsRepeatAuto=0 FinishWave=0 且无 Camp2DeadList
 _SWEEP_META = {"is_restart": 0, "is_repeat_auto": 1, "finish_wave": 1, "dead_list": True}
 _ACTIVITY_META = {"is_restart": 1, "is_repeat_auto": 0, "finish_wave": 0, "dead_list": False}
+_URGENT_META = {"is_restart": 0, "is_repeat_auto": 0, "finish_wave": 0, "dead_list": True}
+
+
+def _cache_urgent_missions(c: GameClient, response: dict) -> dict | None:
+    """FinishScene 有返回紧急任务容器时，用其覆盖本地快照；缺失时保留旧状态。"""
+    container = response.get("UrgentMissionContainer")
+    if not isinstance(container, dict):
+        return None
+    if isinstance(c.account_state, dict):
+        c.account_state["UrgentMissionContainer"] = container
+    return container
+
+
+_SCENE_FAILURE_MESSAGES = {
+    "NeedServerBattle": "挑战失败：该关卡需要实时战斗",
+    "Battle failed. If this persists, submit feedback via the link at Settings > Customer Support.":
+        "挑战失败：战力不足，请升等或穿戴些许装备后重试",
+}
+
+
+def _scene_failure_detail(message: str, fail_label: str = "挑战") -> str:
+    description = _SCENE_FAILURE_MESSAGES.get(message.strip())
+    return f"{description}（{message}）" if description else f"{fail_label}失败：{message}"
+
+
+def _format_scene_drop(reward: dict) -> dict:
+    """把一次关卡掉落合成一条日志，保留装备详情卡片。无掉落时返回空字典。"""
+    counter: dict = {}
+    equips = []
+    for it in (reward.get("Drop") or {}).get("Items") or []:
+        eq = it.get("Equipment")
+        if eq is not None:
+            equips.append(parse_equipment(eq))
+        else:
+            _collect_items([it], counter)
+    if not counter and not equips:
+        return {}
+
+    items_txt = _fmt_items(counter) if counter else ""
+    if equips:
+        eq_list = []
+        for card in equips:
+            tier = card.get("tierName") or ""
+            lvl = card.get("level")
+            lv_txt = f"{lvl}级" if lvl else ""
+            eq_list.append({"text": f"{lv_txt}{tier}{card.get('name') or card.get('staticID')}",
+                            "card": card})
+        line = {"type": "drop", "text": items_txt, "equips": eq_list}
+        detail = "获得 " + "、".join(([items_txt] if items_txt else []) + [e["text"] for e in eq_list])
+    else:
+        line = detail = f"获得 {items_txt}"
+    return {"lines": [line], "detail": detail}
 
 
 def _finish_scene(c: GameClient, scene_id: str, team_id: str,
                   quick_battle: bool = True, support: dict | None = None,
-                  meta: dict | None = None, fail_label: str = "扫荡") -> dict:
+                  meta: dict | None = None, fail_label: str = "扫荡",
+                  scene_data: dict | None = None, dead_count: int = 0) -> dict:
     """提交一次关卡结算(照抓包 SceneHandler.FinishScene 请求复现)。
     讨伐扫荡/元素探索/活动关卡共用；活动关卡多传 support(助战成员)+ 用 _ACTIVITY_META。
 
     两处暂时简化(先跑通再补)：
-    - Camp2DeadList(战斗中被击杀的敌方单位标识)留空/不带——先按抓包原样(扫荡带空列表、活动不带)，若遇到问题再抓更多样本补充。
+    - Camp2DeadList(战斗中被击杀的敌方单位标识)：扫荡带空列表、活动不带；
+      紧急任务按场景敌人数生成随机 UUID（与抓包中的客户端临时 UUID 语义一致）。
     - 体力不足/背包已满等失败场景目前无法从请求前置判断(需要专门抓包该失败响应)，
       先用"响应里有没有 Drop.Items"作为唯一成功判据：没有掉落就当失败并停止循环。
     """
@@ -1932,8 +2874,9 @@ def _finish_scene(c: GameClient, scene_id: str, team_id: str,
                  if str(t.get("ID")) == str(team_id)), None)
     if team is None:
         raise GameError(f"队伍 {team_id} 不存在，请检查队伍设置")
-    scene = next((s for s in state.get("SceneDataContainer", {}).get("Scenes", [])
-                  if s.get("StaticID") == scene_id), None)
+    scene = scene_data or next(
+        (s for s in state.get("SceneDataContainer", {}).get("Scenes", [])
+         if s.get("StaticID") == scene_id), None)
     if scene is None:
         raise GameError(f"关卡 {scene_id} 未在账号数据中找到(可能尚未解锁)")
 
@@ -1962,7 +2905,7 @@ def _finish_scene(c: GameClient, scene_id: str, team_id: str,
 
     battle_end = {"StartBattleInfo": start_info}
     if m["dead_list"]:
-        battle_end["Camp2DeadList"] = []
+        battle_end["Camp2DeadList"] = [str(uuid.uuid4()) for _ in range(max(0, dead_count))]
     battle_end["Result"] = "Win"
     battle_end["TurnRole"] = 0
     battle_end["FinishWave"] = m["finish_wave"]
@@ -1973,44 +2916,17 @@ def _finish_scene(c: GameClient, scene_id: str, team_id: str,
     try:
         res = c.call("SceneHandler.FinishScene", c._auth_data(payload))
     except GameMessage as m:
-        return {"ok": False, "detail": f"{fail_label}失败：{m.msg}"}
+        return {"ok": False, "detail": _scene_failure_detail(m.msg, fail_label)}
 
-    # 掉落里既可能是普通道具(Item)，也可能是装备(Equipment)。分开处理：
-    # 道具累加数量、装备各自解析成卡片(可点击查看详情)。
-    drop_items = (res.get("Drop", {}) or {}).get("Items", [])
-    counter: dict = {}
-    equips = []
-    for it in drop_items:
-        eq = it.get("Equipment")
-        if eq is not None:
-            card = parse_equipment(eq)
-            equips.append(card)
-        else:
-            _collect_items([it], counter)
+    urgent_container = _cache_urgent_missions(c, res)
+    urgent_result = ({"urgentMissionContainer": urgent_container}
+                     if urgent_container is not None else {})
 
-    if not counter and not equips:
-        return {"ok": False, "detail": "未检测到掉落（可能是网络问题/体力不足/背包已满），已停止"}
-
-    items_txt = _fmt_items(counter) if counter else ""
-    # 掉落合成**一条**日志：道具文字 + 装备名(前端把每个装备名渲染成可点击链接→
-    # 弹详情卡片)。早期版本每件装备单独一行，导致同一次扫荡刷出多条同序号日志。
-    if equips:
-        eq_list = []
-        for card in equips:
-            tier = card.get("tierName") or ""
-            lvl = card.get("level")
-            lv_txt = f"{lvl}级" if lvl else ""
-            eq_list.append({"text": f"{lv_txt}{tier}{card.get('name') or card.get('staticID')}",
-                            "card": card})
-        line = {"type": "drop", "text": items_txt, "equips": eq_list}
-        # detail = 同一句式的纯文本版(前端把装备名渲染成链接，这里不带链接)
-        names = [e["text"] for e in eq_list]
-        detail = "获得 " + "、".join(([items_txt] if items_txt else []) + names)
-    else:
-        line = f"获得 {items_txt}"
-        detail = line
-
-    return {"ok": True, "lines": [line], "detail": detail, "raw": None}
+    drop = _format_scene_drop(res)
+    if not drop:
+        return {"ok": False, "detail": "未检测到掉落（可能是网络问题/体力不足/背包已满），已停止",
+                **urgent_result}
+    return {"ok": True, **drop, "raw": None, **urgent_result}
 
 
 def sweep_once(c: GameClient, scene_id: str, team_id: str, quick_battle: bool = True) -> dict:
@@ -2240,6 +3156,165 @@ def activity_once(c: GameClient, scene_id: str, team_id: str,
                          meta=_ACTIVITY_META, fail_label="活动关卡")
 
 
+# ============ 紧急任务（由活动关卡自动清理） ============
+_URGENT_RE = re.compile(r"^URG_\d+_\d+_([1-4])$")
+_URGENT_NAMES = {
+    "1": "星源任务",
+    "2": "赏金任务",
+    "3": "催化剂任务",
+    "4": "成长药剂任务",
+}
+_URGENT_SPECIALIZATIONS = {"gold": "2", "catalyst": "3"}
+
+# sd_Scene 中绝大多数紧急关卡有 5 名敌人；这里只记录例外。CampData2 本身与抓包
+# 一致保持为空，Camp2DeadList 则按实际人数生成随机 UUID，表达本场全灭。
+_URGENT_ENEMY_COUNT_EXCEPTIONS = {
+    **{f"URG_1_{chapter}_{kind}": 3
+       for chapter in range(4, 7) for kind in range(1, 5)},
+    "URG_2_1_1": 4, "URG_2_1_2": 2, "URG_2_1_4": 4,
+    "URG_2_2_1": 3, "URG_2_2_4": 3,
+    "URG_2_3_3": 3,
+    "URG_2_4_4": 3,
+    "URG_2_5_3": 3,
+    "URG_2_6_2": 3,
+    "URG_2_7_2": 3, "URG_2_7_3": 3,
+    "URG_2_8_1": 3, "URG_2_8_2": 3, "URG_2_8_3": 3,
+    "URG_2_9_1": 3,
+    "URG_2_10_1": 3, "URG_2_10_3": 3, "URG_2_10_4": 3,
+    "URG_3_3_1": 3, "URG_3_3_3": 3,
+    "URG_3_4_1": 3, "URG_3_4_2": 3, "URG_3_4_3": 3, "URG_3_4_4": 3,
+}
+
+
+def urgent_mission_name(scene_id: str) -> str:
+    match = _URGENT_RE.match(str(scene_id or ""))
+    return _URGENT_NAMES.get(match.group(1), "紧急任务") if match else "紧急任务"
+
+
+def _urgent_mission_end(mission: dict) -> int:
+    try:
+        return int(_ms(mission.get("EndTime")) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def urgent_missions(c: GameClient) -> list[dict]:
+    """返回尚未过期的紧急任务，并从本地快照移除已过期项。"""
+    state = c.account_state or {}
+    container = state.get("UrgentMissionContainer")
+    if not isinstance(container, dict):
+        return []
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    source = container.get("Missions") or []
+    missions = [m for m in source
+                if isinstance(m, dict)
+                and _URGENT_RE.match(str(m.get("SceneID") or ""))
+                and (not _urgent_mission_end(m) or _urgent_mission_end(m) > now_ms)]
+    if len(missions) != len(source):
+        if missions:
+            container["Missions"] = missions
+        else:
+            container.pop("Missions", None)
+    return sorted(missions, key=lambda m: (_urgent_mission_end(m), str(m.get("SceneID"))))
+
+
+def urgent_mission_briefs(c: GameClient) -> list[dict]:
+    return [{
+        "sceneId": mission.get("SceneID"),
+        "name": urgent_mission_name(mission.get("SceneID")),
+        "endTime": _urgent_mission_end(mission) or None,
+    } for mission in urgent_missions(c)]
+
+
+def _remove_cached_urgent_mission(c: GameClient, scene_id: str) -> None:
+    state = c.account_state or {}
+    container = state.get("UrgentMissionContainer")
+    if not isinstance(container, dict):
+        return
+    remaining = [m for m in (container.get("Missions") or [])
+                 if m.get("SceneID") != scene_id]
+    if remaining:
+        container["Missions"] = remaining
+    else:
+        container.pop("Missions", None)
+
+
+def urgent_mission_once(c: GameClient, scene_id: str, team_id: str,
+                        support_entry: dict | None = None) -> dict:
+    """完成一场紧急任务；紧急任务不支持快速战斗券。"""
+    match = _URGENT_RE.match(str(scene_id or ""))
+    if not match:
+        raise GameError(f"无效的紧急任务 {scene_id}")
+
+    state = c.account_state or {}
+    scene = next((s for s in state.get("SceneDataContainer", {}).get("Scenes", [])
+                  if s.get("StaticID") == scene_id), None)
+    # 新出现且从未打过的紧急关卡可能尚无账号侧 _id；官方客户端也只需提交静态场景信息。
+    if scene is None:
+        scene = {"StaticID": scene_id, "Stars": [0, 0, 0], "PassCount": 0}
+    support = _build_support(support_entry) if support_entry else None
+    name = urgent_mission_name(scene_id)
+    result = _finish_scene(
+        c, scene_id, team_id, False, support=support,
+        meta=_URGENT_META, fail_label=f"紧急任务·{name}", scene_data=scene,
+        dead_count=_URGENT_ENEMY_COUNT_EXCEPTIONS.get(scene_id, 5),
+    )
+    result.update({"sceneId": scene_id, "urgentName": name})
+    if result.get("ok"):
+        # 正常响应会带权威容器；若某版本省略该字段，成功完成也足以确认该任务已消失。
+        if "urgentMissionContainer" not in result:
+            _remove_cached_urgent_mission(c, scene_id)
+        result["detail"] = f"{name}：{result.get('detail') or '已完成'}"
+    return result
+
+
+def cleanup_urgent_missions(c: GameClient, team_id: str,
+                            support_entry: dict | None = None,
+                            specializations: list[str] | tuple[str, ...] | set[str] | str | None = None,
+                            clear_all: bool = False) -> dict:
+    """按特化策略清理，或在活动循环结束后清空全部紧急任务。"""
+    modes = [specializations] if isinstance(specializations, str) else list(specializations or [])
+    unknown = [mode for mode in modes if mode not in _URGENT_SPECIALIZATIONS]
+    if not clear_all and unknown:
+        raise GameError("未知的紧急任务特化类型")
+    target_suffixes = {_URGENT_SPECIALIZATIONS[mode] for mode in modes
+                       if mode in _URGENT_SPECIALIZATIONS}
+
+    results = []
+    while True:
+        missions = urgent_missions(c)
+        if not missions:
+            break
+        if clear_all:
+            candidate = missions[0]
+            reason = "最终清理"
+        else:
+            targets = [m for m in missions
+                       if str(m.get("SceneID") or "").rsplit("_", 1)[-1]
+                       in target_suffixes]
+            if targets:
+                candidate = targets[0]
+                reason = "特化命中"
+            elif len(missions) > 2:
+                candidate = missions[0]
+                reason = "释放任务栏位"
+            else:
+                break
+
+        scene_id = str(candidate.get("SceneID"))
+        result = urgent_mission_once(c, scene_id, team_id, support_entry)
+        result["reason"] = reason
+        results.append(result)
+        if not result.get("ok"):
+            break
+        # 防止异常响应没有推进状态造成死循环；成功项由本地兜底移除。
+        if any(m.get("SceneID") == scene_id for m in urgent_missions(c)):
+            _remove_cached_urgent_mission(c, scene_id)
+
+    return {"ok": all(r.get("ok") for r in results),
+            "results": results, "remaining": urgent_mission_briefs(c)}
+
+
 # ============ 竞技场 NPC(HellNPC) ============
 # 一次扫荡 = 两个请求(与 FinishScene 系完全不同的一条链):
 #   ① PVPHandler.PVPCheckTicket {NPCSceneID, IsRevenge:0} -> {LogID}  **扣 1 面旗帜**
@@ -2355,13 +3430,16 @@ def _build_arena_enemy() -> tuple[dict, list[str]]:
 def arena_sweep_once(c: GameClient, n: int, team_id: str) -> dict:
     """挑战一次地狱级 NPC n。返回 {ok, detail, nextMs, oid, ...}。
 
-    失败(冷却中/旗帜不足/服务器拒绝)统一返回 ok=False + detail，由调用方决定退避。
-    ⚠️ 已知代价: ①扣旗帜，②**没有"冷却中被拒"的抓包样本**，不确定拒绝发生在扣旗
-    之前还是之后——真机首次跑要看日志确认(见 [[ark-arena-npc]])。
+    领券即扣旗帜，结算时才检查 NPC 冷却。结果无法确认或冷却被拒时返回
+    waitingForLogin=True，暂停该 NPC，等待成功登录后的权威快照同步。
     """
     state = c.account_state or {}
     scene_id = arena_scene_id(n)
     name = arena_npc_name(n)
+
+    def wait_for_login(reason: str) -> dict:
+        return {"ok": False, "waitingForLogin": True, "sceneId": scene_id,
+                "detail": f"{name}：{reason}，等待登录同步刷新", "raw": reason}
 
     team = next((t for t in state.get("Teams", {}).get("Settings", [])
                  if str(t.get("ID")) == str(team_id)), None)
@@ -2371,17 +3449,7 @@ def arena_sweep_once(c: GameClient, n: int, team_id: str) -> dict:
     if not role_pos_map:
         raise GameError(f"队伍 {team.get('Name') or team_id} 没有配置角色")
 
-    # ① 领战斗券(扣旗帜) -> LogID
-    try:
-        chk = c.call(ARENA_CHECK_ROUTE,
-                     c._auth_data({"NPCSceneID": scene_id, "IsRevenge": 0}))
-    except GameMessage as m:
-        return {"ok": False, "detail": f"{name}：{m.msg}", "raw": m.msg}
-    log_id = chk.get("LogID")
-    if not log_id:
-        return {"ok": False, "detail": f"{name}：未取到战斗编号(LogID)，已跳过"}
-
-    # ② 提交战斗结果。CampData1 带玩家昵称(照抓包，_finish_scene 那边不带 Name)
+    # 先构建并检查阵容，避免本地配置错误发生在领券扣旗之后。
     position_role_map = {
         str(pos): _build_role_for_battle(state, role_id)
         for role_id, pos in role_pos_map.items()
@@ -2390,7 +3458,6 @@ def arena_sweep_once(c: GameClient, n: int, team_id: str) -> dict:
     payload = {
         "NPCSceneID": scene_id,
         "IsRevenge": 0,
-        "EnemyLogID": log_id,
         "EndData": {
             "StartBattleInfo": {
                 "SceneData": dict(_ARENA_SCENE_DATA),
@@ -2407,45 +3474,71 @@ def arena_sweep_once(c: GameClient, n: int, team_id: str) -> dict:
             "FinishWave": 0,
         },
     }
+    # ① 领战斗券(扣旗帜) -> LogID。网络异常时不能确定是否已经扣旗。
+    try:
+        chk = c.call(ARENA_CHECK_ROUTE,
+                     c._auth_data({"NPCSceneID": scene_id, "IsRevenge": 0}))
+    except GameMessage as m:
+        if "cooldown" in m.msg.lower() or "冷却" in m.msg:
+            return wait_for_login(m.msg)
+        return {"ok": False, "detail": f"{name}：{m.msg}", "raw": m.msg}
+    except Exception as error:
+        return wait_for_login(f"领券结果无法确认：{error}")
+    log_id = chk.get("LogID") if isinstance(chk, dict) else None
+    if not log_id:
+        return wait_for_login("领券结果无法确认：未取到战斗编号(LogID)")
+
+    # ② 提交战斗结果。领券后未取得完整结算及冷却，不能再次领券试探。
+    payload["EnemyLogID"] = log_id
     try:
         res = c.call(ARENA_END_ROUTE, c._auth_data(payload))
     except GameMessage as m:
-        return {"ok": False, "detail": f"{name}：{m.msg}", "raw": m.msg}
+        return wait_for_login(m.msg)
+    except Exception as error:
+        return wait_for_login(f"结算结果无法确认：{error}")
 
-    info = res.get("NPCInfo") or {}
+    info = res.get("NPCInfo") if isinstance(res, dict) else None
+    if not isinstance(info, dict) or "IsWin" not in res:
+        return wait_for_login("结算结果无法确认：缺少结算或 NPC 冷却信息")
     next_ms = _ms(info.get("NextTime"))
-    oid = _oid(info.get("_id"))
-    counter: dict = {}
-    _collect_items((res.get("Drop", {}) or {}).get("Items", []), counter)
-    items_txt = _fmt_items(counter)
-    win = bool(res.get("IsWin"))
-    score = res.get("AddScore")
-    bits = [name]
-    if score:
-        bits.append(f"积分+{score}")
-    if items_txt:
-        bits.append(f"获得 {items_txt}")
+    if (isinstance(next_ms, bool) or not isinstance(next_ms, (int, float))
+            or not math.isfinite(next_ms) or next_ms <= 0
+            or (info.get("NPCID") is not None and str(info["NPCID"]) != str(n))):
+        return wait_for_login("结算结果无法确认：NPC 冷却信息无效")
+    try:
+        oid = _oid(info.get("_id"))
+        counter: dict = {}
+        _collect_items((res.get("Drop", {}) or {}).get("Items", []), counter)
+        items_txt = _fmt_items(counter)
+        win = bool(res.get("IsWin"))
+        score = res.get("AddScore")
+        bits = [name]
+        if score:
+            bits.append(f"积分+{score}")
+        if items_txt:
+            bits.append(f"获得 {items_txt}")
+    except Exception as error:
+        return wait_for_login(f"结算响应无法解析：{error}")
     return {"ok": True, "detail": "，".join(bits), "nextMs": next_ms, "oid": oid,
             "isWin": win, "sceneId": scene_id, "raw": None}
 
 
-# 扫荡失败后的固定退避：1.01 小时。
-# 为什么是固定值而不是读游戏侧冷却：失败的主因是**旗帜不足**(每次挑战扣 1、上限 5、
-# 随时间恢复)，而我们不实时监控旗帜；旗帜约 1 小时恢复 1 面，所以等 1.01h 再试最省事，
-# 多的 0.01h 是防边界(刚好差几秒没恢复满又白扣一次判定)。用户拍板。
-ARENA_RETRY_GAP_MS = int(1.01 * 3600 * 1000)
+# 明确的普通失败按 5 分钟退避；结果不明或冷却被拒则等待登录同步。
+ARENA_RETRY_GAP_MS = TASK_RETRY_MS
 
 
 def task_arena_npc(c: GameClient, params: dict | None = None,
                    rt: dict | None = None,
                    emit: Callable[[dict], None] | None = None) -> dict:
-    """竞技场 NPC(地狱级) 自动扫荡。勾选的 NPC 逐个挑战，失败的挂 1.01h 退避。
+    """竞技场 NPC(地狱级) 自动扫荡，各 NPC 独立冷却、退避或等待登录同步。
 
     params: {"picked": [n...], "teamId": "0"}
     rt:     该账号的运行时状态(由 accounts.Account 持有、跨轮次保留、重登即清):
-            {"nextMs": {sceneId: 毫秒}, "retryMs": {sceneId: 毫秒}}
+            {"nextMs": {sceneId: 毫秒}, "retryMs": {sceneId: 毫秒},
+             "waitingForLogin": {sceneId: True}}
       - nextMs  = 本工具扫荡后从响应 `NPCInfo.NextTime` 拿到的新冷却
-      - retryMs = 失败后的 1.01h 退避
+      - retryMs = 失败后的 5 分钟退避
+      - waitingForLogin = 冷却被拒或结果不明，成功登录同步前不再挑战
 
     **闸门 = max(登录快照算出的冷却, 本轮跑出来的 nextMs, retryMs)**。
     快照那份是关键：早先只认内存里的 nextMs，一换账号就是全新 Account ⇒ 全部显示
@@ -2463,11 +3556,15 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
     now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     next_map = rt.setdefault("nextMs", {})
     retry_map = rt.setdefault("retryMs", {})
+    waiting_map = rt.setdefault("waitingForLogin", {})
     snap_map = arena_next_times(c.account_state or {})
 
-    due, waiting = [], 0
-    for n in sorted(picked):
+    due, waiting, paused = [], 0, 0
+    for n in sorted(set(picked)):
         sid = arena_scene_id(n)
+        if waiting_map.get(sid):
+            paused += 1
+            continue
         gate = max(snap_map.get(sid) or 0, next_map.get(sid) or 0,
                    retry_map.get(sid) or 0)
         if gate and now_ms < gate:
@@ -2475,6 +3572,9 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
             continue
         due.append(n)
     if not due:
+        if paused:
+            return {"ok": True, "skipped": True,
+                    "detail": f"{paused} 个 NPC 等待登录同步刷新，其余 {waiting} 个冷却中，跳过"}
         return {"ok": True, "skipped": True,
                 "detail": f"勾选的 {waiting} 个 NPC 都在冷却中，跳过"}
 
@@ -2483,16 +3583,21 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
         sid = arena_scene_id(n)
         try:
             r = arena_sweep_once(c, n, team_id)
-        except GameError as e:
-            # 队伍/名字表这类配置问题：整个任务失败，不逐个重试
-            return {"ok": False, "detail": str(e)}
-        if r.get("ok"):
+        except Exception as e:
+            # 配置或网络异常也归入当前 NPC，避免整任务退避阻挡其它已到期 NPC。
+            r = {"ok": False, "detail": str(e)}
+        if r.get("waitingForLogin"):
+            fail_count += 1
+            waiting_map[sid] = True
+            next_map.pop(sid, None)
+            retry_map.pop(sid, None)
+        elif r.get("ok"):
             retry_map.pop(sid, None)
             if r.get("nextMs"):
                 next_map[sid] = r["nextMs"]
         else:
             fail_count += 1
-            retry_map[sid] = now_ms + ARENA_RETRY_GAP_MS
+            retry_map[sid] = int(datetime.now(tz=timezone.utc).timestamp() * 1000) + ARENA_RETRY_GAP_MS
         lines.append(r["detail"])
         if emit is not None:
             emit({"ok": bool(r.get("ok")), "detail": r["detail"]})
@@ -2502,6 +3607,7 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
         "lines": lines,
         "detail": lines[-1],
         "liveLogged": emit is not None,
+        "retryManaged": True,  # 各 NPC 独立退避，不能延后其它 NPC 的挑战。
     }
 
 
@@ -2518,22 +3624,158 @@ def task_friend_support(c: GameClient) -> dict:
 
 # 任务注册表：id -> 元信息。
 # kind: "always"=登录必跑, "toggle"=登录后按开关跑（可每小时重跑）, "manual"=手动列表按钮
+
+def _redeem_error_status(message: str) -> str:
+    if "SerialNumberAlreadyUsed" in message:
+        return "redeemed"
+    if "SerialNumberExpired" in message:
+        return "expired"
+    if "NoSerialNumber" in message:
+        return "invalid"
+    return "failed"
+
+
+def _query_redeem_mail(c: GameClient, code: str, *,
+                       max_attempts: int = 3) -> tuple[dict | None, str | None]:
+    import time
+    window = (c.account_state or {}).get("MailContainer", {}).get("Mails", [])
+    cursor = ""
+    if window:
+        def sent_ms(mail):
+            value = mail.get("SentTime")
+            return value.get("$date", 0) if isinstance(value, dict) else (value or 0)
+        oldest = min(window, key=sent_ms)
+        cursor = _mail_id(oldest) or ""
+    for attempt in range(max_attempts):
+        try:
+            response = c.call("MailHandler.QueryNewestMails", c._auth_data({"MailID": cursor}))
+        except GameMessage as message:
+            return None, message.msg
+        except Exception as error:
+            return None, f"邮件查询失败（{type(error).__name__}）"
+        for mail in response.get("Mails", []) or []:
+            if (mail.get("StaticID") == "RedemptionSuccessful"
+                    and mail.get("MailSource") == code):
+                return mail, None
+        if attempt + 1 < max_attempts:
+            time.sleep(0.8)
+    return None, None
+
+
+def task_redeem_codes(client: GameClient, params: dict | None = None,
+                      runtime: dict | None = None,
+                      emit: Callable[[dict], None] | None = None) -> dict:
+    import time
+    from . import redeem_codes
+
+    params = params if isinstance(params, dict) else {}
+    account_codes = params.setdefault("codes", {})
+    for code, record in list(account_codes.items()):
+        account_codes[code] = redeem_codes.normalize_record(record)
+    if time.time() < ((runtime or {}).get("nextRetryAt") or 0):
+        return {"ok": True, "skipped": True, "detail": "尚未到下次兑换检查时间"}
+    state = redeem_codes.get_state()
+    codes = state.get("codes") or []
+    if not codes:
+        return {"ok": True, "skipped": True, "detail": "当前没有可兑换码"}
+    lines: list[str] = []
+
+    def report(detail: str, ok: bool = True) -> None:
+        lines.append(detail)
+        if emit is not None:
+            emit({"ok": ok, "detail": detail})
+
+    retryable = False
+    now_date = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).date().isoformat()
+    for entry in codes:
+        code = str(entry.get("code") or "").strip()
+        if not code:
+            continue
+        record = account_codes.setdefault(code, {})
+        status = record.get("status")
+        if status in {"redeemed", "expired", "invalid"}:
+            continue
+        valid_until = entry.get("validUntil")
+        if valid_until and valid_until < now_date and not record.get("serverAccepted"):
+            record.update({"status": "expired", "updatedAt": datetime.now(timezone.utc).isoformat()})
+            report(f"{code}：已过期")
+            continue
+        if not record.get("serverAccepted"):
+            try:
+                client.call("RedemptionNumberHandler.CovertRedemptionNumber",
+                            client._auth_data({"Number": code}))
+                record["serverAccepted"] = True
+            except GameMessage as message:
+                mapped = _redeem_error_status(message.msg)
+                record.update({"status": mapped if mapped in {"redeemed", "expired", "invalid"} else "pending",
+                               "updatedAt": datetime.now(timezone.utc).isoformat()})
+                if mapped == "redeemed":
+                    record.pop("message", None)
+                    record.pop("errorReason", None)
+                elif mapped == "expired":
+                    record.pop("message", None)
+                    report(f"{code}：已过期")
+                    time.sleep(0.5)
+                    continue
+                else:
+                    invalid = mapped == "invalid"
+                    record["errorReason"] = "invalid" if invalid else "transient"
+                    if invalid:
+                        record["status"] = "invalid"
+                    record["message"] = ("服务器不识别此兑换码，已停止自动尝试" if invalid
+                                         else f"兑换未完成：{message.msg}")
+                    report(f"{code}：{record['message']}", ok=False)
+                    retryable = retryable or not invalid
+                    time.sleep(0.5)
+                    continue
+            except Exception as error:
+                record.update({"status": "pending", "errorReason": "transient",
+                               "updatedAt": datetime.now(timezone.utc).isoformat(),
+                               "message": f"兑换请求失败（{type(error).__name__}）"})
+                report(f"{code}：{record['message']}", ok=False)
+                retryable = True
+                time.sleep(0.5)
+                continue
+        already_redeemed = record.get("status") == "redeemed"
+        mail, mail_error = _query_redeem_mail(
+            client, code, max_attempts=1 if already_redeemed else 3)
+        if mail is None:
+            if already_redeemed:
+                report(f"{code}：该兑换码已领取过")
+            else:
+                record.update({"status": "pending", "errorReason": "confirmation",
+                               "updatedAt": datetime.now(timezone.utc).isoformat(),
+                               "message": mail_error or "暂未获取到兑换成功邮件"})
+                report(f"{code}：兑换结果尚未确认，稍后仅查询邮件", ok=False)
+                retryable = True
+            time.sleep(0.5)
+            continue
+        items: dict = {}
+        _collect_drop(mail, items)
+        detail = _fmt_items(items)
+        record.update({"status": "redeemed", "updatedAt": datetime.now(timezone.utc).isoformat(),
+                       "mailId": _mail_id(mail), "detail": detail})
+        record.pop("message", None)
+        record.pop("errorReason", None)
+        report(f"{code}：该兑换码已领取过" if already_redeemed
+               else f"{code}：获得 {detail}（发送至邮箱）")
+        time.sleep(0.5)
+    return {"ok": not retryable, "retryable": retryable, "skipped": not lines,
+            "detail": "；".join(lines) if lines else "当前兑换码均已处理",
+            "lines": lines, "liveLogged": emit is not None}
+
 TASKS: dict[str, dict] = {
     "month_signin": {
-        "name": "月签到", "desc": "每日月历签到",
-        "fn": task_month_signin, "kind": "always",
-    },
-    "week_signin": {
-        "name": "活动签到", "desc": "活动/周签到（自动读取当前活动）",
-        "fn": task_week_signin, "kind": "always",
+        "name": "每日签到", "desc": "月历、月卡与活动签到",
+        "fn": task_month_signin, "kind": "toggle", "wantsRuntime": True,
     },
     "friend_support": {
         "name": "助战好友", "desc": "领取助战好友每日奖励",
         "fn": task_friend_support, "kind": "always",
     },
     "send_meal": {
-        "name": "月卡领取", "desc": "投递月卡与午晚餐奖励至邮箱（登录自动触发）",
-        "fn": task_send_meal, "kind": "always",
+        "name": "每日体力", "desc": "自动获取每日早上 8:00 与晚上 20:00 发放的 50 体力至邮箱",
+        "fn": task_send_meal, "kind": "toggle", "wantsRuntime": True,
     },
     "reactor": {
         "name": "动力转换", "desc": "基地 · 动力转换（满 12 小时才领取）",
@@ -2556,7 +3798,7 @@ TASKS: dict[str, dict] = {
         "fn": task_dispatch, "kind": "toggle",
     },
     "shop_free": {
-        "name": "秘密商店刷新(免费)", "desc": "每小时用免费额度刷新并自动购买目标道具",
+        "name": "秘密商店刷新(免费)", "desc": "每小时用免费额度刷新，按配置购买目标道具或显示装备",
         "fn": task_shop_free, "kind": "toggle", "wantsBuyTargets": True,
     },
     # needsFreshState：判定只看账号快照里的"每日重置"字段（同步器补充 / 免费额度），
@@ -2577,9 +3819,22 @@ TASKS: dict[str, dict] = {
         "fn": task_arena_npc, "kind": "toggle", "ui": "arena",
         "wantsRuntime": True, "streamsResults": True,
     },
+    "daily_achievement": {
+        "name": "每日/周成就", "desc": "按勾选领取每日、每周积分阶段奖励，任务状态更新时自动检测",
+        "fn": task_daily_achievement, "kind": "toggle", "ui": "achievement",
+    },
+    "redeem_code": {
+        "name": "兑换码领取", "desc": "自动抓取并兑换最新兑换码奖励",
+        "fn": task_redeem_codes, "kind": "toggle", "wantsRuntime": True, "ui": "redeem_code",
+        "streamsResults": True,
+    },
     "claim_mail": {
         "name": "一键领邮件", "desc": "领取邮箱内所有未领奖励",
         "fn": task_claim_mail, "kind": "manual",
+    },
+    "store_buy": {
+        "name": "商店购买", "desc": "按商店切换货架，勾选要买的商品后一键批量购买",
+        "kind": "manual", "ui": "storebuy",  # 前端自定义渲染，走 /api/store/*
     },
     "shop_diamond": {
         "name": "秘密商店刷新(钻石)", "desc": "花钻石刷新指定次数，遇目标道具自动购买",
@@ -2602,12 +3857,12 @@ TASKS: dict[str, dict] = {
         "kind": "manual", "ui": "sweep", "sweepKind": "elf",
     },
     "activity_scene": {
-        "name": "活动关卡", "desc": "选择当期已解锁关卡、队伍与助战好友，按次数循环扫荡，无掉落自动停止",
+        "name": "活动关卡", "desc": "选择当期活动、队伍与助战好友，按次数扫荡或自动推进已开放关卡",
         "kind": "manual", "ui": "activity",  # 前端自定义渲染，走 /api/activity/* 而非 /api/tasks/run
     },
-    "store_buy": {
-        "name": "商店购买", "desc": "按商店切换货架，勾选要买的商品后一键批量购买",
-        "kind": "manual", "ui": "storebuy",  # 前端自定义渲染，走 /api/store/*
+    "abyss_auto": {
+        "name": "虚构深渊", "desc": "配置队伍，自动进行战斗",
+        "fn": task_abyss_auto, "kind": "manual", "ui": "abyss",
     },
 }
 
@@ -2621,7 +3876,7 @@ def run_task(client: GameClient, task_id: str, params: dict | None = None,
     fn = meta.get("fn")
     if fn is None:
         raise GameError(f"任务 {task_id} 无执行函数（前端自定义 UI 任务，应走专用接口）")
-    # wantsRuntime 的任务(竞技场)要第三参：该账号跨轮次保留的退避状态
+    # wantsRuntime 的任务需要第三参：该账号跨轮次保留的退避与确认状态。
     if meta.get("wantsRuntime"):
         if meta.get("streamsResults"):
             return fn(client, params, runtime if runtime is not None else {}, on_partial)
@@ -2632,17 +3887,24 @@ def run_task(client: GameClient, task_id: str, params: dict | None = None,
     return fn(client)
 
 
-def run_auto_tasks(client: GameClient) -> list[dict]:
-    """登录必跑任务（月签/活动签/助战），返回结果列表。"""
+def run_auto_tasks(client: GameClient,
+                   on_result: Callable[[dict], None] | None = None,
+                   should_stop: Callable[[], bool] | None = None) -> list[dict]:
+    """会话启动任务（助战），每项完成后立即报告结果。"""
     results = []
     for tid, t in TASKS.items():
         if t.get("kind") != "always":
             continue
+        if should_stop is not None and should_stop():
+            break
         try:
             r = run_task(client, tid)
         except Exception as e:
             r = {"ok": False, "detail": str(e)}
-        results.append({"id": tid, "name": t["name"], **r})
+        result = {"id": tid, "name": t["name"], **r}
+        results.append(result)
+        if on_result is not None:
+            on_result(result)
     return results
 
 
@@ -2651,7 +3913,7 @@ def run_toggle_tasks(client: GameClient, task_ids: list[str], params: dict | Non
                      on_partial: Callable[[dict], None] | None = None) -> list[dict]:
     """按前端开关执行 toggle 类任务。params 为 {task_id: {...}} 或全局 dict。
 
-    runtime: {task_id: {...}} 每任务的跨轮次运行时状态(目前只有竞技场用，存退避)。
+    runtime: {task_id: {...}} 每任务的跨轮次运行时状态（冷却、退避与邮件确认）。
     由 accounts.Account 持有并原地改写，所以调用方不需要读回返回值。
     """
     params = params or {}
@@ -2700,23 +3962,52 @@ def manual_tasks() -> list[dict]:
     return _list_by_kind("manual")
 
 
-def next_claim_times(state: dict) -> dict:
+def next_claim_times(state: dict, params: dict | None = None, *,
+                     runtime: dict | None = None, now_ms: int | None = None) -> dict:
     """各定时 toggle 任务的"下次可领时间"，供前端在开关旁展示。
 
     返回 {task_id: {"nextMs": 毫秒时间戳 or None, "ready": bool}}。
     读的是 account_state 缓存（登录快照 + 每次领取后的写回），比较绝对时间戳，
     与任务内部的到点判断同源，所以展示与实际巡检行为一致。
+      - month_signin: 每次成功登录后一次，成功后等待下一次登录或每日快照刷新
+      - send_meal: 账号快照刷新后 / 晚间 20:01，runtime 带账号刷新档期与邮件确认状态
       - reactor: 上次领取 + 12h
       - 基地生产中心三项: 各自 NextCanReceive*Time
       - dispatch: 最早一个未完成派遣的 FinishTime（全空/全完成则视为可领/无）
-      - shop_free: 无游戏侧下次时间（每小时免费额度），返回 None + ready=True
+      - shop_free: 货架 LastResetTime + 1h1s，缺少时间戳时返回 None + ready=True
       - abyss_sweep / free_summon: 不是计时型，靠 `blocked`/`note` 两个附加键表达
         状态（blocked 非空 = 前端把开关置灰并显示原因，与任务内部的拒绝条件同源）
     """
     state = state or {}
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) if now_ms is None else int(now_ms)
     out: dict = {}
+    out["month_signin"] = month_signin_status((runtime or {}).get("month_signin"), now_ms)
+    out["send_meal"] = send_meal_status(state, (runtime or {}).get("send_meal"), now_ms)
 
+    daily = daily_achievement_status(state)
+    weekly = weekly_achievement_status(state)
+    options = achievement_options((params or {}).get("daily_achievement"))
+    progress = {"daily": daily, "weekly": weekly}
+    claimable = [static_id for period, status in progress.items() if options[period]
+                 for static_id in status["claimableIds"]]
+    notes = [
+        (f"{ACHIEVEMENT_GROUPS[period][0]}积分 {status['score']}" if status["available"]
+         else f"{ACHIEVEMENT_GROUPS[period][0]}进度未同步")
+        for period, status in progress.items()
+    ]
+    if any(options.values()):
+        notes.append(f"{len(claimable)} 项可领取" if claimable else "等待任务状态更新")
+    else:
+        notes.append("未勾选每日或每周成就领取")
+    out["daily_achievement"] = {
+        "nextMs": None,
+        "ready": bool(claimable),
+        "score": daily["score"],
+        "weeklyScore": weekly["score"],
+        "claimableIds": claimable,
+        "note": " · ".join(notes),
+        "noteParts": notes,
+    }
     def entry(next_ms):
         return {"nextMs": next_ms, "ready": (next_ms is None or now_ms >= next_ms)}
 
@@ -2730,30 +4021,22 @@ def next_claim_times(state: dict) -> dict:
     for tid, (_disp, field, _route) in zip(
         ("sf_potion", "sf_starforce", "sf_tesseract"), STARFORCE_REWARDS
     ):
-        out[tid] = entry(_ms(lab.get(field)))
+        out[tid] = entry(_starforce_next_ms(lab, field))
 
-    # 技能模块额外带"加速"档期：每周期 3 次、间隔 24h（见 _charge_tesseract）。
-    # 额度用尽时 NextCanChargeTime 仍是旧值（会显示成"可加速"），故单独标 exhausted。
-    used = int(lab.get("TesseractChargeCount") or 0)
-    charge = {"used": used, "max": TESSERACT_MAX_CHARGES,
-              "exhausted": used >= TESSERACT_MAX_CHARGES}
-    if charge["exhausted"]:
-        charge.update({"nextMs": None, "ready": False})
-    else:
-        charge.update(entry(_ms(lab.get("NextCanChargeTime"))))
-    out["sf_tesseract"]["charge"] = charge
+    out["sf_tesseract"]["charge"] = tesseract_charge_status(lab, now_ms)
 
     # 派遣任务：取最早的未完成 FinishTime；无派遣任务则 ready
     quests = (state.get("ArkHighCommandData", {}) or {}).get("DispatchedQuests") or []
     finishes = [fm for fm in (_ms(q.get("FinishTime")) for q in quests) if fm is not None]
     pending = [fm for fm in finishes if fm > now_ms]
-    out["dispatch"] = entry(min(pending) if pending else None)
+    # 部分派遣已完成时仍须立即处理，不能被其它槽位未来的 FinishTime 挡住。
+    out["dispatch"] = entry(min(pending) if pending and len(pending) == len(finishes) else None)
 
     # 免费刷商店：游戏不下发"下次免费刷新时刻"（整份登录快照 70692 个字段里没有；
     # 对照 PVP 是有 NextCanFreeRefreshEnemyTime 的，所以不是没找到而是确实不存在）。
     # 但货架记录带 LastResetTime = 上次刷新时刻，免费冷却实测 1 小时（用户在游戏内
     # 看到刷新后冷却显示 59 分钟，加上秒数即 1h；抓包侧免费成功时货架年龄 1.01h/2.78h，
-    # 且刚刷完立刻再刷必得 CantReset）。故 下次免费时刻 = LastResetTime + 1h。
+    # 且刚刷完立刻再刷必得 CantReset）。工具留 1 秒余量：下次免费时刻 = LastResetTime + 1h1s。
     # 刷新后 game_client._apply_store_records 会把新 LastResetTime 写回缓存，倒计时自走。
     out["shop_free"] = entry(secret_shop_next_free(state))
 

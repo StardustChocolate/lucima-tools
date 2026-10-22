@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Android 8/9 写入公共 Download；Android 10+ 使用 MediaStore，不申请广泛权限。 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
     <!-- 前台服务托管后端进程（息屏/后台保活） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

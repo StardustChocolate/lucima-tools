@@ -8,6 +8,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Git Bash entry remains a local debug builder and must not contact production updates.
+unset LUCIMA_UPDATE_URL
+
 TARGET="${1:-all}"
 
 build_win() {
