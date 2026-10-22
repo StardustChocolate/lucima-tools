@@ -23,37 +23,44 @@ LucimaTools is an open-source project built to reduce the daily grind for *Ark R
 
 ## Features
 
-**Automated tasks** (run on schedule)
+**Automated tasks**
+
+- Daily check-in
 - Base rewards (power conversion / growth potions / star-up crystals / skill modules)
-- Daily/weekly achievement reward claims (both selected by default, independently selectable; both progress values stay visible, with checks on quest-state updates rather than polling)
 - Dispatch missions
+- Daily/weekly achievement rewards
 - Free Secret Shop refreshes
 - Daily free recruitment
 - Virtual Illusion
 - Arena NPC battles
+- Redeem codes
 - Guild check-in, donations, aid, weekly quests, and shop purchases
-- Account status indicators and configurable reconnection
 
 **Manual tasks**
+
 - Claim all mail
 - Secret Shop refreshes using diamonds
 - Hunt / element / event stages
-- Automatic event-stage progression with a live battle window
+- Fictional Abyss
 - Store purchases
 
-> More tasks are in development.
+**Other features**
+
+- Equipment filter
+- Encyclopedia
+
+> More features are in development.
 
 ## Quick Start
 
-Download the release for your platform and run it directly.
+Download the [release for your platform](https://github.com/StardustChocolate/lucima-tools/releases) and run it directly.
 
 Your password is used only to obtain a login token and is never stored on disk. The token is
-protected by Windows DPAPI or Android Keystore. After a restart, choose the saved account from
-the account dropdown and click Login to restore the session without entering the password again.
+protected by Windows DPAPI or Android Keystore.
 
 ### Developer Build
 
-The project uses Python 3.12. The Windows desktop build also requires the system Edge / WebView2 runtime; Android builds require JDK 17, the Android SDK, and NDK 26. Installing dependencies in a virtual environment is recommended:
+Install Python 3.12, then run these commands from the project root on Windows to install dependencies:
 
 ```powershell
 python -m venv .venv
@@ -61,23 +68,21 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-Install PyInstaller before packaging the Windows build. The scripts in the repository root can build either platform or both:
+**Local development**: Run `.\start.bat` and open <http://127.0.0.1:27843> in your browser.
+Alternatively, run `python -m desktop.run` to launch the desktop window (requires Edge / WebView2).
+
+**Test builds**: Windows packaging requires PyInstaller. Android builds also require JDK 17 and the Android SDK (API 34).
 
 ```powershell
-python -m pip install pyinstaller==6.20.0
-.\build-debug.bat win       # Windows test build
-.\build-debug.bat android   # Android debug APK
-.\build-debug.bat all       # Build both test platforms
+python -m pip install pyinstaller==6.20.0  # Windows packaging only
+.\build-debug.bat win                     # Windows ZIP
+.\build-debug.bat android                 # Android APK
+.\build-debug.bat all                     # Both platforms
 ```
 
-Build outputs:
-
-- Windows: `debug/<version>/LucimaTools-windows-x64-debug-<version>.zip`
-- Android: `debug/<version>/LucimaTools-android-debug-<version>.apk`
-
-Test builds use a separate configuration. Release builds use `build.bat` and require local update settings and a release signing key; missing configuration causes the build to fail. Create a local `keystore.properties` from `android/keystore.properties.example` and follow [the build guide](BUILD.md). Change the application version only through `APP_VERSION` in `backend/version.py`. After updating the external resource archive, run `python assets/sync_full.py` (or double-click `assets/sync_full.bat`) to manually refresh runtime assets and compact data tables. Builds use the checked-in resources and do not require `assets_full/`.
-
-> Rebuilding the Windows package clears `dist/LucimaTools/`. Back up `settings.json` and other user data stored there first.
+Test packages are saved to `debug/<version>/` and do not connect to the production update service.
+Release builds use `build.bat`, require local update settings and release signing, and are saved to `releases/<version>/`.
+See the [build guide](BUILD.md) for environment setup, signing, and resource synchronization.
 
 ## License
 

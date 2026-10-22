@@ -24,37 +24,40 @@ LucimaTools · 璐茜玛的深层幻影 是一个致力于降低星陨玩家日�
 ## 功能
 
 **自动任务**
+- 每日签到
 - 基地领取（动力转换 / 成长药剂 / 升星水晶 / 技能模块）
-- 每日/周成就奖励领取（默认两项全选，可独立勾选；始终显示两类进度，按任务状态更新检测，不定时查询）
 - 派遣任务
+- 每日/周成就奖励领取
 - 秘密商店刷新（免费）
 - 每日免费招募
 - 虚拟幻境
 - 竞技场NPC
+- 兑换码领取
 - 佣兵团签到、捐赠、援助、周任务及商店购买
-- 多账号状态灯与可配置的断线自动重登
 
 **主动任务**
 - 一键领取邮件
 - 秘密商店刷新（钻石）
 - 讨伐 / 元素 / 活动关卡
-- 活动关卡自动推图与实时战斗窗口
+- 虚构深渊
 - 商店购买
 
-> 更多任务开发中~
+**其它**
+- 装备过滤器
+- 图鉴查询
+
+> 更多功能开发中~
 
 ## 快速开始
 
-根据自身平台下载对应的release版本，开箱即用
+根据自身平台下载对应的 [release 版本](https://github.com/StardustChocolate/lucima-tools/releases)，开箱即用
 
 登录密码仅用于当次换取令牌，不会保存到磁盘。登录令牌由 Windows DPAPI 或 Android
-Keystore 加密保护。重启后会先显示登录页，用户从账号下拉框选择已保存 Token 的账号，
-点击登录即可恢复会话，无需再次输入密码。
+Keystore 加密保护。
 
 ### 开发者构建
 
-项目使用 Python 3.12，Windows 桌面端还需要系统 Edge / WebView2；Android 构建需要
-JDK 17、Android SDK 与 NDK 26。建议先在虚拟环境中安装依赖：
+安装依赖，以下命令在 Windows 项目根目录执行，需先安装 Python 3.12：
 
 ```powershell
 python -m venv .venv
@@ -62,27 +65,21 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-打包 Windows 版本前需额外安装 PyInstaller；根目录构建脚本可以分别或同时构建两端：
+**本地调试**：运行 `.\start.bat`，浏览器打开 <http://127.0.0.1:27843>；
+也可运行 `python -m desktop.run` 启动桌面窗口（需 Edge / WebView2）。
+
+**打包测试版**：Windows 需安装 PyInstaller；Android 需另装 JDK 17 与 Android SDK（API 34）。
 
 ```powershell
-python -m pip install pyinstaller==6.20.0
-.\build-debug.bat win       # Windows 桌面测试版
-.\build-debug.bat android   # Android 调试 APK
-.\build-debug.bat all       # 同时构建两端测试版
+python -m pip install pyinstaller==6.20.0  # 仅 Windows 打包需要
+.\build-debug.bat win                     # Windows ZIP
+.\build-debug.bat android                 # Android APK
+.\build-debug.bat all                     # 同时构建两端
 ```
 
-构建产物位于：
-
-- Windows：`debug/<版本号>/LucimaTools-windows-x64-debug-<版本号>.zip`
-- Android：`debug/<版本号>/LucimaTools-android-debug-<版本号>.apk`
-
-测试构建使用独立测试配置；正式构建通过 `build.bat` 执行，需要本机更新配置及正式签名，
-缺失时会直接失败。正式签名可从 `android/keystore.properties.example` 创建本地
-`keystore.properties`，完整步骤见 [构建说明](BUILD.md)。应用版本号只修改
-`backend/version.py` 中的 `APP_VERSION`。更新外部资源后，执行
-`python assets/sync_full.py`（或双击 `assets/sync_full.bat`）手动同步运行资源和精简数据表；编译不依赖 `assets_full/`。
-
-> Windows 重新打包会清理 `dist/LucimaTools/`，请先备份其中的 `settings.json` 等用户数据。
+测试包输出到 `debug/<版本号>/`，不接入正式更新服务。
+正式包使用 `build.bat`，需配置本机更新入口及正式签名，输出到 `releases/<版本号>/`。
+详细环境配置、签名和资源同步步骤见 [构建说明](BUILD.md)。
 
 ## 许可证
 
