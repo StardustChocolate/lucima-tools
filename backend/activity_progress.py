@@ -1,6 +1,8 @@
 """Activity first clears: static catalog, per-scene teams and confirmed progression."""
 from __future__ import annotations
 
+from . import runtime_data as resources
+
 from copy import deepcopy
 import random
 import re
@@ -138,6 +140,7 @@ def finish_once(client, info: dict, scene: dict) -> dict:
             "detail": "通关成功" if confirmed else "结算结果未确认，等待登录同步刷新"}
 
 
+@resources.pinned
 def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, on_progress=None,
         on_partial=None) -> dict:
     from .tasks import _build_support
@@ -171,13 +174,13 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
         return {"ok": ok, "detail": detail, "lines": lines, "completedScenes": completed,
                 "lastSceneId": current}
 
-    publish(detail="准备推图")
+    publish(detail="准备推关")
     while True:
         if cancel_event.is_set():
-            return result(False, "自动推图已停止")
+            return result(False, "自动推关已停止")
         live = scenes(state, family)
         if not live:
-            return result(False, "活动已结束，自动推图已停止")
+            return result(False, "活动已结束，自动推关已停止")
         todo = [stage for stage in live if not stage["cleared"]]
         if not todo:
             return result(True, "当前已开放关卡全部通关")
@@ -190,13 +193,13 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
         items = {item.get("StaticID"): item for item in state.get("ItemContainer", {}).get("Items", [])}
         energy = items.get("3")  # CURRENCY_IDS.stamina
         if energy is not None and int(energy.get("Count") or 0) < stage["energy"]:
-            return result(False, "体力不足，自动推图已停止")
+            return result(False, "体力不足，自动推关已停止")
         if scene.get("EnterCost"):
-            return result(False, "此关卡有额外入场消耗，暂不支持自动推图")
+            return result(False, "此关卡有额外入场消耗，暂不支持自动推关")
         info = start_info(state, current, team_id, support)
         publish(stageName=stage["name"], detail="挑战中", battle=None)
         if cancel_event.is_set():
-            return result(False, "自动推图已停止")
+            return result(False, "自动推关已停止")
         try:
             if stage["serverBattle"]:
                 outcome = run_activity_battle(client, info, cancel_event=cancel_event,
@@ -215,7 +218,7 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
         stage_lines = outcome.get("lines") or ["通关成功（结算未返回掉落）"]
         if on_partial is not None:
             # 复用账号日志流，下一关开始前即可显示；最终响应不重复这些日志。
-            on_partial({"id": "activity_progress", "name": f"活动自动推图·{stage['name']}",
+            on_partial({"id": "activity_progress", "name": f"活动自动推关·{stage['name']}",
                         "ok": True, "lines": stage_lines, "detail": outcome.get("detail")})
         else:
             lines.extend(stage_lines)
@@ -224,4 +227,4 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
         if delay.get("enabled"):
             ms = max(0, float(delay.get("ms") or 0) + random.uniform(-1, 1) * float(delay.get("jitter") or 0))
             if cancel_event.wait(ms / 1000):
-                return result(False, "自动推图已停止")
+                return result(False, "自动推关已停止")

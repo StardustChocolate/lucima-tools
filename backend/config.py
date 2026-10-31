@@ -458,7 +458,8 @@ def load_accounts() -> dict:
 
 
 def save_account(email: str, *, auth: dict | None | object = _AUTH_UNSET,
-                 toggles: dict | None = None, params: dict | None = None) -> None:
+                 toggles: dict | None = None, params: dict | None = None,
+                 name: str | None = None) -> None:
     """新增/更新一个账号存档。只更新传入的字段，其余保留。"""
     with _SETTINGS_LOCK:
         s = _load_settings()
@@ -479,6 +480,8 @@ def save_account(email: str, *, auth: dict | None | object = _AUTH_UNSET,
             rec["toggles"] = toggles
         if params is not None:
             rec["params"] = params
+        if name is not None:
+            rec["name"] = name
         accs[email] = rec
         s["accounts"] = accs
         if not _save_settings(s):

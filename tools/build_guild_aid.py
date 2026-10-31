@@ -7,6 +7,9 @@ import hashlib
 import json
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = Path("assets/guild_aid.json")
 GROUPS = {"CatalystRare": "catalyst", "Rune1": "element", "Rune2": "element",
@@ -14,45 +17,8 @@ GROUPS = {"CatalystRare": "catalyst", "Rune1": "element", "Rune2": "element",
 
 
 def build(source: Path) -> dict:
-    def table(name, fields):
-        path = source / "文本/数据表" / f"sd_{name}.txt"
-        with path.open(encoding="utf-8-sig", newline="") as stream:
-            reader = csv.DictReader(stream, delimiter="@")
-            if not set(fields).issubset(reader.fieldnames or []):
-                raise ValueError(f"Invalid {name} table header")
-            rows = list(reader)
-        if len({r["ID"] for r in rows}) != len(rows):
-            raise ValueError(f"Duplicate IDs in {name}")
-        return rows
-
-    rules = {}
-    for row in table("GuildAidItem", ("ID", "MaxCount", "PerSupportCount", "RewardCount")):
-        if row["ID"] not in GROUPS:
-            raise ValueError(f"Unknown guild aid category: {row['ID']}")
-        values = {key: int(row[field]) for key, field in
-                  (("max", "MaxCount"), ("cost", "PerSupportCount"), ("reward", "RewardCount"))}
-        if any(value <= 0 for value in values.values()) or values["max"] % values["cost"]:
-            raise ValueError(f"Invalid guild aid quantities: {row['ID']}")
-        rules[row["ID"]] = {"group": GROUPS[row["ID"]], **values}
-    if not rules:
-        raise ValueError("Empty guild aid rules")
-    loc = json.loads((source / "文本/本地化/loc_CHS_FINAL.json").read_text(encoding="utf-8-sig"))
-    items = {}
-    for row in table("Item", ("ID", "Name", "Tags")):
-        tags = set(row["Tags"].split("~")) & rules.keys()
-        if not tags:
-            continue
-        if len(tags) != 1:
-            raise ValueError(f"Ambiguous guild aid tags: {row['ID']}")
-        name = loc.get(row["Name"])
-        if not isinstance(name, str) or not name.strip() or "\ufffd" in name:
-            raise ValueError(f"Missing guild aid item name: {row['ID']}")
-        items[row["ID"]] = {"name": name, "rule": next(iter(tags))}
-    if not items:
-        raise ValueError("Empty guild aid item catalog")
-    return {"schema": 1, "source": {name: hashlib.sha256(
-                (source / "文本/数据表" / f"sd_{name}.txt").read_bytes()).hexdigest()
-            for name in ("GuildAidItem", "Item")}, "rules": rules, "items": dict(sorted(items.items()))}
+    from backend.guild_data_build import build_guild_aid
+    return build_guild_aid(source)
 
 
 def write(target: Path, data: dict):

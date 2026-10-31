@@ -1,23 +1,24 @@
 """Guild weekly reward eligibility from server-selected quests and member saves."""
 from __future__ import annotations
 
-from functools import lru_cache
+from . import runtime_data as resources
+
 import json
 import os
 from pathlib import Path
 import time
 
-from .game_client import GameError
-from .guild import has_guild, object_id, _nonnegative_int
+from .game_client import GameError, TaskDeferred
+from .guild import guild_id, has_guild, object_id, _nonnegative_int
 
 WEEKLY_POLL_MS = 3_600_000
 DAY_MS = 86_400_000
 
 
-@lru_cache(maxsize=1)
+@resources.cached
 def weekly_catalog():
     root = Path(os.environ.get("ARK_ASSET_ROOT") or Path(__file__).resolve().parents[1])
-    data = json.loads((root / "assets/guild_quests.json").read_text(encoding="utf-8"))
+    data = resources.read_json("assets/guild_quests.json")
     if data.get("schema") != 1 or not data.get("personal") or not data.get("tiers"):
         raise GameError("佣兵团周任务清单无效")
     return data
@@ -60,7 +61,7 @@ class GuildWeeklyService:
                          and isinstance(rewarded, list) and all(isinstance(item, str) for item in rewarded))
         claimed = set(rewarded) if rewards_known and save_week == week else set()
         rows = {row.get("StaticID"): row for row in guild.get("GuildQuestList") or [] if isinstance(row, dict)}
-        gid = object_id(own.get("GID"))
+        gid = guild_id(state)
         tiers, scores = [], []
         for identifier, meta in sorted(catalog["tiers"].items(), key=lambda pair: pair[1]["target"]):
             row = rows.get(identifier) or {}
@@ -126,7 +127,11 @@ class GuildWeeklyService:
         pending = self.runtime.setdefault("weeklyUncertain", [])
         if identifier not in pending:
             pending.append(identifier)
-        self.guild.claim_quest(identifier)
+        try:
+            self.guild.claim_quest(identifier)
+        except TaskDeferred:
+            pending.remove(identifier)
+            raise
         after = self.snapshot()
         if (after["week"] != status["week"] or not any(
                 row["id"] == identifier and row["state"] == "claimed" for row in after["personal"])):

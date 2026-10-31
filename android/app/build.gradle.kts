@@ -138,7 +138,7 @@ val copyWeb = tasks.register<Sync>("copyWebAssets") {
     dependsOn(writeUpdateEndpoint)
     into(layout.projectDirectory.dir("src/main/assets/web"))
     from(File(projectRoot, "frontend")) { into("frontend") }
-    from(File(projectRoot, "assets")) { into("assets") }
+    from(File(projectRoot, "assets")) { into("assets"); exclude("encyclopedia/**", "**/*.py", "**/__pycache__/**") }
     from(updateEndpointFile)
     from(File(projectRoot, "encyclopedia-endpoint.json"))
     from(File(projectRoot, "redeem-codes-endpoint.json"))

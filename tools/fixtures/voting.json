@@ -1,0 +1,321 @@
+{
+  "source": "capture-20261028-222818: voting requests and settlements; account identifiers removed",
+  "responses": {
+    "Vote03Online": {
+      "Results": [
+        {
+          "Event": "None",
+          "Drop": {
+            "Items": [
+              {
+                "Item": {
+                  "Count": 50,
+                  "StaticID": "3"
+                },
+                "NowItem": {
+                  "Count": 687,
+                  "StaticID": "3"
+                }
+              },
+              {
+                "Item": {
+                  "Count": 2,
+                  "StaticID": "T03"
+                },
+                "NowItem": {
+                  "Count": 2,
+                  "StaticID": "T03"
+                }
+              }
+            ]
+          },
+          "Quests": [
+            {
+              "StaticID": "Vote03Online",
+              "Count": 1,
+              "ReceivedList": [],
+              "IsRewarded": true,
+              "IsPayRewarded": false,
+              "IsFinish": true
+            }
+          ]
+        }
+      ],
+      "Utc": "1793197889"
+    },
+    "Vote03UpgradeEquip": {
+      "Results": [
+        {
+          "Event": "None",
+          "Drop": {
+            "Items": [
+              {
+                "Item": {
+                  "Count": 50,
+                  "StaticID": "3"
+                },
+                "NowItem": {
+                  "Count": 737,
+                  "StaticID": "3"
+                }
+              },
+              {
+                "Item": {
+                  "Count": 2,
+                  "StaticID": "T03"
+                },
+                "NowItem": {
+                  "Count": 4,
+                  "StaticID": "T03"
+                }
+              }
+            ]
+          },
+          "Quests": [
+            {
+              "StaticID": "Vote03UpgradeEquip",
+              "Count": 1,
+              "ReceivedList": [],
+              "IsRewarded": true,
+              "IsPayRewarded": false,
+              "IsFinish": true
+            }
+          ]
+        }
+      ],
+      "Utc": "1793197891"
+    },
+    "Vote03Arena": {
+      "Results": [
+        {
+          "Event": "None",
+          "Drop": {
+            "Items": [
+              {
+                "Item": {
+                  "Count": 50,
+                  "StaticID": "3"
+                },
+                "NowItem": {
+                  "Count": 787,
+                  "StaticID": "3"
+                }
+              },
+              {
+                "Item": {
+                  "Count": 3,
+                  "StaticID": "T03"
+                },
+                "NowItem": {
+                  "Count": 7,
+                  "StaticID": "T03"
+                }
+              }
+            ]
+          },
+          "Quests": [
+            {
+              "StaticID": "Vote03Arena",
+              "Count": 5,
+              "ReceivedList": [],
+              "IsRewarded": true,
+              "IsPayRewarded": false,
+              "IsFinish": true
+            }
+          ]
+        }
+      ],
+      "Utc": "1793197893"
+    },
+    "Vote03Scene": {
+      "Results": [
+        {
+          "Event": "None",
+          "Drop": {
+            "Items": [
+              {
+                "Item": {
+                  "Count": 50,
+                  "StaticID": "3"
+                },
+                "NowItem": {
+                  "Count": 837,
+                  "StaticID": "3"
+                }
+              },
+              {
+                "Item": {
+                  "Count": 3,
+                  "StaticID": "T03"
+                },
+                "NowItem": {
+                  "Count": 10,
+                  "StaticID": "T03"
+                }
+              }
+            ]
+          },
+          "Quests": [
+            {
+              "StaticID": "Vote03Scene",
+              "Count": 10,
+              "ReceivedList": [],
+              "IsRewarded": true,
+              "IsPayRewarded": false,
+              "IsFinish": true
+            }
+          ]
+        }
+      ],
+      "Utc": "1793197895"
+    },
+    "vote": {
+      "Event": "None",
+      "Drop": {},
+      "CostItems": [
+        {
+          "Item": {
+            "Count": 10,
+            "StaticID": "T03"
+          },
+          "NowItem": {
+            "Count": 0,
+            "StaticID": "T03"
+          }
+        }
+      ],
+      "Quests": [
+        {
+          "StaticID": "Vore03Finish",
+          "Count": 10,
+          "ReceivedList": [],
+          "IsRewarded": false,
+          "IsPayRewarded": false,
+          "IsFinish": true
+        }
+      ],
+      "Utc": "1793197922"
+    },
+    "Vore03Finish": {
+      "Results": [
+        {
+          "Event": "None",
+          "Drop": {
+            "Items": [
+              {
+                "Item": {
+                  "Count": 50,
+                  "StaticID": "2"
+                },
+                "NowItem": {
+                  "Count": 39700,
+                  "StaticID": "2"
+                }
+              }
+            ]
+          },
+          "Quests": [
+            {
+              "StaticID": "Vore03Finish",
+              "Count": 10,
+              "ReceivedList": [],
+              "IsRewarded": true,
+              "IsPayRewarded": false,
+              "IsFinish": true
+            }
+          ]
+        }
+      ],
+      "Utc": "1793197925"
+    }
+  },
+  "state": {
+    "Utc": "1793197795",
+    "ItemContainer": {
+      "Items": [
+        {
+          "StaticID": "T03",
+          "Count": 0
+        }
+      ]
+    },
+    "QuestContainer": {
+      "Quests": [
+        {
+          "StaticID": "Vote03Arena",
+          "Count": 5,
+          "ReceivedList": [],
+          "IsRewarded": false,
+          "IsPayRewarded": false,
+          "IsFinish": true
+        },
+        {
+          "StaticID": "Vote03Online",
+          "Count": 1,
+          "ReceivedList": [],
+          "IsRewarded": false,
+          "IsPayRewarded": false,
+          "IsFinish": true
+        },
+        {
+          "StaticID": "Vote03Scene",
+          "Count": 10,
+          "ReceivedList": [],
+          "IsRewarded": false,
+          "IsPayRewarded": false,
+          "IsFinish": true
+        },
+        {
+          "StaticID": "Vote03UpgradeEquip",
+          "Count": 1,
+          "ReceivedList": [],
+          "IsRewarded": false,
+          "IsPayRewarded": false,
+          "IsFinish": true
+        },
+        {
+          "StaticID": "Vore03Finish",
+          "Count": 0,
+          "ReceivedList": [],
+          "IsRewarded": false,
+          "IsPayRewarded": false,
+          "IsFinish": false
+        }
+      ]
+    },
+    "ActivityDBSettingContainer": {
+      "SettingList": [
+        {
+          "ActivityID": "VoteActivity",
+          "OffDays": 0,
+          "IsIgnoreTime": false,
+          "IsRepeat": false,
+          "StartTime": {
+            "$date": 1783468800000
+          },
+          "EndTime": {
+            "$date": 1794960000000
+          }
+        },
+        {
+          "ActivityID": "Vote03",
+          "OffDays": 0,
+          "IsIgnoreTime": false,
+          "IsRepeat": false,
+          "StartTime": {
+            "$date": 1793145600000
+          },
+          "EndTime": {
+            "$date": 1794376800000
+          }
+        }
+      ]
+    }
+  },
+  "voteRequest": {
+    "ActivityID": "Vote03",
+    "RoleID": "H149",
+    "Language": "CHS",
+    "Value": 10
+  }
+}

@@ -93,7 +93,8 @@ echo ============================================
 echo   Verified release build finished.
 python -c "from backend.version import APP_VERSION; print(f'  Output: releases\\{APP_VERSION}\\')"
 echo   Candidate manifest: releases\preview.json
-echo   Manual promotion only: promote-release.bat
+echo   Preview publishing: publish-preview.bat
+echo   After testing: publish-stable.bat
 echo ============================================
 pause
 exit /b 0

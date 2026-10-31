@@ -180,6 +180,7 @@ class ScenePickerContracts(unittest.TestCase):
 class StateContracts(unittest.TestCase):
     def test_android_asset_root_reads_the_bundled_battle_table(self):
         from backend.abyss_state import metadata
+        from backend import runtime_data
         original = {**metadata(), "version": "android-test-root"}
         self.addCleanup(metadata.cache_clear)
         with tempfile.TemporaryDirectory() as temporary:
@@ -187,7 +188,8 @@ class StateContracts(unittest.TestCase):
             path.parent.mkdir()
             path.write_text(json.dumps(original), encoding="utf-8")
             metadata.cache_clear()
-            with patch.dict("os.environ", {"ARK_ASSET_ROOT": temporary}):
+            with patch.dict("os.environ", {"ARK_ASSET_ROOT": temporary}), patch.object(
+                    runtime_data, 'registry', runtime_data.Registry(Path(temporary) / 'game-data')):
                 self.assertEqual(metadata()["version"], "android-test-root")
 
     def test_trusted_empty_collections_and_scalar_defaults_replace_old_state(self):

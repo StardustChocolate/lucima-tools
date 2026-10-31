@@ -12,6 +12,8 @@ const checkboxUIHTML = () => `
 const _GLOBAL_PATHS = new Set(["/api/config", "/api/preferences", "/api/logs", "/api/logs/save", "/api/equipment-filter/export", "/api/diagnostics/runtime", "/api/tasks", "/api/accounts", "/api/login", "/api/login/saved", "/api/accounts/logout", "/api/accounts/delete", "/api/accounts/restore", "/api/update/status", "/api/update/check", "/api/update/ignore", "/api/update/install", "/api/update/channel"]);
 _GLOBAL_PATHS.add("/api/encyclopedia/resources");
 _GLOBAL_PATHS.add("/api/encyclopedia/save-image");
+_GLOBAL_PATHS.add("/api/resources/status");
+_GLOBAL_PATHS.add("/api/resources/check");
 const _CONNECTION_BLOCKED_PATHS = new Set([
   "/api/tasks/auto", "/api/tasks/run", "/api/shop/reset", "/api/shop/buy",
   "/api/star-source/query", "/api/star-source/refresh", "/api/star-source/buy",
@@ -66,7 +68,7 @@ const api = async (path, body, { signal } = {}) => {
   const localAccount = requestAccount && typeof ACCOUNTS !== "undefined" ? ACCOUNTS[requestAccount] : null;
   if (_CONNECTION_BLOCKED_PATHS.has(apiPath) && localAccount?.connection?.connected === false) {
     applyConnectionState(requestAccount, localAccount.connection, { notify: true });
-    throw new Error("[重复登录] 当前连接已断开");
+    throw new Error(connectionBlockedMessage(localAccount.connection));
   }
   // POST：向 body 注入 account（未显式给且非全局接口时）
   if (body && typeof body === "object" && !("account" in body) && activeAccount && !_GLOBAL_PATHS.has(apiPath)) {
@@ -556,6 +558,8 @@ function rememberAccount(data) {
     activationPending: false,
     activationRetryAt: 0,
     activationError: "",
+    // 仅在当前前端会话中保存的浏览状态；不写入游戏或后端配置。
+    uiState: { panels: Object.create(null), optionCache: Object.create(null) },
   };
 }
 
@@ -596,6 +600,36 @@ async function ensureAccountStarted(email) {
   }
 }
 
+function connectionBlockedMessage(state) {
+  if (state?.reason === "maintenance") return state.maintenance
+    ? "游戏维护中，等待维护结束后自动重登" : "维护后等待重新登录，任务保持停止";
+  return state?.reason === "duplicate_login" ? "[重复登录] 当前连接已断开" : "当前游戏连接已断开";
+}
+
+function stopManualTasksForMaintenance(email) {
+  const account = ACCOUNTS[email];
+  if (shopRunning[email]) {
+    shopStopRequested[email] = true;
+    if (account?.secretShopPending) {
+      resolveSecretShopPending(account.secretShopPending.id, email, { action: "stop", count: 0 });
+    }
+  }
+  if (starSourceRunning[email]) {
+    starSourceStopRequested[email] = true;
+    if (account?.starSourcePending) {
+      resolveStarSourcePending(account.starSourcePending.id, email, { action: "stop" });
+    }
+  }
+  if (customizedEquipRunning[email]) customizedEquipStopRequested[email] = true;
+  if (sweepRunning[email]) sweepStopRequested[email] = true;
+  if (actRunning[email]) actStopRequested[email] = true;
+  const loop = DEV_LOOP_STATES.get(email);
+  if (loop?.running) {
+    loop.stopRequested = true;
+    loop.wake?.();
+  }
+}
+
 function renderConnectionState(email = activeAccount) {
   const pill = $("connPill");
   if (!pill) return;
@@ -604,19 +638,21 @@ function renderConnectionState(email = activeAccount) {
   const connected = state.connected !== false;
   pill.classList.toggle("on", !!account && connected);
   pill.classList.toggle("off", !!account && !connected);
-  $("connStatus").textContent = account ? (connected ? "已连接" : "已断开") : "未连接";
+  $("connStatus").textContent = account ? (connected ? "已连接"
+    : state.reason === "maintenance" ? (state.maintenance ? "维护中" : "等待重登") : "已断开") : "未连接";
   pill.title = !account ? "尚未登录" : connected ? "游戏会话正常"
-    : state.reason === "duplicate_login" ? "重复登录，当前会话已断开" : "游戏会话已断开";
+    : connectionBlockedMessage(state);
   const refreshing = !!account?.refreshPending;
+  const maintenance = !connected && state.maintenance;
   const retry = $("reconnectBtn");
   if (retry) {
-    retry.disabled = !account || refreshing;
+    retry.disabled = !account || refreshing || maintenance;
     retry.classList.toggle("loading", refreshing);
     retry.setAttribute("aria-busy", String(refreshing));
   }
   const refresh = $("refreshBtn");
   if (refresh) {
-    refresh.disabled = !account || refreshing;
+    refresh.disabled = !account || refreshing || maintenance;
     refresh.classList.toggle("spinning", refreshing);
   }
 }
@@ -629,9 +665,16 @@ function applyConnectionState(email, state, { notify = false } = {}) {
     connected: state.connected !== false,
     reason: state.reason || null,
     changedAt: Number.isFinite(rawChangedAt) && rawChangedAt > 0 ? rawChangedAt : null,
+    maintenance: !!state.maintenance,
+    maintenanceEpoch: Number(state.maintenanceEpoch) || 0,
   };
   const previous = account.connection || { connected: true };
   account.connection = next;
+  if ((!next.connected && next.reason === "maintenance")
+      || next.maintenanceEpoch > (previous.maintenanceEpoch || 0)) {
+    stopManualTasksForMaintenance(email);
+    if (notify && !next.connected) showMessageToast(connectionBlockedMessage(next), "warn", 5200);
+  }
   updateAccountConnectionIndicator(email);
   if (email === activeAccount) renderConnectionState(email);
   const duplicate = !next.connected && next.reason === "duplicate_login";
@@ -693,7 +736,11 @@ async function accLogout(email) {
 
 // 删除账号（下线 + 清存档）
 async function accDelete(email) {
-  try { await api("/api/accounts/delete", { account: email }); } catch (e) {}
+  try { await api("/api/accounts/delete", { account: email }); }
+  catch (error) {
+    showMessageToast(`删除账号失败：${error.message}`, "err");
+    return;
+  }
   SAVED_ACCTS = SAVED_ACCTS.filter((a) => a.account !== email);
   delete ACCOUNTS[email];
   afterAccountGone(email);
@@ -1112,7 +1159,7 @@ const TASK_ICONS = {
   reactor: "⚡", sf_potion: "🧪", sf_starforce: "⭐", sf_tesseract: "🔷",
   dispatch: "🎖️", shop_free: "🛒", shop_diamond: "💎", hunt_sweep: "⚔️", element_sweep: "🔮",
   activity_scene: "🎫", abyss_sweep: "🌌", free_summon: "🎰", store_buy: "🛍️",
-  star_source_shop: "🌈", customized_equip: "🔧",
+  star_source_shop: "🌈", customized_equip: "🔧", activity_vote: "🗳️",
 };
 // 部分任务改用游戏内物品图标（覆盖上面的 emoji）：动力转换=钻石、成长药剂=传说成长药剂、
 // 升星水晶=传说升星水晶、技能模块=技能模块、派遣任务=荣誉勋章、
@@ -1122,7 +1169,7 @@ const TASK_ICON_IMG = {
   send_meal: "3", reactor: "2", sf_potion: "103", sf_starforce: "106",
   sf_tesseract: "34", dispatch: "26", shop_free: "1",
   shop_diamond: "2", abyss_sweep: "25", free_summon: "5", store_buy: "26",
-  arena_npc: "4", star_source_shop: "109",
+  arena_npc: "4", star_source_shop: "109", activity_vote: "T03",
 };
 const TASK_ICON_UI = {
   month_signin: "UI05_Icon_Monthly.png",
@@ -1170,6 +1217,106 @@ let NEXT_CLAIMS = {};
 function acc(email) { return ACCOUNTS[email || activeAccount]; }
 function activeAcc() { return ACCOUNTS[activeAccount]; }
 
+// 账号切换会重绘任务卡片。稳定的"选项"展开状态和只读选项响应按账号留在
+// 前端会话中，恢复浏览位置时不会改变任务配置或重新执行任务。
+function accountUiState(email = activeAccount) {
+  const account = ACCOUNTS[email];
+  if (!account) return null;
+  const state = account.uiState || (account.uiState = {});
+  state.panels ||= Object.create(null);
+  state.optionCache ||= Object.create(null);
+  return state;
+}
+
+function accountPanelExpanded(key, fallback = false, email = activeAccount) {
+  const panels = accountUiState(email)?.panels;
+  return panels && Object.prototype.hasOwnProperty.call(panels, key)
+    ? panels[key] === true : fallback;
+}
+
+function setAccountPanelExpanded(key, expanded, email = activeAccount) {
+  const state = accountUiState(email);
+  if (state) state.panels[key] = !!expanded;
+}
+
+function accountOptionCache(key, email = activeAccount) {
+  const cache = accountUiState(email)?.optionCache;
+  return cache && Object.prototype.hasOwnProperty.call(cache, key) ? cache[key] : null;
+}
+
+function setAccountOptionCache(key, value, email = activeAccount) {
+  const state = accountUiState(email);
+  if (state) state.optionCache[key] = value;
+}
+
+function bindAccountPanel(button, body, key, { label, onOpen, onRestore } = {}) {
+  if (!button || !body) return () => false;
+  const previous = button._accountPanelBinding;
+  if (previous) {
+    if (label) previous.label = label;
+    if (onOpen) previous.onOpen = onOpen;
+    if (onRestore) previous.onRestore = onRestore;
+    previous.restoreAndHydrate();
+    return previous.restoreAndHydrate;
+  }
+  const binding = button._accountPanelBinding = {
+    body, key, label: label || button.textContent.trim().replace(/\s*[▸▾]$/, ""), onOpen, onRestore,
+  };
+  const restore = () => {
+    const expanded = accountPanelExpanded(binding.key);
+    binding.body.classList.toggle("hidden", !expanded);
+    button.setAttribute("aria-expanded", String(expanded));
+    button.textContent = `${binding.label} ${expanded ? "▾" : "▸"}`;
+    return expanded;
+  };
+  const restoreAndHydrate = () => {
+    const expanded = restore();
+    // 切回账号只允许用已有缓存补回界面，绝不因恢复展开状态发起读取。
+    if (expanded && binding.onRestore) void binding.onRestore();
+    return expanded;
+  };
+  binding.restoreAndHydrate = restoreAndHydrate;
+  restoreAndHydrate();
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const expanded = binding.body.classList.contains("hidden");
+    setAccountPanelExpanded(binding.key, expanded);
+    restore();
+    if (expanded && binding.onOpen) void binding.onOpen();
+  });
+  return restoreAndHydrate;
+}
+
+// 标准任务卡片由这里统一接入。新增功能只要沿用 .has-body/.auto-body
+// 或 .shop-widget/.shop-body 及标题区的 mini 按钮，就自动获得按账号恢复展开状态。
+// 只有首次打开需要读取专属选项的卡片，才在自己的 bind 函数中补充 onOpen 行为。
+function accountPanelKey(root, group) {
+  const explicit = root.dataset.accountPanelKey;
+  if (explicit) return explicit;
+  const taskId = root.dataset.id || root.id.replace(/^(?:shop|starshop|customizedequip|sweep|abyss|act|store)-/, "");
+  return `${group}:${taskId}`;
+}
+
+function bindStandardAccountPanels(scope, group) {
+  if (!scope) return [];
+  return [...scope.querySelectorAll(".auto-item.has-body, .shop-widget")].map((root) => {
+    const body = [...root.children].find((node) => node.matches?.(".auto-body, .shop-body"));
+    const head = [...root.children].find((node) => node.matches?.(".auto-head, .shop-head"));
+    const button = [...(head?.children || [])].find((node) => node.matches?.("button.mini"));
+    return bindAccountPanel(button, body, accountPanelKey(root, group));
+  });
+}
+
+// 静态页面（如佣兵团）使用 aria-controls 连接按钮和内容区，也自动接入。
+function bindControlledAccountPanels(scope, group) {
+  if (!scope) return [];
+  return [...scope.querySelectorAll("button[aria-controls]")].map((button) => {
+    const body = document.getElementById(button.getAttribute("aria-controls"));
+    return bindAccountPanel(button, body, group + ":" + (body?.id || button.id));
+  });
+}
+
 // 绝对时刻 -> "MM-DD H:MM"（本地时区，月日补零、小时不补）
 function fmtClock(ms) {
   const t = new Date(ms);
@@ -1200,6 +1347,7 @@ const NEXT_WORDS = {
 };
 function fmtNextClaim(nc, taskId = "") {
   if (!nc) return "";
+  if (nc.waiting) return nc.waiting;
   if (nc.blocked) return nc.blocked;
   if (nc.note && !nc.retrying) return nc.note;
   let w = NEXT_WORDS[taskId] || { ready: "可领取", next: "下次领取时间" };
@@ -1253,6 +1401,7 @@ function renderNextClaims() {
   // 竞技场展开页里每个 NPC 的倒计时也要跟着走（同样只重算文案、不发请求）
   document.querySelectorAll("#autoList .auto-item.has-body").forEach((el) => {
     if (el.querySelector(".arena-row")) renderArenaList(el.dataset.id);
+    if (el.dataset.id === 'activity_vote') renderVotingProgress(el.dataset.id);
   });
 }
 
@@ -1267,25 +1416,95 @@ async function syncToggles() {
   catch (e) { log(`保存开关失败：${e.message}`, "err"); }
 }
 
-// 选中的自动购买目标 key（存当前账号 params.shop_free.wanted 里，转成 key 展示）
-function getWantedKeys() {
-  const p = getAccParams();
-  const ids = (p.shop_free && p.shop_free.wanted) || null;
-  if (!Array.isArray(ids)) return BUY_TARGETS.map((b) => b.key);  // 默认全选
-  return BUY_TARGETS.filter((b) => b.ids.some((x) => ids.includes(x))).map((b) => b.key);
+// 按物品 ID 保存选择，避免将部分芯片反向展开为全部部位。
+function defaultShopWantedIds() {
+  return BUY_TARGETS.flatMap((target) => target.ids);
 }
-function setWantedKeys(keys) {
+
+function wantedIds() {
+  const saved = getAccParams().shop_free?.wanted;
+  return Array.isArray(saved) ? saved.map(String) : defaultShopWantedIds();
+}
+
+function setWantedIds(ids) {
   const a = activeAcc(); if (!a) return;
-  const ids = [];
-  BUY_TARGETS.forEach((b) => { if (keys.includes(b.key)) ids.push(...b.ids); });
-  a.params = { ...a.params, shop_free: { ...(a.params.shop_free || {}), wanted: ids } };
+  a.params = { ...a.params, shop_free: { ...(a.params.shop_free || {}), wanted: [...ids] } };
   syncToggles();
 }
-function wantedIds() {
-  const keys = getWantedKeys();
-  const ids = [];
-  BUY_TARGETS.forEach((b) => { if (keys.includes(b.key)) ids.push(...b.ids); });
-  return ids;
+
+// 免费/钻石商店共用部位选择控件；目标和部位信息均来自后端。
+function renderShopBuyTargets(id, selectedIds) {
+  const selected = new Set(selectedIds);
+  const options = BUY_TARGETS.map((target) => {
+    const input = `<input type="checkbox" data-shop-target="${target.key}" ${target.ids.every((sid) => selected.has(sid)) ? "checked" : ""}>`;
+    if (!target.parts?.length) {
+      return `<label class="bt-opt">${input}${checkboxUIHTML()}<span>${filterEscape(target.label)}</span></label>`;
+    }
+    const panelId = `shop-parts-${id}-${target.key}`;
+    return `<div class="shop-chip-group" data-shop-group="${target.key}">
+      <div class="bt-opt shop-chip-row">
+        <label class="shop-chip-master">${input}${checkboxUIHTML()}
+          <span class="shop-chip-copy"><span>${filterEscape(target.label)}</span>
+            <span class="shop-chip-summary" aria-live="polite"></span></span>
+        </label>
+        <button type="button" class="mini shop-chip-toggle" aria-controls="${panelId}" aria-expanded="false">部位 ▸</button>
+      </div>
+      <div class="shop-chip-picker hidden" id="${panelId}">
+        <div class="shop-chip-picker-head"><span>购买部位</span>
+          <button type="button" class="mini shop-chip-all">全选</button></div>
+        <div class="shop-chip-grid">${target.parts.map((part) => `<label class="bt-opt shop-chip-part">
+          <input type="checkbox" data-shop-part="${part.id}" ${selected.has(part.id) ? "checked" : ""}>
+          ${checkboxUIHTML()}<span>${filterEscape(part.label)}</span></label>`).join("")}</div>
+      </div>
+    </div>`;
+  }).join("");
+  return `<div class="bt-opts col shop-buy-targets">${options}</div>`;
+}
+
+function bindShopBuyTargets(root, getSelectedIds, saveSelectedIds) {
+  const scope = root.querySelector(".shop-buy-targets");
+  if (!scope) return;
+  const sync = () => {
+    const selected = new Set(getSelectedIds());
+    scope.querySelectorAll("[data-shop-target]").forEach((input) => {
+      const target = BUY_TARGETS.find((entry) => entry.key === input.dataset.shopTarget);
+      const count = target.ids.filter((sid) => selected.has(sid)).length;
+      input.checked = count === target.ids.length;
+      input.indeterminate = count > 0 && count < target.ids.length;
+      const group = input.closest(".shop-chip-group");
+      if (!group) return;
+      const summary = count === target.ids.length ? "全部部位" : !count ? "不购买芯片"
+        : target.parts.filter((part) => selected.has(part.id)).map((part) => part.label).join("、");
+      group.querySelector(".shop-chip-summary").textContent = [target.grade, summary].filter(Boolean).join(" · ");
+    });
+    scope.querySelectorAll("[data-shop-part]").forEach((input) => {
+      input.checked = selected.has(input.dataset.shopPart);
+    });
+  };
+  const update = (ids, checked) => {
+    const selected = new Set(getSelectedIds());
+    ids.forEach((sid) => checked ? selected.add(sid) : selected.delete(sid));
+    saveSelectedIds([...selected]);
+    sync();
+  };
+  scope.addEventListener("change", (event) => {
+    const input = event.target;
+    if (input.matches("[data-shop-target]")) {
+      const target = BUY_TARGETS.find((entry) => entry.key === input.dataset.shopTarget);
+      update(target.ids, input.checked);
+    } else if (input.matches("[data-shop-part]")) {
+      update([input.dataset.shopPart], input.checked);
+    }
+  });
+  scope.querySelectorAll(".shop-chip-group").forEach((group) => {
+    bindAccountPanel(group.querySelector(".shop-chip-toggle"), group.querySelector(".shop-chip-picker"),
+      `shop-parts:${root.id}:${group.dataset.shopGroup}`, { label: "部位" });
+    group.querySelector(".shop-chip-all").addEventListener("click", () => {
+      const target = BUY_TARGETS.find((entry) => entry.key === group.dataset.shopGroup);
+      update(target.ids, true);
+    });
+  });
+  sync();
 }
 
 async function loadTasks() {
@@ -1317,19 +1536,20 @@ function renderAutoPanel(toggle) {
       // 带展开页的开关：外层必须是 div 而不是 label
       // ——<button>（"选项 ▸"）不能放在 <label> 里，点它会连带触发开关。
       // 开关本体单独包一层 <label> 保持点击区。
-      if (t.ui === "arena" || t.ui === "achievement" || t.ui === "redeem_code") {
+      if (t.ui === "arena" || t.ui === "achievement" || t.ui === "redeem_code" || t.ui === "voting") {
         const achievement = t.ui === "achievement";
         const redeemCode = t.ui === "redeem_code";
+        const voting = t.ui === 'voting';
         return `<div class="auto-item has-body ${on ? "on" : ""}" data-id="${t.id}" id="auto-${t.id}">
           <div class="auto-head">
             ${inner}
-            <button type="button" class="mini ${achievement ? "achievement-toggle" : (redeemCode ? "redeem-code-toggle" : "arena-toggle")}">选项 ▸</button>
+            <button type="button" class="mini ${voting ? 'voting-toggle' : achievement ? "achievement-toggle" : (redeemCode ? "redeem-code-toggle" : "arena-toggle")}">选项 ▸</button>
             <label class="switch-wrap">
               <input type="checkbox" class="switch-in" ${on ? "checked" : ""}>
               <div class="switch"></div>
             </label>
           </div>
-          <div class="auto-body hidden">${achievement ? renderAchievementOptions() : (redeemCode ? renderRedeemCodeOptions() : renderArenaBody(t))}</div>
+          <div class="auto-body hidden">${voting ? renderVotingOptions() : achievement ? renderAchievementOptions() : (redeemCode ? renderRedeemCodeOptions() : renderArenaBody(t))}</div>
         </div>`;
       }
       if (t.wantsBuyTargets) {
@@ -1352,6 +1572,8 @@ function renderAutoPanel(toggle) {
       </label>`;
     })
     .join("");
+  // 所有标准自动任务卡片统一绑定展开状态；新增同结构卡片无需单独处理。
+  bindStandardAccountPanels($("autoList"), "auto");
 
   // 开关事件：更新当前账号缓存 + 同步后端 + 开启时立即跑一次
   document.querySelectorAll("#autoList .auto-item").forEach((el) => {
@@ -1365,6 +1587,7 @@ function renderAutoPanel(toggle) {
   toggle.forEach((t) => { if (t.ui === "arena") bindArenaWidget(t.id); });
   toggle.forEach((t) => { if (t.ui === "achievement") bindAchievementOptions(t.id); });
   toggle.forEach((t) => { if (t.ui === "redeem_code") bindRedeemCodeOptions(t.id); });
+  toggle.forEach((t) => { if (t.ui === 'voting') bindVotingOptions(t.id); });
   toggle.forEach((t) => { if (t.wantsBuyTargets) bindShopFreeOptions(t.id); });
   renderNextClaims();
 }
@@ -1397,12 +1620,6 @@ function renderRedeemCodeOptions() {
 function bindRedeemCodeOptions(id) {
   const root = $(`auto-${id}`);
   if (!root) return;
-  const body = root.querySelector(".auto-body");
-  const toggle = root.querySelector(".redeem-code-toggle");
-  toggle.addEventListener("click", () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-  });
 }
 
 function achievementCfg(email = activeAccount) {
@@ -1426,11 +1643,6 @@ function bindAchievementOptions(id) {
   if (!root) return;
   const email = activeAccount;
   const body = root.querySelector(".auto-body");
-  const toggle = root.querySelector(".achievement-toggle");
-  toggle.addEventListener("click", () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-  });
   const inputs = [...body.querySelectorAll('input[type="checkbox"]')];
   inputs.forEach((input) => input.addEventListener("change", async () => {
     const account = ACCOUNTS[email];
@@ -1488,18 +1700,12 @@ function setShopFreeEquipCfg(patch) {
 }
 
 function renderShopFreeOptions(id) {
-  const wantedKeys = getWantedKeys();
   const equipCfg = shopFreeEquipCfg();
-  const options = BUY_TARGETS.map((target) => `<label class="bt-opt">
-    <input type="checkbox" value="${target.key}" ${wantedKeys.includes(target.key) ? "checked" : ""}>
-    ${checkboxUIHTML()}
-    <span>${target.label}</span>
-  </label>`).join("");
   return `<div class="shop-grid shop-free-grid">
     <div class="shop-left">
       <div class="shop-row col">
         <span class="shop-lbl">自动购买目标</span>
-        <div class="bt-opts col">${options}</div>
+        ${renderShopBuyTargets(id, wantedIds())}
       </div>
       <div class="shop-row col shop-free-equip-options">
         <label class="bt-opt shop-free-equip-toggle">
@@ -1530,19 +1736,7 @@ function bindShopFreeOptions(id) {
   const root = $(`auto-${id}`);
   if (!root) return;
   const body = root.querySelector(".auto-body");
-  const toggle = root.querySelector(".shop-free-toggle");
-  toggle.addEventListener("click", () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-  });
-  body.querySelectorAll('.bt-opt input[type="checkbox"]').forEach((input) => {
-    if (input.classList.contains("free-equip-on")) return;
-    input.addEventListener("change", () => {
-      const keys = [...body.querySelectorAll('.bt-opt input[type="checkbox"]:checked')]
-        .map((entry) => entry.value);
-      setWantedKeys(keys);
-    });
-  });
+  bindShopBuyTargets(root, wantedIds, setWantedIds);
   const equipToggle = body.querySelector(".free-equip-on");
   const equipControls = body.querySelector(".shop-free-equip-controls");
   equipToggle?.addEventListener("change", () => {
@@ -1660,6 +1854,7 @@ function renderArenaBody(t) {
 
 // 单个 NPC 行的档期文案（沿用自动任务面板的时间格式：绝对时刻在前、倒计时在括号内）
 function arenaWhen(npc) {
+  if (npc.waiting) return { txt: npc.waiting, cls: "" };
   if (npc.waitingForLogin) return { txt: "等待登录同步刷新", cls: "" };
   const gate = Math.max(npc.nextMs || 0, npc.retryMs || 0);
   if (!gate) return { txt: "可挑战", cls: "ready" };
@@ -1764,8 +1959,9 @@ async function loadArenaOptions(taskId) {
   if (!root || !email) return false;
   const teamSlot = root.querySelector(".arena-team-slot");
   try {
-    const st = await api(`/api/arena/options`);
-    if (!ACCOUNTS[email]) return;
+    // 切回账号时复用已读取的队伍和 NPC 列表，避免无意义的重复查询。
+    const st = ACCOUNTS[email]?.arena || await api(`/api/arena/options`);
+    if (activeAccount !== email || !ACCOUNTS[email] || !root.isConnected) return false;
     ACCOUNTS[email].arena = st;
     const teamOpts = (st.teams || []).length
       ? st.teams.map((x) => ({ val: x.id, label: x.name }))
@@ -1784,6 +1980,7 @@ async function loadArenaOptions(taskId) {
     renderArenaList(taskId);
     return true;
   } catch (e) {
+    if (activeAccount !== email || !root.isConnected) return false;
     teamSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     const list = $(`arenaList-${taskId}`);
     if (list) list.innerHTML = `<div class="dd-loading err">加载失败：${e.message}</div>`;
@@ -1796,17 +1993,17 @@ function bindArenaWidget(id) {
   if (!root) return;
   const body = root.querySelector(".auto-body");
   const btn = root.querySelector(".arena-toggle");
-  btn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    body.classList.toggle("hidden");
-    btn.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
+  bindAccountPanel(btn, body, `auto:${id}`, { onOpen: async () => {
+    if (!root.dataset.loaded) {
       // 只有加载成功才盖"已加载"戳——否则一次失败(未登录/网络抖动)会把面板永久
       // 钉在"加载失败"上，用户重新展开也不再重试。
       if (await loadArenaOptions(id)) root.dataset.loaded = "1";
     }
-  });
+  }, onRestore: async () => {
+    if (ACCOUNTS[activeAccount]?.arena && !root.dataset.loaded) {
+      if (await loadArenaOptions(id)) root.dataset.loaded = "1";
+    }
+  }});
 }
 
 // 组装 params：给需要购买目标的任务塞 wanted
@@ -1834,7 +2031,7 @@ function toggleParams(ids) {
 async function runToggleTasks(ids, prefix = "自动·", quiet = false) {
   if (!ids || !ids.length) return;
   // 竞技场和兑换码由后端逐项写日志，运行期间持续拉取已完成的结果。
-  const streamsResults = ids.includes("arena_npc") || ids.includes("redeem_code");
+  const streamsResults = ids.includes("arena_npc") || ids.includes("redeem_code") || ids.includes('activity_vote');
   const liveLogTimer = streamsResults ? setInterval(pollAutoLogs, 700) : null;
   try {
     const { results } = await api("/api/tasks/auto", { taskIds: ids, params: toggleParams(ids) });
@@ -1892,6 +2089,8 @@ function renderManualPanel(tasks) {
       </div>`;
     })
     .join("");
+  // 所有标准主动任务卡片统一绑定展开状态；功能 bind 只负责专属交互和选项加载。
+  bindStandardAccountPanels($("taskList"), "manual");
   document.querySelectorAll("#taskList .task-run").forEach((b) =>
     b.addEventListener("click", () => runSingleTask(b.dataset.id, b))
   );
@@ -1930,11 +2129,10 @@ async function runSingleTask(id, btn) {
 
 // ---------- 秘密商店刷新(钻石) 自定义控件 ----------
 // 配置按账号命名空间（不同账号刷商店偏好独立）
-const SHOP_LS = "ark_shop_diamond_cfg";  // {count, wanted:[key], legOn, schemeId}
+const SHOP_LS = "ark_shop_diamond_cfg";  // {count, wantedIds:[StaticID], legOn, schemeId}
 const shopLsKey = () => `${SHOP_LS}::${activeAccount || "_"}`;
 // 缺省全选：从后端下发的目标表推导，别再写死 key 列表
 // （后端加/改目标项时这里会自动跟上，不会悄悄漏掉新项）
-const allTargetKeys = () => BUY_TARGETS.map((b) => b.key);
 function getShopCfg() {
   const schemes = EQUIP_FILTER_SCHEMES_DATA;
   const fallbackId = schemes.find((scheme) => scheme.id === "plan-star-shop")?.id || schemes[0]?.id || "";
@@ -1942,29 +2140,26 @@ function getShopCfg() {
     const v = JSON.parse(frontendStorageGet(shopLsKey())) || {};
     return {
       count: v.count || 10,
-      wanted: Array.isArray(v.wanted) ? v.wanted : allTargetKeys(),
+      // 旧版 wanted 保存目标 key；首次读取时展开为 ID，旧芯片选项仍表示全部部位。
+      wantedIds: Array.isArray(v.wantedIds) ? v.wantedIds.map(String)
+        : Array.isArray(v.wanted) ? BUY_TARGETS.filter((target) => v.wanted.includes(target.key)).flatMap((target) => target.ids)
+        : defaultShopWantedIds(),
       legOn: !!v.legOn,
       schemeId: schemes.some((scheme) => scheme.id === v.schemeId) ? v.schemeId : fallbackId,
     };
   } catch {
-    return { count: 10, wanted: allTargetKeys(), legOn: false, schemeId: fallbackId };
+    return { count: 10, wantedIds: defaultShopWantedIds(), legOn: false, schemeId: fallbackId };
   }
 }
 function setShopCfg(patch) {
   frontendStorageSet(shopLsKey(), JSON.stringify({ ...getShopCfg(), ...patch }));
 }
 function shopWantedIds() {
-  const keys = getShopCfg().wanted;
-  const ids = [];
-  BUY_TARGETS.forEach((b) => { if (keys.includes(b.key)) ids.push(...b.ids); });
-  return ids;
+  return getShopCfg().wantedIds;
 }
 
 function renderShopWidget(t) {
   const cfg = getShopCfg();
-  const opts = BUY_TARGETS.map(
-    (b) => `<label class="bt-opt"><input type="checkbox" data-wkey="${b.key}" ${cfg.wanted.includes(b.key) ? "checked" : ""}>${checkboxUIHTML()}<span>${b.label}</span></label>`
-  ).join("");
   return `<div class="shop-widget" id="shop-${t.id}">
     <div class="shop-head">
       <div class="ticon">${taskIconHTML(t.id, "💎")}</div>
@@ -1985,7 +2180,7 @@ function renderShopWidget(t) {
           </div>
           <div class="shop-row col">
             <span class="shop-lbl">自动购买目标</span>
-            <div class="bt-opts col">${opts}</div>
+            ${renderShopBuyTargets(t.id, cfg.wantedIds)}
           </div>
           <div class="shop-row col">
             <label class="bt-opt"><input type="checkbox" class="leg-on" ${cfg.legOn ? "checked" : ""}>${checkboxUIHTML()}<span>85级传说装备</span></label>
@@ -2008,12 +2203,6 @@ function renderShopWidget(t) {
 function bindShopWidget(id) {
   const root = $(`shop-${id}`);
   if (!root) return;
-  const body = root.querySelector(".shop-body");
-  const toggle = root.querySelector(".shop-toggle");
-  toggle.addEventListener("click", () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-  });
   const cntIn = root.querySelector(".shop-count");
   cntIn.addEventListener("input", () => { cntIn.value = cntIn.value.replace(/[^0-9]/g, "").slice(0, 3); });
   cntIn.addEventListener("blur", () => { cntIn.value = clampCount(cntIn.value); setShopCfg({ count: parseInt(cntIn.value) }); });
@@ -2023,11 +2212,7 @@ function bindShopWidget(id) {
       setShopCfg({ count: parseInt(cntIn.value) });
     })
   );
-  root.querySelectorAll("[data-wkey]").forEach((cb) =>
-    cb.addEventListener("change", () =>
-      setShopCfg({ wanted: [...root.querySelectorAll("[data-wkey]:checked")].map((x) => x.dataset.wkey) })
-    )
-  );
+  bindShopBuyTargets(root, shopWantedIds, (wantedIds) => setShopCfg({ wantedIds }));
   const legOn = root.querySelector(".leg-on");
   const schemeWrap = root.querySelector(".shop-equip-scheme-wrap");
   legOn.addEventListener("change", () => {
@@ -2577,6 +2762,10 @@ const starSourceShopLsKey = () => STAR_SOURCE_SHOP_LS + "::" + (activeAccount ||
 const starSourceRunning = {};
 const starSourceStopRequested = {};
 
+function starSourceHasPendingPurchase(state) {
+  return Object.values(state?.cardStates || {}).includes("buying");
+}
+
 function starSourceSchemeOptions() {
   return EQUIP_FILTER_SCHEMES_DATA.map((scheme) => ({
     val: scheme.id,
@@ -2607,7 +2796,7 @@ function starSourceStateHTML(state) {
   if (state?.cards?.length) {
     const title = "第 " + state.round + " 次刷新命中";
     const cardStates = state.cardStates || {};
-    const buying = Object.values(cardStates).includes("buying");
+    const buying = starSourceHasPendingPurchase(state);
     return '<div class="star-source-result-head"><span>' + title
       + '</span><div class="star-source-result-actions"><b>' + state.cards.length + ' 件装备</b>'
       + (state.kind === "matched" ? '<button type="button" class="btn ghost star-source-skip"'
@@ -2640,6 +2829,10 @@ function starSourceStateHTML(state) {
     return '<div class="card-empty">' + icon + '<div class="ce-text">'
       + filterEscape(state.message || "刷新失败") + '</div></div>';
   }
+  if (state?.kind === "stopped") {
+    return '<div class="card-empty">' + icon + '<div class="ce-text">已停止刷新，已刷新 '
+      + state.total + ' 次</div></div>';
+  }
   if (state?.kind === "empty") {
     const summaries = [];
     if (state.purchasedMatches) summaries.push("已购买 " + state.purchasedMatches + " 件命中装备");
@@ -2661,6 +2854,8 @@ function renderStarSourceState(id, state, email = activeAccount) {
   area.classList.toggle("has-results", !!state?.cards?.length);
   area.innerHTML = starSourceStateHTML(state);
   bindStarSourceResultActions(id, email);
+  setStarSourceStartState(id, email, starSourceRunning[email]
+    ? (starSourceStopRequested[email] ? "stopping" : "running") : "idle");
 }
 
 function setStarSourceStartState(id, email, mode) {
@@ -2669,9 +2864,10 @@ function setStarSourceStartState(id, email, mode) {
   if (!button) return;
   const stopping = mode === "stopping";
   const active = mode === "running" || mode === "matched" || stopping;
-  button.disabled = stopping;
+  const buying = starSourceHasPendingPurchase(ACCOUNTS[email]?.starSourceResult);
+  button.disabled = stopping || (!active && buying);
   button.classList.toggle("task-stop-button", active);
-  button.textContent = stopping ? "停止中…" : active ? "停止" : "▶ 开始刷新";
+  button.textContent = stopping ? "停止中…" : active ? "停止" : buying ? "购买中…" : "▶ 开始刷新";
 }
 
 function resolveStarSourcePending(id, email, decision) {
@@ -2688,11 +2884,12 @@ function requestStarSourceStop(id, email) {
   if (!email || !starSourceRunning[email]) return;
   starSourceStopRequested[email] = true;
   const account = ACCOUNTS[email];
-  const buying = Object.values(account?.starSourceResult?.cardStates || {}).includes("buying");
+  const buying = starSourceHasPendingPurchase(account?.starSourceResult);
   if (!buying && account?.starSourcePending) {
     resolveStarSourcePending(id, email, { action: "stop" });
   } else {
     setStarSourceStartState(id, email, "stopping");
+    logTo(email, "[星源商店刷新] 已请求停止，等待当前操作结束", "warn");
   }
 }
 
@@ -2705,14 +2902,18 @@ function bindStarSourceResultActions(id, email) {
 
   area.querySelector(".star-source-skip")?.addEventListener("click", () => {
     const current = account.starSourceResult;
-    if (Object.values(current?.cardStates || {}).includes("buying")) return;
-    resolveStarSourcePending(id, email, { action: "skip" });
+    if (starSourceHasPendingPurchase(current)) return;
+    const resolved = resolveStarSourcePending(id, email, { action: "skip" });
+    if (!resolved && !starSourceRunning[email]) {
+      renderStarSourceState(id, { kind: "stopped", total: current.round }, email);
+    }
   });
 
   area.querySelectorAll(".star-source-buy").forEach((button) => button.addEventListener("click", async () => {
     const shopIndex = Number(button.dataset.shopIndex);
     let current = account.starSourceResult;
     if (!Number.isInteger(shopIndex) || current?.kind !== "matched") return;
+    if (["buying", "bought"].includes(current.cardStates?.[shopIndex])) return;
     const card = current.cards.find((item, index) =>
       (Number.isInteger(item.shopIndex) ? item.shopIndex : index) === shopIndex);
     const cardStates = { ...(current.cardStates || {}), [shopIndex]: "buying" };
@@ -2753,9 +2954,11 @@ function bindStarSourceResultActions(id, email) {
       delete nextStates[shopIndex];
       renderStarSourceState(id, { ...current, cardStates: nextStates, cardErrors: nextErrors }, email);
       logTo(email, "[星源商店刷新] 购买出错：" + error.message, "err");
-    }
-    if (starSourceStopRequested[email] && account.starSourcePending) {
-      resolveStarSourcePending(id, email, { action: "stop" });
+    } finally {
+      // 多件装备可同时购买，停止时必须等所有已发出的购买请求收尾。
+      if (starSourceStopRequested[email] && !starSourceHasPendingPurchase(account.starSourceResult)) {
+        resolveStarSourcePending(id, email, { action: "stop" });
+      }
     }
   }));
 }
@@ -2801,12 +3004,6 @@ function renderStarSourceShopWidget(task) {
 function bindStarSourceShopWidget(id) {
   const root = $("starshop-" + id);
   if (!root) return;
-  const body = root.querySelector(".shop-body");
-  const toggle = root.querySelector(".shop-toggle");
-  toggle.addEventListener("click", () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-  });
   const countInput = root.querySelector(".star-source-count");
   countInput.addEventListener("input", () => {
     countInput.value = countInput.value.replace(/[^0-9]/g, "").slice(0, 3);
@@ -2849,7 +3046,8 @@ function starSourceSchemeCanMatch(scheme) {
 
 async function runStarSourceShop(id) {
   const email = activeAccount;
-  if (!email || starSourceRunning[email]) return;
+  if (!email || starSourceRunning[email]
+      || starSourceHasPendingPurchase(ACCOUNTS[email]?.starSourceResult)) return;
   const cfg = getStarSourceShopCfg();
   const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === cfg.schemeId);
   const root = $("starshop-" + id);
@@ -2940,6 +3138,12 @@ async function runStarSourceShop(id) {
         stopped = true;
         break;
       }
+    }
+    if (stopped) {
+      if (!ACCOUNTS[email]?.starSourceResult?.cards?.length) {
+        renderStarSourceState(id, { kind: "stopped", total: completed }, email);
+      }
+      logTo(email, "[星源商店刷新] 已停止，已完成 " + completed + " 次刷新", "warn");
     }
     if (!failed && !stopped) {
       renderStarSourceState(id, {
@@ -3304,14 +3508,12 @@ function bindCustomizedEquipWidget(id) {
   if (!root) return;
   const body = root.querySelector(".shop-body");
   const toggle = root.querySelector(".customized-equip-toggle");
-  toggle.addEventListener("click", async () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-    if (!body.classList.contains("hidden") && !root._customizedLoaded) {
+  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
+    if (!root._customizedLoaded) {
       root._customizedLoaded = true;
       await customizedEquipAction(id, "query", { scheme: customizedEquipSchemeSnapshot() });
     }
-  });
+  }});
   bindCustomizedSetButton(id);
   root.querySelector(".customized-set-popover").addEventListener("click", (event) => {
     const option = event.target.closest("[data-customized-set]");
@@ -3603,14 +3805,12 @@ async function bindSweepWidget(id) {
   if (!root) return;
   const body = root.querySelector(".shop-body");
   const toggle = root.querySelector(".sweep-toggle");
-  toggle.addEventListener("click", async () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
-      await loadSweepOptions(id);
-    }
-  });
-  root.querySelector(".sweep-options-refresh").addEventListener("click", () => loadSweepOptions(id));
+  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
+    if (!root.dataset.loaded) await loadSweepOptions(id);
+  }, onRestore: async () => {
+    if (accountOptionCache(`sweep:${id}`) && !root.dataset.loaded) await loadSweepOptions(id);
+  }});
+  root.querySelector(".sweep-options-refresh").addEventListener("click", () => loadSweepOptions(id, true));
 
   const cntIn = root.querySelector(".sweep-count");
   cntIn.addEventListener("input", () => { cntIn.value = cntIn.value.replace(/[^0-9]/g, "").slice(0, 3); });
@@ -3641,10 +3841,13 @@ async function bindSweepWidget(id) {
   }
 }
 
-async function loadSweepOptions(id) {
+async function loadSweepOptions(id, refresh = false) {
   const root = $(`sweep-${id}`);
   if (!root || root.dataset.loading === "1") return;
   const kind = root.dataset.kind || "hunt";
+  const email = activeAccount;
+  const cacheKey = `sweep:${id}`;
+  const cached = !refresh && accountOptionCache(cacheKey, email);
   const elementSlot = root.querySelector(".sweep-element-slot");
   const sceneSlot = root.querySelector(".sweep-scene-slot");
   const teamSlot = root.querySelector(".sweep-team-slot");
@@ -3653,7 +3856,10 @@ async function loadSweepOptions(id) {
   refreshButton.disabled = true;
   refreshButton.classList.add("loading");
   try {
-    const { elements = [], scenes, teams } = await api(`/api/sweep/options?kind=${encodeURIComponent(kind)}`);
+    const options = cached || await api(`/api/sweep/options?kind=${encodeURIComponent(kind)}`);
+    if (activeAccount !== email || !root.isConnected) return;
+    if (!cached) setAccountOptionCache(cacheKey, options, email);
+    const { elements = [], scenes = [], teams = [] } = options;
     const cfg = getSweepCfg(id);
 
     const teamOpts = teams.length
@@ -3694,6 +3900,7 @@ async function loadSweepOptions(id) {
     bindDropdown(teamSlot.querySelector(".dropdown"), (v) => setSweepCfg(id, { teamId: v }));
     root.dataset.loaded = "1";
   } catch (e) {
+    if (activeAccount !== email || !root.isConnected) return;
     delete root.dataset.loaded;
     if (elementSlot) elementSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     sceneSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
@@ -4245,12 +4452,15 @@ function renderAbyssSlots(id) {
 async function loadAbyssOptions(id, refresh = false) {
   const root = $(`abyss-${id}`); if (!root || (root.dataset.loading === "1" && !refresh)) return;
   const account = activeAccount;
+  const cacheKey = `abyss:${id}`;
+  const cached = !refresh && accountOptionCache(cacheKey, account);
   root.dataset.loading = "1";
   const sceneSlot = root.querySelector(".abyss-scene-slot"), refreshBtn = root.querySelector(".abyss-options-refresh");
   if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.classList.add("loading"); }
   try {
-    const data = await api("/api/abyss/options");
+    const data = cached || await api("/api/abyss/options");
     if (activeAccount !== account || !root.isConnected) return;
+    if (!cached) setAccountOptionCache(cacheKey, data, account);
     const scenes = Array.isArray(data.scenes) ? data.scenes : (Array.isArray(data.levels) ? data.levels : []);
     let cfg = getAbyssCfg();
     // 账号配置也保存在后端，首次在新设备打开时用后端快照恢复本地配队。
@@ -4300,7 +4510,11 @@ async function loadAbyssOptions(id, refresh = false) {
 function bindAbyssWidget(id) {
   const root = $(`abyss-${id}`); if (!root) return;
   const body = root.querySelector(".shop-body"), toggle = root.querySelector(".abyss-toggle");
-  toggle.addEventListener("click", async () => { body.classList.toggle("hidden"); toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾"; if (!body.classList.contains("hidden") && !root.dataset.loaded) await loadAbyssOptions(id); });
+  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
+    if (!root.dataset.loaded) await loadAbyssOptions(id);
+  }, onRestore: async () => {
+    if (accountOptionCache(`abyss:${id}`) && !root.dataset.loaded) await loadAbyssOptions(id);
+  }});
   root.querySelector(".abyss-options-refresh")?.addEventListener("click", () => loadAbyssOptions(id, true));
   root.querySelector(".abyss-start")?.addEventListener("click", () => runAbyss(id));
   root.querySelector(".abyss-rewards")?.addEventListener("click", () => claimAbyssRewards(id));
@@ -4436,7 +4650,7 @@ function renderActivityWidget(t) {
     <div class="shop-body hidden">
       <div class="act-option-head"><div class="b-tabs act-tabs" role="tablist" aria-label="活动关卡模式">
         <button type="button" class="b-tab${cfg.mode !== "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode !== "progress"}" data-act-mode="sweep">扫荡</button>
-        <button type="button" class="b-tab${cfg.mode === "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "progress"}" data-act-mode="progress">自动推图</button>
+        <button type="button" class="b-tab${cfg.mode === "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "progress"}" data-act-mode="progress">自动推关</button>
       </div><button type="button" class="act-options-refresh" title="重新加载活动关卡选项" aria-label="重新加载活动关卡选项"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button></div>
       <div class="shop-row col act-progress-only${cfg.mode === "progress" ? "" : " hidden"}">
         <span class="shop-lbl">活动</span>
@@ -4530,7 +4744,7 @@ function updateActivityMode(id) {
   });
   const button = root.querySelector(".act-start");
   if (progress) {
-    button.textContent = running ? (actProgressStopping[activeAccount] ? "停止中…" : "停止推图") : "▶ 开始推图";
+    button.textContent = running ? (actProgressStopping[activeAccount] ? "停止中…" : "停止推关") : "▶ 开始推关";
     button.disabled = !!actProgressStopping[activeAccount];
     button.classList.toggle("task-stop-button", running);
   } else if (!actRunning[activeAccount]) {
@@ -4585,17 +4799,17 @@ async function runActivityProgress(id) {
   actProgressRunning[email] = true;
   delete actProgressState[email];
   updateActivityMode(id);
-  logTo(email, "开始活动自动推图", "info");
+  logTo(email, "开始活动自动推关", "info");
   try {
     const result = await api("/api/activity/progress/run", { account: email, family: cfg.family,
       teamId: cfg.teamId, supportCuid: cfg.supportCuid || null });
     applyActivityProgress(email, result.activityProgress);
     if (result.status) applyStatus(email, result.status, result.nextClaims);
-    logResult({ ...result, name: "活动自动推图" }, "", email);
-    if (result.lines?.length && result.detail) logTo(email, `[活动自动推图] ${result.detail}`, result.ok ? "ok" : "warn");
+    logResult({ ...result, name: "活动自动推关" }, "", email);
+    if (result.lines?.length && result.detail) logTo(email, `[活动自动推关] ${result.detail}`, result.ok ? "ok" : "warn");
     if (actProgressState[email]) actProgressState[email] = { ...actProgressState[email], battle: null, detail: result.detail };
   } catch (error) {
-    logTo(email, `活动自动推图：${error.message}`, "err");
+    logTo(email, `活动自动推关：${error.message}`, "err");
     actProgressState[email] = { ...(actProgressState[email] || {completed: 0, total: "—"}), battle: null, detail: error.message };
   } finally {
     if (actProgressRequests[email] === request) delete actProgressRequests[email];
@@ -4647,13 +4861,11 @@ async function bindActivityWidget(id) {
     updateActivityMode(id);
   }));
   updateActivityMode(id);
-  toggle.addEventListener("click", async () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
-      await loadActivityOptions(id);
-    }
-  });
+  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
+    if (!root.dataset.loaded) await loadActivityOptions(id);
+  }, onRestore: async () => {
+    if (accountOptionCache(`activity:${id}`) && !root.dataset.loaded) await loadActivityOptions(id);
+  }});
 
   root.querySelector(".act-options-refresh").addEventListener("click", () => loadActivityOptions(id, true));
 
@@ -4722,18 +4934,22 @@ async function loadActivityOptions(id, refresh = false) {
   const supSlot = root.querySelector(".act-support-slot");
   const refreshButton = root.querySelector(".act-options-refresh");
   const email = activeAccount;
+  const cacheKey = `activity:${id}`;
+  const cached = !refresh && accountOptionCache(cacheKey, email);
   root.dataset.loading = "1";
   refreshButton.disabled = true;
   refreshButton.classList.add("loading");
-  if (refresh || !root.dataset.loaded) {
+  if (refresh || (!root.dataset.loaded && !cached)) {
     root.querySelector(".act-family-slot").innerHTML = `<div class="dd-loading">加载中…</div>`;
     sceneSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
     teamSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
     supSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
   }
   try {
-    const { scenes, teams, supports, favorites, activities = [] } = await api("/api/activity/options");
+    const options = cached || await api("/api/activity/options");
     if (activeAccount !== email || !root.isConnected) return false;
+    if (!cached) setAccountOptionCache(cacheKey, options, email);
+    const { scenes = [], teams = [], supports = [], favorites = [], activities = [] } = options;
     const cfg = getActCfg();
     const familySlot = root.querySelector(".act-family-slot");
     const family = activities.some((a) => a.id === cfg.family) ? cfg.family : activities[0]?.id || "";
@@ -5026,27 +5242,33 @@ async function bindStoreWidget(id) {
   if (!root) return;
   const body = root.querySelector(".shop-body");
   const toggle = root.querySelector(".store-toggle");
-  toggle.addEventListener("click", async () => {
-    body.classList.toggle("hidden");
-    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
-    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
+  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
+    if (!root.dataset.loaded) {
       await loadStoreOptions(id);
       root.dataset.loaded = "1";
     }
-  });
+  }, onRestore: async () => {
+    if (STORE_DATA[activeAccount] && !root.dataset.loaded) {
+      await loadStoreOptions(id);
+      root.dataset.loaded = "1";
+    }
+  }});
 }
 
-async function loadStoreOptions(id) {
+async function loadStoreOptions(id, refresh = false) {
   const root = $(`store-${id}`);
   const pane = root.querySelector(".store-panes");
+  const email = activeAccount;
   try {
-    const data = await api("/api/store/options");
-    STORE_DATA[activeAccount] = data;
-    applyStateSyncMeta(activeAccount, data);
+    const data = !refresh && STORE_DATA[email] ? STORE_DATA[email] : await api("/api/store/options");
+    if (activeAccount !== email || !root.isConnected) return;
+    STORE_DATA[email] = data;
+    applyStateSyncMeta(email, data);
     renderStorePanes(id);
   } catch (e) {
+    if (activeAccount !== email || !root.isConnected) return;
     pane.innerHTML = `<div class="dd-loading err">加载失败</div>`;
-    log(`加载商店货架失败：${e.message}`, "err");
+    logTo(email, `加载商店货架失败：${e.message}`, "err");
   }
 }
 
@@ -5301,6 +5523,7 @@ function updateAccountConnectionIndicator(email) {
   const connected = account.connection?.connected !== false;
   const label = connected ? "已连接：游戏会话正常"
     : account.connection?.reason === "duplicate_login" ? "已断开：账号在其它地方登录"
+    : account.connection?.reason === "maintenance" ? connectionBlockedMessage(account.connection)
     : "已断开：游戏会话已断开";
   const item = [...box.querySelectorAll(".acc-item")]
     .find((element) => element.dataset.email === email);
@@ -5399,10 +5622,15 @@ function renderAccountSwitcher() {
     });
   });
   box.querySelectorAll(".acc-x").forEach((b) =>
-    b.addEventListener("click", (e) => {
+    b.addEventListener("click", async (e) => {
       e.stopPropagation();
       const email = b.dataset.del;
-      if (confirm(`确定删除账号 ${email}？将下线并清除其登录令牌与开关设置。`)) accDelete(email);
+      const confirmed = await openConfirmDialog({
+        title: "删除账号？",
+        message: `将下线 ${email}，并清除其登录令牌与开关设置。`,
+        returnFocus: b,
+      });
+      if (confirmed) await accDelete(email);
     })
   );
   $("accAddBtn").onclick = () => { $("accPop").classList.add("hidden"); openAddAccount(); };
@@ -5444,11 +5672,14 @@ function renderSavedAccounts() {
     return;
   }
   if (caret) caret.classList.remove("hidden");
-  box.innerHTML = items.map((a) =>
-    `<div class="sa-opt" data-email="${a.account}" data-hastoken="${a.hasToken && !a.tokenError ? 1 : 0}" data-tokenerror="${a.tokenError ? 1 : 0}">
-       <span class="sa-em">${a.account}</span>
-       <button type="button" class="sa-del" data-del="${a.account}" title="删除已保存的账号">✕</button>
-     </div>`).join("");
+  box.innerHTML = items.map((a) => {
+    const email = filterEscape(a.account);
+    const name = a.name ? filterEscape(a.name) : "";
+    return `<div class="sa-opt" data-email="${email}" data-hastoken="${a.hasToken && !a.tokenError ? 1 : 0}" data-tokenerror="${a.tokenError ? 1 : 0}">
+       <span class="sa-meta"><span class="sa-em" title="${email}">${email}</span>${name ? `<span class="sa-name" title="${name}">${name}</span>` : ""}</span>
+       <button type="button" class="sa-del" data-del="${email}" title="删除已保存的账号">✕</button>
+     </div>`;
+  }).join("");
   box.querySelectorAll(".sa-opt").forEach((row) =>
     row.addEventListener("click", (e) => {
       if (e.target.closest(".sa-del")) return;  // 点叉是删除，不填充
@@ -5474,8 +5705,16 @@ function renderSavedAccounts() {
 
 // 登录页主动删除一个已保存账号（离线存档）：清后端存档 + 本地列表，重渲下拉。
 async function deleteSavedAccount(email) {
-  if (!confirm(`删除已保存的账号 ${email}？将清除其登录令牌与开关设置。`)) return;
-  try { await api("/api/accounts/delete", { account: email }); } catch (e) {}
+  const confirmed = await openConfirmDialog({
+    title: "删除已保存的账号？",
+    message: `将清除 ${email} 的登录令牌与开关设置。`,
+  });
+  if (!confirmed) return;
+  try { await api("/api/accounts/delete", { account: email }); }
+  catch (error) {
+    showMessageToast(`删除账号失败：${error.message}`, "err");
+    return;
+  }
   SAVED_ACCTS = SAVED_ACCTS.filter((a) => a.account !== email);
   renderSavedAccounts();
 }
@@ -5942,6 +6181,9 @@ $("downloadPathInput")?.addEventListener("keydown", (event) => {
 let updateState = null;
 let updateAutoShownVersion = "";
 let updateStatusPending = false;
+let updateAboutCheckPromise = null;
+let updateAboutChecking = false;
+let updateAboutCheckSequence = 0;
 let updateProgressPollToken = 0;
 let updateProgressPollTimer = null;
 let updateDialogMode = "update";
@@ -6029,7 +6271,58 @@ function startUpdateProgressPolling() {
 
 function renderUpdateAvailability(state) {
   const button = $("aboutUpdateBtn");
-  if (button) button.classList.toggle("hidden", !state?.available);
+  if (!button) return;
+  const checking = updateAboutChecking;
+  const status = checking ? "checking" : state?.available ? "update"
+    : state?.lastError ? "error" : state?.checked ? "latest" : "idle";
+  const labels = {
+    checking: "正在检查更新",
+    update: "发现新版本，点击查看更新",
+    latest: "已是最新，点击重新检查更新",
+    error: "检查失败，点击重试",
+    idle: state?.testServer ? "测试环境，点击检查更新" : "点击检查更新",
+  };
+  button.dataset.state = status;
+  button.disabled = checking;
+  button.setAttribute("aria-busy", String(checking));
+  button.setAttribute("aria-label", labels[status]);
+  button.title = labels[status];
+}
+
+function checkUpdatesFromAbout(manual = true) {
+  if (updateAboutCheckPromise) return updateAboutCheckPromise;
+  updateAboutCheckSequence += 1;
+  updateAboutChecking = true;
+  renderUpdateAvailability(updateState);
+  updateAboutCheckPromise = (async () => {
+    try {
+      if (updateStartupCheckPromise) await updateStartupCheckPromise;
+      const state = await fetchFreshUpdateStatus();
+      updateState = state;
+      if (state.testServer) {
+        if (manual) showMessageToast("测试环境不检查更新");
+        return;
+      }
+      if (state.lastError) throw new Error(state.lastError);
+      updateLastSuccessfulCheckAt = Number(state.lastCheckedAt) || Date.now();
+      if (state.available) {
+        updateAutoShownVersion = state.latestVersion;
+        if (manual) showMessageToast(`发现新版本 ${state.latestVersion}`);
+        if (state.forced) openUpdateDialog(state);
+      } else {
+        if (manual) showMessageToast(`已是最新版本 ${state.currentVersion}`);
+        if (updateDialogMode === "update" && !state.forced) closeUpdateDialog();
+      }
+    } catch (error) {
+      updateState = { ...(updateState || {}), checking: false, lastError: error?.message || "检查更新失败" };
+      if (manual) showMessageToast(error?.message || "检查更新失败", "err", 5200);
+    } finally {
+      updateAboutChecking = false;
+      updateAboutCheckPromise = null;
+      renderUpdateAvailability(updateState);
+    }
+  })();
+  return updateAboutCheckPromise;
 }
 
 function openUpdateDialog(state = updateState) {
@@ -6120,7 +6413,7 @@ async function fetchFreshUpdateStatus() {
     await sleepForUpdateCheck(250);
     state = await api("/api/update/status");
   }
-  if (!state?.testServer && !state?.checked && !state?.lastError) {
+  if (!state?.testServer && (state?.checking || !state?.checked) && !state?.lastError) {
     throw new Error("版本检查超时");
   }
   return state;
@@ -6177,10 +6470,12 @@ async function runStartupUpdateCheck() {
 }
 
 async function refreshUpdateStatus(autoShow = false, forceCheck = false) {
-  if (updateStatusPending || updateStartupCheckPending) return;
+  if (updateStatusPending || updateStartupCheckPending || updateAboutChecking) return;
+  const aboutSequence = updateAboutCheckSequence;
   updateStatusPending = true;
   try {
     const state = forceCheck ? await fetchFreshUpdateStatus() : await api("/api/update/status");
+    if (updateAboutChecking || aboutSequence !== updateAboutCheckSequence) return;
     updateState = state;
     if (!state.testServer && !state.lastError && state.checked && state.lastCheckedAt) {
       updateLastSuccessfulCheckAt = Number(state.lastCheckedAt);
@@ -6265,8 +6560,66 @@ async function installCurrentUpdate() {
   }
 }
 
+let gameDataCheckPending = false;
+
+async function refreshGameDataStatus() {
+  const state = await api("/api/resources/status");
+  const label = $("gameDataVersion");
+  const phases = { checking: "检查中", downloading: "下载中", building: "解析中", waiting_server: "等待维护结束", error: "更新失败" };
+  if (label) {
+    const version = state.version?.replace(/^catalog_/, "") || "内置资料";
+    label.textContent = state.phase && phases[state.phase] ? `${version} · ${phases[state.phase]}` : version;
+    label.title = state.error || (state.availableVersion ? `官方资源 ${state.availableVersion}` : "启动和登录时自动检查游戏数据");
+  }
+  return state;
+}
+
+async function checkGameDataFromDev() {
+  if (gameDataCheckPending) return;
+  const button = $("gameDataCheckBtn");
+  gameDataCheckPending = true;
+  button.disabled = true;
+  button.classList.add("loading");
+  try {
+    await api("/api/resources/check", {});
+    let state;
+    const started = Date.now();
+    do {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      state = await refreshGameDataStatus();
+      if (!state.checking && Number(state.checkedAt) * 1000 >= started - 2000) break;
+    } while (Date.now() - started < 3 * 60 * 1000);
+    if (state.error) throw new Error(state.error);
+    showMessageToast(state.checking ? "游戏数据仍在后台更新" : state.phase === "waiting_server"
+      ? "游戏数据已下载，等待维护结束后启用" : `游戏数据已更新至 ${state.version?.replace(/^catalog_/, "") || "当前版本"}`);
+  } catch (error) {
+    showMessageToast(error?.message || "游戏数据更新失败，继续使用原有资料", "err", 5200);
+  } finally {
+    gameDataCheckPending = false;
+    button.disabled = false;
+    button.classList.remove("loading");
+  }
+}
+
 function initUpdateUI() {
-  $("aboutUpdateBtn")?.addEventListener("click", () => openUpdateDialog());
+  $("gameDataCheckBtn")?.addEventListener("click", checkGameDataFromDev);
+  window.addEventListener("lucima:section-change", event => {
+    if (event.detail?.section === "about") {
+      checkUpdatesFromAbout(false);
+    } else if (event.detail?.section === "settings" && devPass()) {
+      refreshGameDataStatus().catch(() => {});
+    }
+  });
+  setInterval(() => {
+    if (document.visibilityState === "visible" && $("section-settings")?.classList.contains("active") && devPass()) {
+      refreshGameDataStatus().catch(() => {});
+    }
+  }, 15000);
+  $("aboutUpdateBtn")?.addEventListener("click", () => {
+    if (updateAboutChecking) return;
+    if (updateState?.available) openUpdateDialog();
+    else checkUpdatesFromAbout(true);
+  });
   $("updateIgnoreBtn")?.addEventListener("click", ignoreCurrentUpdate);
   $("updateInstallBtn")?.addEventListener("click", installCurrentUpdate);
   runStartupUpdateCheck();
@@ -6858,6 +7211,7 @@ function renderDevConsole() {
   card.style.display = on ? "" : "none";
   if (on && !card.dataset.bound) {
     card.dataset.bound = "1";
+    refreshGameDataStatus().catch(() => {});
     renderDevUpdateChannel();
     api("/api/update/status").then(state => {
       if (!devUpdateChannelPending && !devUpdateChannelState) {
@@ -6932,6 +7286,7 @@ function initDevGate() {
 
 // ---------- 工具箱预览 ----------
 function showToolboxHome() {
+  closeSchemeTransferMenu();
   stopBackgroundTestPolling();
   closeEncyclopediaStatusFilter(false);
   closeEncyclopediaCard();
@@ -6943,8 +7298,8 @@ function showToolboxHome() {
 }
 
 // ---------- 图鉴查询 ----------
-// The index stays small enough to ship with the app. Character dossiers and
-// large portrait assets are loaded only after a preview is selected.
+// Cloud metadata is checked independently of software releases. Per-character
+// dossiers and large portrait assets are downloaded only when requested.
 const ENCYCLOPEDIA_ALL_ICON = "/assets/ui/hero-all.png";
 const ENCYCLOPEDIA_ELEMENTS = [
   { id: "ALL", label: "ALL", icon: ENCYCLOPEDIA_ALL_ICON },
@@ -6973,9 +7328,9 @@ const ENCYCLOPEDIA_STARS = [
 const ENCYCLOPEDIA_STATE = {
   index: null,
   ui: null,
-  resourceConfig: null,
-  details: new Map(),
-  filters: { element: "ALL", job: "ALL", star: "ALL", statuses: [] },
+  version: "",
+  pendingCatalog: null,
+  filters: { element: [], job: [], star: [], statuses: [] },
   statusDraft: null,
   statusReturnFocus: null,
   statusContext: null,
@@ -7005,9 +7360,9 @@ const ENCYCLOPEDIA_STATE = {
     suppressClickUntil: 0,
   },
 };
-const ENCYCLOPEDIA_INDEX_URL = "/assets/encyclopedia/index.json";
-const ENCYCLOPEDIA_UI_URL = "/assets/encyclopedia/ui.json";
 let encyclopediaIndexPending = null;
+let encyclopediaCheckPending = null;
+let encyclopediaCheckTimer = null;
 
 function encyclopediaEscape(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -7015,210 +7370,119 @@ function encyclopediaEscape(value) {
   }[character]));
 }
 
-function encyclopediaJoinUrl(base, path) {
-  if (!path) return "";
-  const raw = String(path);
-  if (/^(?:https?:)?\/\//i.test(raw) || raw.startsWith("/")) return raw;
-  if (!base) return "";
-  try {
-    const result = new URL(raw.replace(/^\/+/, ""), String(base).replace(/\/?$/, "/"));
-    return ["http:", "https:"].includes(result.protocol) ? result.href : "";
-  } catch { return ""; }
-}
-
-function encyclopediaConfigUrl(path, fallback = "") {
-  const config = ENCYCLOPEDIA_STATE.resourceConfig || {};
-  if (!path) return fallback;
-  const raw = String(path);
-  if (/^(?:https?:)?\/\//i.test(raw) || raw.startsWith("/")) {
-    try {
-      const result = new URL(raw, location.href);
-      return ["http:", "https:"].includes(result.protocol) ? result.href : fallback;
-    } catch { return fallback; }
-  }
-  return encyclopediaJoinUrl(config.baseUrl || "", raw) || fallback;
-}
-
-function encyclopediaCacheName(url = "") {
-  if (/\/objects\/[a-f0-9]{64}\.(png|jpg|jpeg|webp|skel|atlas|js)$/.test(new URL(url || location.href, location.href).pathname)) {
-    return "lucima-encyclopedia-objects-v1";
-  }
-  const version = String(ENCYCLOPEDIA_STATE.resourceConfig?.version || "local").replace(/[^a-z0-9._-]/gi, "_");
-  return `lucima-encyclopedia-resources-${version}`;
-}
-
-const encyclopediaPendingRequests = new Map();
-async function encyclopediaFetch(url) {
-  if (!url) throw new Error("图鉴资源地址为空");
-  let cache = null;
-  try {
-    if (typeof caches !== "undefined") {
-      cache = await caches.open(encyclopediaCacheName(url));
-      const cached = await cache.match(url);
-      if (cached) return cached;
-    }
-  } catch { /* Cache Storage can be unavailable in embedded browsers. */ }
-  if (!encyclopediaPendingRequests.has(url)) {
-    const pending = (async () => {
-      const objectHash = new URL(url, location.href).pathname.match(/\/objects\/([a-f0-9]{64})\.(?:png|jpg|jpeg|webp|skel|atlas|js)$/)?.[1];
-      const response = await fetch(url, { cache: objectHash ? "default" : "no-store", credentials: "omit" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (objectHash) {
-        const digest = await crypto.subtle.digest("SHA-256", await response.clone().arrayBuffer());
-        const actual = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-        if (actual !== objectHash) throw new Error("图鉴资源校验失败");
-      }
-      try { await cache?.put(url, response.clone()); } catch { /* Still display the download. */ }
-      return response;
-    })();
-    encyclopediaPendingRequests.set(url, pending);
-  }
-  try {
-    return (await encyclopediaPendingRequests.get(url)).clone();
-  } finally {
-    encyclopediaPendingRequests.delete(url);
-  }
-}
+const encyclopediaFetch = url => window.LucimaEncyclopediaData.fetchResource(url);
 window.fetchEncyclopediaResource = encyclopediaFetch;
-
-async function encyclopediaJson(url) {
-  const parsed = new URL(url, location.href);
-  const isBundledDetail = parsed.origin === location.origin
-    && parsed.pathname.startsWith("/assets/encyclopedia/");
-  const response = isBundledDetail
-    ? await fetch(parsed.href, { cache: "no-store" })
-    : await encyclopediaFetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
-
 let encyclopediaRuntimePromise = null;
-async function ensureEncyclopediaSpineRuntime() {
-  if (window.spine) return window.spine;
-  if (encyclopediaRuntimePromise) return encyclopediaRuntimePromise;
-  const runtimeUrl = ENCYCLOPEDIA_STATE.resourceConfig?.spineRuntimeUrl;
-  if (!runtimeUrl) throw new Error("未配置 Spine 运行时");
-  encyclopediaRuntimePromise = (async () => {
-    const config = ENCYCLOPEDIA_STATE.resourceConfig;
-    const resolved = window.LucimaEncyclopediaMedia.resourceUrl(config, runtimeUrl);
-    if (!resolved) throw new Error("Spine 运行库未列入资源清单");
-    const response = await encyclopediaFetch(resolved);
-    const code = await response.text();
+function ensureEncyclopediaSpineRuntime() {
+  if (window.spine) return Promise.resolve(window.spine);
+  if (!encyclopediaRuntimePromise) encyclopediaRuntimePromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.textContent = `${code}\n//# sourceURL=${encyclopediaConfigUrl(runtimeUrl)}`;
+    script.src = "/static/vendor/spine-webgl.js?v=1";
+    script.onload = () => window.spine ? resolve(window.spine) : reject(new Error("动态立绘组件加载失败"));
+    script.onerror = () => { script.remove(); reject(new Error("动态立绘组件加载失败")); };
     document.head.appendChild(script);
-    if (!window.spine) throw new Error("Spine 运行时初始化失败");
-    return window.spine;
-  })();
-  try {
-    return await encyclopediaRuntimePromise;
-  } catch (error) {
-    encyclopediaRuntimePromise = null;
-    throw error;
-  }
+  }).catch(error => { encyclopediaRuntimePromise = null; throw error; });
+  return encyclopediaRuntimePromise;
 }
 
-async function loadEncyclopediaResourceConfig() {
-  if (ENCYCLOPEDIA_STATE.resourceConfig) return ENCYCLOPEDIA_STATE.resourceConfig;
-  if (ENCYCLOPEDIA_STATE.resourceConfigPromise) return ENCYCLOPEDIA_STATE.resourceConfigPromise;
-  ENCYCLOPEDIA_STATE.resourceConfigPromise = readEncyclopediaResourceConfig();
-  return ENCYCLOPEDIA_STATE.resourceConfigPromise;
+function updateEncyclopediaSyncButton() {
+  const button = $("encyclopediaSync");
+  if (!button) return;
+  button.disabled = !!encyclopediaCheckPending;
+  button.title = ENCYCLOPEDIA_STATE.version
+    ? `图鉴版本：${ENCYCLOPEDIA_STATE.version}，点击检查更新` : "检查图鉴更新";
+  button.querySelector("span").textContent = encyclopediaCheckPending ? "检查中…" : "同步";
 }
 
-async function readEncyclopediaResourceConfig() {
-  let config = {};
-  try {
-    config = await api("/api/encyclopedia/resources");
-  } catch (error) {
-    console.warn("读取图鉴资源配置失败：", error);
+function applyEncyclopediaCatalog(catalog) {
+  if (!catalog?.available || !Array.isArray(catalog.characters)) return false;
+  if (ENCYCLOPEDIA_STATE.activeId || ENCYCLOPEDIA_STATE.savingImage || !$("encyclopediaStatusModal")?.classList.contains("hidden")) {
+    ENCYCLOPEDIA_STATE.pendingCatalog = catalog;
+    return false;
   }
-  if (config.manifestUrl) {
-    let cache = null;
-    const resolveManifest = async (response) => {
-      if (!response?.ok) throw new Error("图鉴资源清单不可用");
-      const manifest = await response.json();
-      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
-          || typeof manifest.version !== "string" || !manifest.version.trim()
-          || (manifest.baseUrl !== undefined && typeof manifest.baseUrl !== "string")) {
-        throw new Error("图鉴资源清单格式无效");
-      }
-      if (manifest.schema !== undefined && ![1, 2].includes(manifest.schema)) {
-        throw new Error("不支持的图鉴资源清单版本");
-      }
-      if (manifest.schema === 2) {
-        const files = manifest.files;
-        if (!files || typeof files !== "object" || Array.isArray(files) || !Object.keys(files).length
-            || Object.entries(files).some(([path, file]) =>
-              path.startsWith("/") || /[\\:%?#\u0000-\u001f]/.test(path)
-              || path.split("/").some((part) => !part || part === "." || part === "..")
-              || !/\.(png|jpg|jpeg|webp|skel|atlas|js)$/i.test(path)
-              || !file || typeof file !== "object" || !/^[a-f0-9]{64}$/.test(file.sha256)
-              || !Number.isSafeInteger(file.size) || file.size <= 0)) {
-          throw new Error("图鉴资源文件表无效");
-        }
-      }
-      const baseUrl = new URL(manifest.baseUrl || ".", config.manifestUrl);
-      if (!["http:", "https:"].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
-        throw new Error("图鉴资源地址无效");
-      }
-      return { ...config, ...manifest, baseUrl: baseUrl.href };
-    };
+  const changed = ENCYCLOPEDIA_STATE.version !== catalog.version;
+  ENCYCLOPEDIA_STATE.version = catalog.version;
+  ENCYCLOPEDIA_STATE.ui = catalog.ui;
+  ENCYCLOPEDIA_STATE.index = catalog.characters;
+  ENCYCLOPEDIA_STATE.pendingCatalog = null;
+  const valid = new Set([...encyclopediaStatusOptions().buff, ...encyclopediaStatusOptions().debuff].map(item => item.id));
+  ENCYCLOPEDIA_STATE.filters.statuses = ENCYCLOPEDIA_STATE.filters.statuses.filter(id => valid.has(id));
+  updateEncyclopediaStatusFilterButton();
+  updateEncyclopediaSyncButton();
+  if (ENCYCLOPEDIA_STATE.initialized) renderEncyclopediaGrid();
+  return changed;
+}
+
+async function checkEncyclopediaUpdate(force = false) {
+  if (encyclopediaCheckPending) return encyclopediaCheckPending;
+  encyclopediaCheckPending = (async () => {
     try {
-      try { cache = await caches.open("lucima-encyclopedia-config"); } catch { /* Optional cache. */ }
-      try {
-        const response = await fetch(config.manifestUrl, {
-          cache: "no-cache", credentials: "omit",
-          ...(typeof AbortSignal.timeout === "function" ? { signal: AbortSignal.timeout(10000) } : {}),
-        });
-        const copy = response.clone();
-        const resolved = await resolveManifest(response);
-        try { await cache?.put(config.manifestUrl, copy); } catch { /* Optional cache. */ }
-        config = resolved;
-      } catch (error) {
-        const response = await cache?.match(config.manifestUrl);
-        if (!response) throw error;
-        config = await resolveManifest(response);
+      const previous = ENCYCLOPEDIA_STATE.pendingCatalog?.version || ENCYCLOPEDIA_STATE.version;
+      const catalog = await window.LucimaEncyclopediaData.check(force);
+      const changed = catalog.available && previous && previous !== catalog.version;
+      if (catalog.version !== ENCYCLOPEDIA_STATE.version || ENCYCLOPEDIA_STATE.pendingCatalog) applyEncyclopediaCatalog(catalog);
+      window.clearTimeout(encyclopediaCheckTimer);
+      encyclopediaCheckTimer = window.setTimeout(() => {
+        if (!document.hidden && $("section-toolbox")?.classList.contains("active")
+            && (!$("encyclopediaPage")?.classList.contains("hidden") || !$("encyclopediaDetailPage")?.classList.contains("hidden")))
+          void checkEncyclopediaUpdate().catch(() => {});
+      }, Math.max(5000, (catalog.checkAfter || 3600) * 1000));
+      if (!catalog.available) throw new Error(catalog.error || "暂时无法获取图鉴资料，请联网后重试");
+      if (force && catalog.error) showMessageToast(catalog.error, "err");
+      else if (changed) showMessageToast("图鉴资料已更新");
+      else if (force) showMessageToast("图鉴资料已是最新");
+      return catalog;
+    } catch (error) {
+      if (!ENCYCLOPEDIA_STATE.index) {
+        const empty = $("encyclopediaEmpty");
+        if (empty) { empty.textContent = error.message; empty.classList.remove("hidden"); }
       }
-    } catch {
-      // A missing manifest leaves the complete text card available.
-      config = {};
+      if (force) showMessageToast(error.message || "检查图鉴更新失败", "err");
+      throw error;
+    } finally { encyclopediaCheckPending = null; updateEncyclopediaSyncButton(); }
+  })();
+  updateEncyclopediaSyncButton();
+  return encyclopediaCheckPending;
+}
+
+async function loadEncyclopediaIndex() {
+  if (ENCYCLOPEDIA_STATE.index && ENCYCLOPEDIA_STATE.ui) {
+    void checkEncyclopediaUpdate().catch(() => {});
+    return ENCYCLOPEDIA_STATE.index;
+  }
+  if (!encyclopediaIndexPending) encyclopediaIndexPending = (async () => {
+    const cached = await window.LucimaEncyclopediaData.catalog();
+    if (cached.available) {
+      applyEncyclopediaCatalog(cached);
+      void checkEncyclopediaUpdate().catch(() => {});
+    } else {
+      const empty = $("encyclopediaEmpty");
+      if (empty) { empty.textContent = "正在获取图鉴资料…"; empty.classList.remove("hidden"); }
+      const catalog = await checkEncyclopediaUpdate();
+      applyEncyclopediaCatalog(catalog);
     }
-  }
-  ENCYCLOPEDIA_STATE.resourceConfig = config;
-  return config;
-}
-
-function encyclopediaLocalIndexUrl() {
-  return new URL(ENCYCLOPEDIA_INDEX_URL, location.href).href;
-}
-
-async function loadEncyclopediaIndex({ resources = true } = {}) {
-  if (resources) void loadEncyclopediaResourceConfig();
-  if (ENCYCLOPEDIA_STATE.index && ENCYCLOPEDIA_STATE.ui) return ENCYCLOPEDIA_STATE.index;
-  if (!encyclopediaIndexPending) {
-    encyclopediaIndexPending = (async () => {
-      if (!ENCYCLOPEDIA_STATE.ui) {
-        ENCYCLOPEDIA_STATE.ui = await encyclopediaJson(new URL(ENCYCLOPEDIA_UI_URL, location.origin).href);
-      }
-      const payload = await encyclopediaJson(encyclopediaLocalIndexUrl());
-      const characters = Array.isArray(payload) ? payload : payload?.characters;
-      if (!Array.isArray(characters)) throw new Error("图鉴索引格式无效");
-      ENCYCLOPEDIA_STATE.index = characters.map((entry) => ({
-        ...entry,
-        id: String(entry.id || ""),
-        number: Number(entry.number) || Number(String(entry.id || "").slice(1)) || 9999,
-        statuses: Array.isArray(entry.statuses) ? entry.statuses : [],
-      })).filter((entry) => entry.id).sort((left, right) => left.number - right.number || left.id.localeCompare(right.id));
-      return ENCYCLOPEDIA_STATE.index;
-    })().finally(() => { encyclopediaIndexPending = null; });
-  }
+    return ENCYCLOPEDIA_STATE.index;
+  })().finally(() => { encyclopediaIndexPending = null; });
   return encyclopediaIndexPending;
 }
 
+async function loadEncyclopediaResourceConfig(entry) {
+  const selected = entry || ENCYCLOPEDIA_STATE.index?.find(row => row.id === ENCYCLOPEDIA_STATE.activeId);
+  if (!selected) return {};
+  const envelope = await window.LucimaEncyclopediaData.detail(ENCYCLOPEDIA_STATE.version, selected);
+  return window.LucimaEncyclopediaData.config(envelope);
+}
+
+function characterMatchesFilter(value, selection) {
+  return Array.isArray(selection)
+    ? !selection.length || selection.includes(value)
+    : selection === "ALL" || selection === value;
+}
+
 function characterMatchesFilters(entry, filters) {
-  return (filters.element === "ALL" || entry.element === filters.element)
-    && (filters.job === "ALL" || entry.job === filters.job)
-    && (!filters.star || filters.star === "ALL" || Number(entry.star) === Number(filters.star))
+  return characterMatchesFilter(entry.element, filters.element)
+    && characterMatchesFilter(entry.job, filters.job)
+    && (!filters.star || characterMatchesFilter(String(entry.star), filters.star))
     && (!filters.statuses.length || (entry.statuses || []).some((id) => filters.statuses.includes(id)));
 }
 
@@ -7247,9 +7511,10 @@ function renderEncyclopediaFilters() {
   const elementHost = $("encyclopediaElementFilters");
   const jobHost = $("encyclopediaJobFilters");
   const starHost = $("encyclopediaStarFilters");
-  if (elementHost) elementHost.innerHTML = ENCYCLOPEDIA_ELEMENTS.map((option) => encyclopediaFilterButtonHTML(option, "element", ENCYCLOPEDIA_STATE.filters.element === option.id)).join("");
-  if (jobHost) jobHost.innerHTML = ENCYCLOPEDIA_JOBS.map((option) => encyclopediaFilterButtonHTML(option, "job", ENCYCLOPEDIA_STATE.filters.job === option.id)).join("");
-  if (starHost) starHost.innerHTML = ENCYCLOPEDIA_STARS.map((option) => encyclopediaFilterButtonHTML(option, "star", ENCYCLOPEDIA_STATE.filters.star === option.id)).join("");
+  const { element, job, star } = ENCYCLOPEDIA_STATE.filters;
+  if (elementHost) elementHost.innerHTML = ENCYCLOPEDIA_ELEMENTS.map((option) => encyclopediaFilterButtonHTML(option, "element", option.id === "ALL" ? !element.length : element.includes(option.id))).join("");
+  if (jobHost) jobHost.innerHTML = ENCYCLOPEDIA_JOBS.map((option) => encyclopediaFilterButtonHTML(option, "job", option.id === "ALL" ? !job.length : job.includes(option.id))).join("");
+  if (starHost) starHost.innerHTML = ENCYCLOPEDIA_STARS.map((option) => encyclopediaFilterButtonHTML(option, "star", option.id === "ALL" ? !star.length : star.includes(option.id))).join("");
   updateEncyclopediaStatusFilterButton();
 }
 
@@ -7334,6 +7599,9 @@ function closeEncyclopediaStatusFilter(restoreFocus = true) {
   const returnFocus = ENCYCLOPEDIA_STATE.statusReturnFocus;
   ENCYCLOPEDIA_STATE.statusReturnFocus = null;
   if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+  queueMicrotask(() => {
+    if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.activeId && !ENCYCLOPEDIA_STATE.savingImage) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
+  });
 }
 
 function applyEncyclopediaStatusFilter() {
@@ -7352,6 +7620,7 @@ function renderEncyclopediaGrid() {
   const empty = $("encyclopediaEmpty");
   if (!grid) return;
   const entries = encyclopediaFilteredIndex();
+  if (empty) empty.textContent = "没有符合条件的团员";
   grid.innerHTML = entries.map((entry) => `<button class="encyclopedia-preview" type="button" data-encyclopedia-character="${encyclopediaEscape(entry.id)}" aria-label="查看 ${encyclopediaEscape(entry.name || entry.id)} 图鉴">
     <span class="encyclopedia-preview-avatar"><img src="${encyclopediaEscape(entry.avatar || "/assets/ui/hero-all.png")}" alt="" loading="lazy"></span>
     <span class="encyclopedia-preview-name">${encyclopediaEscape(entry.name || entry.id)}</span>
@@ -7377,15 +7646,9 @@ function setEncyclopediaMode(mode, rerender = true) {
   }
 }
 
-function encyclopediaDetailUrl(entry) {
-  return new URL(`/assets/encyclopedia/${entry.detail || `characters/${entry.id}.json`}`, location.origin).href;
-}
-
 async function loadEncyclopediaDetail(entry) {
-  if (ENCYCLOPEDIA_STATE.details.has(entry.id)) return ENCYCLOPEDIA_STATE.details.get(entry.id);
-  const detail = await encyclopediaJson(encyclopediaDetailUrl(entry));
-  ENCYCLOPEDIA_STATE.details.set(entry.id, detail);
-  return detail;
+  const envelope = await window.LucimaEncyclopediaData.detail(ENCYCLOPEDIA_STATE.version, entry);
+  return envelope.character;
 }
 
 function encyclopediaArchiveViewState() {
@@ -7653,7 +7916,7 @@ function renderEncyclopediaCard(entry, detail) {
   initEncyclopediaArchiveViewport(body.querySelector(".encyclopedia-archive-viewport"));
   encyclopediaArchiveViewState().renderer = renderer;
   updateEncyclopediaSaveButton();
-  void loadEncyclopediaResourceConfig().then((config) => {
+  void loadEncyclopediaResourceConfig(entry).then((config) => {
     const view = encyclopediaArchiveViewState();
     if (view.renderer !== renderer) return;
     view.media = window.LucimaEncyclopediaMedia.mount({
@@ -7661,7 +7924,7 @@ function renderEncyclopediaCard(entry, detail) {
       fetchResource: encyclopediaFetch, loadRuntime: ensureEncyclopediaSpineRuntime,
     });
     void view.media.setMode(ENCYCLOPEDIA_STATE.mode);
-  });
+  }).catch(error => console.warn("图鉴图片加载失败：", error));
 }
 
 async function openEncyclopediaCard(id) {
@@ -7703,6 +7966,7 @@ function closeEncyclopediaCard() {
   ENCYCLOPEDIA_STATE.detailGeneration += 1;
   ENCYCLOPEDIA_STATE.activeId = null;
   showEncyclopediaList();
+  if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.savingImage) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
   document.body.classList.remove("encyclopedia-detail-open");
   disposeEncyclopediaArchiveViewport();
   $("encyclopediaCardBody")?.replaceChildren();
@@ -7757,7 +8021,7 @@ async function saveEncyclopediaImage() {
   ENCYCLOPEDIA_STATE.savingImage = true;
   updateEncyclopediaSaveButton();
   try {
-    const [data, config] = await Promise.all([loadEncyclopediaDetail(entry), loadEncyclopediaResourceConfig()]);
+    const [data, config] = await Promise.all([loadEncyclopediaDetail(entry), loadEncyclopediaResourceConfig(entry)]);
     const { pngBase64 } = await window.LucimaEncyclopediaExport.render({
       entry, data, translations: ENCYCLOPEDIA_STATE.ui || {}, config, fetchResource: encyclopediaFetch,
     });
@@ -7771,6 +8035,7 @@ async function saveEncyclopediaImage() {
     showMessageToast(`保存图鉴图片失败：${error.message || "未知错误"}`, "err", 5200);
   } finally {
     ENCYCLOPEDIA_STATE.savingImage = false;
+    if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.activeId) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
     updateEncyclopediaSaveButton();
   }
 }
@@ -7827,32 +8092,28 @@ function bindCharacterStatusFilter() {
 }
 
 async function initEncyclopedia() {
-  if (ENCYCLOPEDIA_STATE.initialized) return;
+  if (ENCYCLOPEDIA_STATE.initialized) {
+    if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.activeId) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
+    void loadEncyclopediaIndex().then(renderEncyclopediaGrid).catch(() => {});
+    return;
+  }
   ENCYCLOPEDIA_STATE.initialized = true;
   ENCYCLOPEDIA_STATE.mode = frontendStorageGet("encyclopedia_portrait_mode") === "dynamic" ? "dynamic" : "static";
   renderEncyclopediaFilters();
   setEncyclopediaMode(ENCYCLOPEDIA_STATE.mode, false);
-  $("encyclopediaElementFilters")?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-encyclopedia-filter]");
-    if (!button) return;
-    ENCYCLOPEDIA_STATE.filters.element = button.dataset.value || "ALL";
-    renderEncyclopediaFilters();
-    renderEncyclopediaGrid();
-  });
-  $("encyclopediaJobFilters")?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-encyclopedia-filter]");
-    if (!button) return;
-    ENCYCLOPEDIA_STATE.filters.job = button.dataset.value || "ALL";
-    renderEncyclopediaFilters();
-    renderEncyclopediaGrid();
-  });
-  $("encyclopediaStarFilters")?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-encyclopedia-filter]");
-    if (!button) return;
-    ENCYCLOPEDIA_STATE.filters.star = button.dataset.value || "ALL";
-    renderEncyclopediaFilters();
-    renderEncyclopediaGrid();
-  });
+  for (const [type, id] of [["element", "encyclopediaElementFilters"], ["job", "encyclopediaJobFilters"], ["star", "encyclopediaStarFilters"]]) {
+    $(id)?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-encyclopedia-filter]");
+      if (!button) return;
+      const value = button.dataset.value || "ALL";
+      const selected = ENCYCLOPEDIA_STATE.filters[type];
+      ENCYCLOPEDIA_STATE.filters[type] = value === "ALL" ? []
+        : selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value];
+      renderEncyclopediaFilters();
+      renderEncyclopediaGrid();
+      $(id)?.querySelector(`[data-value="${value}"]`)?.focus({ preventScroll: true });
+    });
+  }
   $("encyclopediaStatusFilterButton")?.addEventListener("click", openEncyclopediaStatusFilter);
   bindCharacterStatusFilter();
   $("encyclopediaGrid")?.addEventListener("click", (event) => {
@@ -7861,6 +8122,13 @@ async function initEncyclopedia() {
   });
   document.querySelectorAll("[data-encyclopedia-zoom]").forEach((button) => button.addEventListener("click", () => setEncyclopediaZoom(button.dataset.encyclopediaZoom)));
   document.querySelectorAll("[data-encyclopedia-mode]").forEach((button) => button.addEventListener("click", () => setEncyclopediaMode(button.dataset.encyclopediaMode)));
+  $("encyclopediaSync")?.addEventListener("click", () => void checkEncyclopediaUpdate(true).catch(() => {}));
+  const checkVisible = () => {
+    if (!document.hidden && (!$("encyclopediaPage")?.classList.contains("hidden") || !$("encyclopediaDetailPage")?.classList.contains("hidden"))
+        && $("section-toolbox")?.classList.contains("active")) void checkEncyclopediaUpdate().catch(() => {});
+  };
+  document.addEventListener("visibilitychange", checkVisible);
+  window.addEventListener("focus", checkVisible);
   $("encyclopediaBack")?.addEventListener("click", showToolboxHome);
   $("encyclopediaDetailBack")?.addEventListener("click", closeEncyclopediaCard);
   $("encyclopediaCardClose")?.addEventListener("click", closeEncyclopediaCard);
@@ -7877,7 +8145,7 @@ async function initEncyclopedia() {
     console.error("图鉴索引加载失败：", error);
     const empty = $("encyclopediaEmpty");
     if (empty) {
-      empty.textContent = "本地图鉴资料加载失败";
+      empty.textContent = error.message || "暂时无法获取图鉴资料，请联网后重试";
       empty.classList.remove("hidden");
     }
   }
@@ -8250,11 +8518,522 @@ function defaultEquipmentFilterRule(
   };
 }
 
-// First-time users get one useful example instead of several named presets.
+// 首次使用时自带秘密商店与星源商店的装备筛选方案。
 const defaultEquipmentFilterSchemes = () => ([
   {
-    id: "plan-example-1",
-    name: "新方案 1",
+    id: "plan-secret-shop",
+    name: "秘密商店",
+    slots: {
+      weapon: [
+        defaultEquipmentFilterRule(
+          "secret-shop-weapon-1",
+          0,
+          "AttackValue",
+          [
+            ["AttackRate", 4, "mixed"],
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+          ],
+          ["Destruction", "Penetration", "Torrent", "Immunity", "Critical", "Rage", "Lifesteal", "Attack"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-weapon-2",
+          1,
+          "AttackValue",
+          [
+            ["SpeedValue", 2],
+            ["HPRate", 4],
+            ["ResistanceRate", 4, "mixed"],
+            ["HPValue", 157, "mixed"],
+          ],
+          ["Defense", "Health", "Injury", "Immunity"],
+          { mixRequired: 1, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-weapon-3",
+          2,
+          "AttackValue",
+          [
+            ["ResistanceRate", 6],
+            ["HPRate", 4, "mixed"],
+            ["HPValue", 157, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+          ],
+          ["Resist"],
+          { mixRequired: 2, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-weapon-4",
+          3,
+          "AttackValue",
+          [
+            ["SpeedValue", 4],
+          ],
+          ["Speed", "Hit", "Revenge"],
+          { minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-weapon-5",
+          4,
+          "AttackValue",
+          [
+            ["AttackRate", 4, "mixed"],
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["HPRate", 4, "mixed"],
+          ],
+          ["Counter", "Pinch", "Lifesteal"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-weapon-6",
+          5,
+          "AttackValue",
+          [
+            ["HPRate", 4],
+            ["HPValue", 157, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+            ["EffectHitRate", 4, "mixed"],
+          ],
+          ["Counter"],
+          { mixRequired: 2, minScore: 40 },
+        ),
+      ],
+      helmet: [
+        defaultEquipmentFilterRule(
+          "secret-shop-helmet-1",
+          0,
+          "HPValue",
+          [
+            ["AttackRate", 4, "mixed"],
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+          ],
+          ["Destruction", "Critical", "Penetration", "Lifesteal", "Rage", "Torrent", "Immunity", "Attack"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-helmet-2",
+          1,
+          "HPValue",
+          [
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+          ],
+          ["Defense", "Health", "Immunity", "Injury"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-helmet-3",
+          2,
+          "HPValue",
+          [
+            ["ResistanceRate", 6],
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+          ],
+          ["Resist"],
+          { mixRequired: 2, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-helmet-4",
+          3,
+          "HPValue",
+          [
+            ["SpeedValue", 4],
+          ],
+          ["Speed", "Hit", "Revenge"],
+          { minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-helmet-5",
+          4,
+          "HPValue",
+          [
+            ["AttackRate", 4, "mixed"],
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["HPRate", 4, "mixed"],
+          ],
+          ["Counter", "Pinch", "Lifesteal"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-helmet-6",
+          5,
+          "HPValue",
+          [
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+          ],
+          ["Counter"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+      ],
+      armor: [
+        defaultEquipmentFilterRule(
+          "secret-shop-armor-1",
+          0,
+          "DefenceValue",
+          [
+            ["SpeedValue", 2],
+            ["CriticalRate", 3],
+            ["CriticalDamageRate", 4],
+          ],
+          ["Attack", "Critical", "Lifesteal", "Destruction", "Immunity", "Penetration", "Rage", "Torrent"],
+          { minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-armor-2",
+          1,
+          "DefenceValue",
+          [
+            ["SpeedValue", 2, "mixed"],
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+          ],
+          ["Defense", "Health", "Immunity", "Injury"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-armor-3",
+          2,
+          "DefenceValue",
+          [
+            ["ResistanceRate", 6],
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+          ],
+          ["Resist"],
+          { mixRequired: 2, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-armor-4",
+          3,
+          "DefenceValue",
+          [
+            ["SpeedValue", 4],
+          ],
+          ["Speed", "Hit", "Revenge"],
+          { minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-armor-5",
+          4,
+          "DefenceValue",
+          [
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+          ],
+          ["Counter", "Pinch", "Lifesteal"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-armor-6",
+          5,
+          "DefenceValue",
+          [
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+            ["HPValue", 157, "mixed"],
+          ],
+          ["Counter"],
+          { mixRequired: 3, minScore: 40 },
+        ),
+      ],
+      necklace: [
+        defaultEquipmentFilterRule(
+          "secret-shop-necklace-1",
+          0,
+          "CriticalDamageRate",
+          [
+            ["SpeedValue", 2, "mixed"],
+            ["AttackRate", 4, "mixed"],
+            ["CriticalRate", 3, "mixed"],
+            ["AttackValue", 33, "mixed"],
+          ],
+          ["Destruction", "Critical", "Penetration", "Torrent", "Rage", "Attack", "Lifesteal"],
+          { mixRequired: 3 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-necklace-2",
+          1,
+          "CriticalDamageRate",
+          [
+            ["AttackRate", 4, "mixed"],
+            ["CriticalRate", 3, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["HPRate", 4, "mixed"],
+          ],
+          ["Counter", "Lifesteal", "Destruction", "Pinch", "Immunity"],
+          { mixRequired: 3 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-necklace-3",
+          2,
+          "HPRate",
+          [
+            ["DefenceRate", 4],
+            ["SpeedValue", 2, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["HPValue", 157, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+          ],
+          ["Defense", "Health", "Immunity", "Injury", "Counter"],
+          { mixRequired: 2 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-necklace-4",
+          3,
+          "DefenceRate",
+          [
+            ["HPRate", 4],
+            ["HPValue", 157, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+          ],
+          ["Defense", "Health", "Immunity", "Injury", "Counter"],
+          { mixRequired: 2 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-necklace-5",
+          4,
+          "",
+          [
+            ["SpeedValue", 4],
+          ],
+          ["Speed", "Hit", "Revenge"],
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-necklace-6",
+          5,
+          "HPRate",
+          [
+            ["ResistanceRate", 6],
+            ["HPValue", 157, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+          ],
+          ["Resist"],
+          { mixRequired: 2 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-necklace-7",
+          6,
+          "DefenceRate",
+          [
+            ["ResistanceRate", 6],
+            ["HPValue", 157, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+            ["HPRate", 4, "mixed"],
+          ],
+          ["Resist"],
+          { mixRequired: 2 },
+        ),
+      ],
+      ring: [
+        defaultEquipmentFilterRule(
+          "secret-shop-ring-1",
+          0,
+          "AttackRate",
+          [
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+            ["AttackValue", 33, "mixed"],
+          ],
+          ["Attack", "Critical", "Lifesteal", "Destruction", "Penetration", "Rage", "Torrent"],
+          { mixRequired: 3 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-ring-2",
+          1,
+          "AttackRate",
+          [
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["HPRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+          ],
+          ["Critical", "Destruction", "Counter", "Pinch", "Immunity"],
+          { mixRequired: 3 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-ring-3",
+          2,
+          "HPRate",
+          [
+            ["DefenceRate", 4],
+            ["SpeedValue", 2, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["HPValue", 157, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+          ],
+          ["Defense", "Health", "Counter", "Immunity", "Injury"],
+          { mixRequired: 2 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-ring-4",
+          3,
+          "DefenceRate",
+          [
+            ["HPRate", 4],
+            ["DefenceValue", 28, "mixed"],
+            ["HPValue", 157, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+          ],
+          ["Defense", "Health", "Counter", "Immunity", "Injury"],
+          { mixRequired: 2 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-ring-5",
+          4,
+          "",
+          [
+            ["SpeedValue", 4],
+          ],
+          ["Speed", "Hit", "Revenge"],
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-ring-6",
+          5,
+          "ResistanceRate",
+          [
+            ["DefenceRate", 4, "mixed"],
+            ["HPRate", 4, "mixed"],
+            ["SpeedValue", 2, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["HPValue", 157, "mixed"],
+          ],
+          ["Resist"],
+          { mixRequired: 3 },
+        ),
+      ],
+      boots: [
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-1",
+          0,
+          "SpeedValue",
+          [
+            ["AttackRate", 4, "mixed"],
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["AttackValue", 33, "mixed"],
+          ],
+          ["Attack", "Critical", "Lifesteal", "Destruction", "Penetration", "Rage", "Torrent", "Speed", "Revenge"],
+          { mixRequired: 3 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-2",
+          1,
+          "AttackRate",
+          [
+            ["CriticalRate", 3, "mixed"],
+            ["CriticalDamageRate", 4, "mixed"],
+            ["DefenceRate", 4, "mixed"],
+            ["HPRate", 4, "mixed"],
+          ],
+          ["Critical", "Destruction", "Counter", "Pinch"],
+          { mixRequired: 3 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-3",
+          2,
+          "HPRate",
+          [
+            ["DefenceRate", 4],
+            ["HPValue", 157, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+          ],
+          ["Defense", "Health", "Immunity", "Injury"],
+          { mixRequired: 2 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-4",
+          3,
+          "DefenceRate",
+          [
+            ["HPRate", 4],
+            ["HPValue", 157, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+            ["ResistanceRate", 4, "mixed"],
+          ],
+          ["Defense", "Health", "Immunity"],
+          { mixRequired: 2 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-5",
+          4,
+          "SpeedValue",
+          [
+            ["HPRate", 4],
+            ["DefenceRate", 4],
+            ["ResistanceRate", 4, "mixed"],
+            ["HPValue", 157, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+          ],
+          ["Defense", "Health", "Immunity", "Injury", "Speed", "Revenge"],
+          { mixRequired: 1 },
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-6",
+          5,
+          "SpeedValue",
+          [
+            ["EffectHitRate", 6],
+          ],
+          ["Hit"],
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-7",
+          6,
+          "SpeedValue",
+          [
+            ["ResistanceRate", 6],
+            ["HPRate", 4],
+            ["DefenceRate", 4],
+            ["HPValue", 157],
+            ["DefenceValue", 28],
+          ],
+          ["Resist"],
+        ),
+        defaultEquipmentFilterRule(
+          "secret-shop-boots-8",
+          7,
+          "HPRate",
+          [
+            ["ResistanceRate", 6],
+            ["DefenceRate", 4, "mixed"],
+            ["HPValue", 157, "mixed"],
+            ["DefenceValue", 28, "mixed"],
+          ],
+          ["Resist"],
+          { mixRequired: 2 },
+        ),
+      ],
+    },
+  },
+  {
+    id: "plan-star-source-shop",
+    name: "星源商店",
     slots: {
       weapon: [
         defaultEquipmentFilterRule(
@@ -8808,6 +9587,7 @@ function filterStatDropdownHTML(cls, selected, placeholder, extraAttrs = "", ava
 }
 
 function renderFilterSchemeList() {
+  closeSchemeTransferMenu();
   const list = $("schemeList");
   if (!list) return;
   list.innerHTML = EQUIP_FILTER_SCHEMES_DATA.map((scheme) => {
@@ -8820,8 +9600,8 @@ function renderFilterSchemeList() {
       </button>
       <div class="scheme-actions">
         <button type="button" data-scheme-action="rename" title="重命名" aria-label="重命名"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-square-pen"></use></svg></button>
-        <button type="button" data-scheme-action="import" title="导入方案" aria-label="导入方案"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-upload"></use></svg></button>
-        <button type="button" data-scheme-action="export" title="导出方案文件" aria-label="导出方案文件"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-download"></use></svg></button>
+        <button type="button" data-scheme-action="import" title="导入方案" aria-label="导入方案" aria-haspopup="menu" aria-controls="schemeTransferMenu" aria-expanded="false"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-upload"></use></svg></button>
+        <button type="button" data-scheme-action="export" title="导出方案" aria-label="导出方案" aria-haspopup="menu" aria-controls="schemeTransferMenu" aria-expanded="false"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-download"></use></svg></button>
         <button type="button" data-scheme-action="delete" title="删除" aria-label="删除"${EQUIP_FILTER_SCHEMES_DATA.length === 1 ? " disabled" : ""}><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-trash-2"></use></svg></button>
       </div>
     </div>`;
@@ -9067,12 +9847,171 @@ function showSchemeActionFeedback(button, ok, label) {
   }, 1300);
 }
 
-async function exportEquipmentFilterScheme(schemeId, button) {
+let schemeTransferMenuState = null;
+let schemeClipboardImportSession = null;
+
+function closeSchemeTransferMenu(restoreFocus = false) {
+  const previous = schemeTransferMenuState;
+  schemeTransferMenuState = null;
+  $("schemeTransferMenu")?.classList.add("hidden");
+  previous?.anchor.setAttribute("aria-expanded", "false");
+  previous?.anchor.closest(".scheme-item")?.classList.remove("scheme-menu-open");
+  if (restoreFocus && previous?.anchor.isConnected) previous.anchor.focus();
+}
+
+function closeSchemeTransferMenuIfMoved() {
+  const state = schemeTransferMenuState;
+  if (!state) return;
+  const rect = state.anchor.getBoundingClientRect();
+  if (window.innerWidth !== state.viewportWidth || window.innerHeight !== state.viewportHeight
+      || ["left", "top", "right", "bottom"].some((key) => Math.abs(rect[key] - state.anchorRect[key]) > .5)) {
+    closeSchemeTransferMenu();
+  }
+}
+
+function openSchemeTransferMenu(schemeId, action, anchor) {
+  if (schemeTransferMenuState?.anchor === anchor) { closeSchemeTransferMenu(true); return; }
+  closeSchemeTransferMenu();
+  const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
+  const menu = $("schemeTransferMenu");
+  if (!scheme || !menu || !anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  schemeTransferMenuState = { schemeId, action, anchor, anchorRect: rect,
+    viewportWidth: window.innerWidth, viewportHeight: window.innerHeight };
+  const importing = action === "import";
+  $("schemeTransferContext").textContent = `${importing ? "导入" : "导出"} · ${scheme.name}`;
+  menu.setAttribute("aria-label", importing ? "导入方式" : "导出方式");
+  const clipboard = menu.querySelector('[data-scheme-transfer="clipboard"]');
+  const file = menu.querySelector('[data-scheme-transfer="file"]');
+  clipboard.querySelector("span").textContent = importing ? "从剪贴板导入" : "复制到剪贴板";
+  clipboard.querySelector("use").setAttribute("href", importing ? "#ui-clipboard" : "#ui-copy");
+  file.querySelector("span").textContent = importing ? "从文件导入" : "导出为文件";
+  file.querySelector("use").setAttribute("href", importing ? "#ui-folder-open" : "#ui-download");
+  menu.classList.remove("hidden");
+  anchor.setAttribute("aria-expanded", "true");
+  anchor.closest(".scheme-item")?.classList.add("scheme-menu-open");
+  const gap = 8;
+  menu.style.left = `${Math.max(gap, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - gap))}px`;
+  const top = rect.bottom + 6 + menu.offsetHeight <= window.innerHeight - gap
+    ? rect.bottom + 6 : rect.top - menu.offsetHeight - 6;
+  menu.style.top = `${Math.max(gap, Math.min(top, window.innerHeight - menu.offsetHeight - gap))}px`;
+  clipboard.focus({ preventScroll: true });
+}
+
+async function writeEquipmentFilterClipboard(text) {
+  if (runtimePlatform === "android" && window.LucimaFiles?.writeClipboardText) {
+    const raw = window.LucimaFiles.writeClipboardText(text);
+    const result = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!result?.ok) throw new Error(result?.detail || "复制方案失败");
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; }
+  } catch { /* Older WebViews can still support copying the selected text. */ }
+  const previous = document.activeElement;
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.readOnly = true;
+  input.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+  document.body.append(input);
+  try {
+    input.focus({ preventScroll: true });
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    if (!document.execCommand("copy")) throw new Error("无法复制方案，请使用文件导出");
+  } finally {
+    input.remove();
+    if (previous?.isConnected) previous.focus({ preventScroll: true });
+  }
+}
+
+async function readEquipmentFilterClipboard() {
+  if (runtimePlatform === "android" && window.LucimaFiles?.readClipboardText) {
+    const raw = window.LucimaFiles.readClipboardText();
+    const result = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!result?.ok) throw new Error(result?.detail || "无法读取剪贴板");
+    return String(result.text || "");
+  }
+  if (!navigator.clipboard?.readText) throw new Error("请在输入框中手动粘贴方案内容");
+  return navigator.clipboard.readText();
+}
+
+function closeEquipmentFilterClipboardImport() {
+  const previous = schemeClipboardImportSession;
+  schemeClipboardImportSession = null;
+  $("schemeClipboardModal")?.classList.add("hidden");
+  document.body.classList.remove("scheme-clipboard-open");
+  if (previous?.returnFocus?.isConnected) previous.returnFocus.focus();
+  else if (previous) {
+    const item = [...document.querySelectorAll(".scheme-item")].find((entry) => entry.dataset.schemeId === previous.schemeId);
+    item?.querySelector('[data-scheme-action="import"]')?.focus();
+  }
+}
+
+async function pasteEquipmentFilterClipboard(quiet = false) {
+  const session = schemeClipboardImportSession;
+  const input = $("schemeClipboardInput");
+  if (!session || !input || session.reading) return;
+  const revision = session.inputRevision;
+  session.reading = true;
+  $("schemeClipboardPaste").disabled = true;
+  try {
+    let text;
+    try { text = await readEquipmentFilterClipboard(); }
+    catch { throw new Error("无法读取剪贴板，请在输入框中手动粘贴方案内容"); }
+    if (schemeClipboardImportSession !== session || session.inputRevision !== revision) return;
+    if (!text.trim()) throw new Error("剪贴板中没有方案文本");
+    if (new TextEncoder().encode(text).length > 1024 * 1024) throw new Error("方案内容超过 1 MB，无法导入");
+    input.value = text;
+    $("schemeClipboardError").textContent = "";
+  } catch (error) {
+    if (schemeClipboardImportSession === session && session.inputRevision === revision && !quiet) {
+      $("schemeClipboardError").textContent = error.message || "无法读取剪贴板，请手动粘贴方案内容";
+    }
+  } finally {
+    session.reading = false;
+    if (schemeClipboardImportSession === session) $("schemeClipboardPaste").disabled = false;
+  }
+}
+
+function openEquipmentFilterClipboardImport(schemeId, returnFocus) {
+  const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
+  if (!scheme) return;
+  schemeClipboardImportSession = { schemeId, returnFocus, reading: false, inputRevision: 0 };
+  $("schemeClipboardInput").value = "";
+  $("schemeClipboardError").textContent = "";
+  $("schemeClipboardPaste").disabled = false;
+  $("schemeClipboardHint").textContent = `导入后将替换“${scheme.name}”的名称和筛选规则。`;
+  $("schemeClipboardModal").classList.remove("hidden");
+  document.body.classList.add("scheme-clipboard-open");
+  $("schemeClipboardInput").focus();
+  void pasteEquipmentFilterClipboard(true);
+}
+
+function confirmEquipmentFilterClipboardImport() {
+  const session = schemeClipboardImportSession;
+  if (!session) return;
+  try {
+    importEquipmentFilterScheme($("schemeClipboardInput").value, "剪贴板", session.schemeId);
+    closeEquipmentFilterClipboardImport();
+  } catch (error) {
+    $("schemeClipboardError").textContent = error.message || "导入失败，请检查方案内容";
+  }
+}
+
+async function exportEquipmentFilterScheme(schemeId, button, method = "file") {
   const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
   if (!scheme) return;
   try {
     const exportData = equipmentFilterExportPayload(scheme);
     const contents = JSON.stringify(exportData, null, 2) + "\n";
+    if (method === "clipboard") {
+      if (new TextEncoder().encode(contents).length > 1024 * 1024) throw new Error("方案内容超过 1 MB，无法复制");
+      await writeEquipmentFilterClipboard(contents);
+      showSchemeActionFeedback(button, true, "已复制");
+      showMessageToast(`方案“${scheme.name}”已复制到剪贴板`, "ok");
+      return;
+    }
     let result;
     if (runtimePlatform === "android" && window.LucimaFiles?.saveEquipmentFilterScheme) {
       const filename = `LucimaTools-equipment-filter-${scheme.name}.json`;
@@ -9263,13 +10202,12 @@ function parseEquipmentFilterImport(text) {
   return scheme;
 }
 
-function importEquipmentFilterScheme(text, filename = "方案文件") {
-  const index = EQUIP_FILTER_SCHEMES_DATA.findIndex((item) => item.id === schemeImportTargetId);
+function importEquipmentFilterScheme(text, filename = "方案文件", targetId = schemeImportTargetId) {
+  const index = EQUIP_FILTER_SCHEMES_DATA.findIndex((item) => item.id === targetId);
   if (index < 0) throw new Error("导入目标方案已失效，请重新选择导入");
-  if (!text?.trim()) throw new Error("方案文件为空");
+  if (!text?.trim()) throw new Error("方案内容为空");
   if (new TextEncoder().encode(text).length > 1024 * 1024) throw new Error("方案文件超过 1 MB，无法导入");
   const source = parseEquipmentFilterImport(text);
-  const targetId = EQUIP_FILTER_SCHEMES_DATA[index].id;
   EQUIP_FILTER_SCHEMES_DATA[index] = normalizeEquipmentFilterScheme(source, index, targetId);
   activeFilterSchemeId = targetId;
   activeDetailRuleId = null;
@@ -9397,11 +10335,11 @@ function initToolbox() {
       return;
     }
     if (action?.dataset.schemeAction === "import") {
-      await openEquipmentFilterImport(schemeId, action);
+      openSchemeTransferMenu(schemeId, "import", action);
       return;
     }
     if (action?.dataset.schemeAction === "export") {
-      await exportEquipmentFilterScheme(schemeId, action);
+      openSchemeTransferMenu(schemeId, "export", action);
       return;
     }
     if (action?.dataset.schemeAction === "delete") {
@@ -9594,6 +10532,43 @@ function initToolbox() {
   });
   $("schemeRenameConfirm")?.addEventListener("click", saveEquipmentFilterRename);
   $("schemeRenameInput")?.addEventListener("input", () => setSchemeRenameError());
+  $("schemeTransferMenu")?.addEventListener("click", async (event) => {
+    const option = event.target.closest("[data-scheme-transfer]");
+    const state = schemeTransferMenuState;
+    if (!option || !state) return;
+    closeSchemeTransferMenu(true);
+    if (state.action === "export") await exportEquipmentFilterScheme(state.schemeId, state.anchor, option.dataset.schemeTransfer);
+    else if (option.dataset.schemeTransfer === "clipboard") openEquipmentFilterClipboardImport(state.schemeId, state.anchor);
+    else await openEquipmentFilterImport(state.schemeId, state.anchor);
+  });
+  $("schemeTransferMenu")?.addEventListener("keydown", (event) => {
+    const items = [...$("schemeTransferMenu").querySelectorAll('[role="menuitem"]')];
+    const index = items.indexOf(document.activeElement);
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+        : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus();
+    } else if (event.key === "Escape") {
+      event.preventDefault(); event.stopPropagation(); closeSchemeTransferMenu(true);
+    } else if (event.key === "Tab") closeSchemeTransferMenu(true);
+  });
+  document.addEventListener("click", (event) => {
+    const state = schemeTransferMenuState;
+    if (state && !$("schemeTransferMenu").contains(event.target) && !state.anchor.contains(event.target)) closeSchemeTransferMenu();
+  });
+  document.addEventListener("scroll", closeSchemeTransferMenuIfMoved, true);
+  window.addEventListener("resize", closeSchemeTransferMenuIfMoved);
+  $("schemeClipboardModal")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-clipboard-close]")) closeEquipmentFilterClipboardImport();
+  });
+  $("schemeClipboardPaste")?.addEventListener("click", () => void pasteEquipmentFilterClipboard());
+  $("schemeClipboardConfirm")?.addEventListener("click", confirmEquipmentFilterClipboardImport);
+  $("schemeClipboardInput")?.addEventListener("input", () => {
+    if (schemeClipboardImportSession) schemeClipboardImportSession.inputRevision++;
+    $("schemeClipboardError").textContent = "";
+  });
+  $("schemeImportFile")?.addEventListener("cancel", finishEquipmentFilterImport);
   $("schemeImportFile")?.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -9619,6 +10594,20 @@ function initToolbox() {
   $("desktopCloseCancel")?.addEventListener("click", cancelDesktopClose);
   $("desktopCloseConfirm")?.addEventListener("click", confirmDesktopClose);
   document.addEventListener("keydown", (event) => {
+    const clipboardModal = $("schemeClipboardModal");
+    if (clipboardModal && !clipboardModal.classList.contains("hidden")) {
+      if (event.key === "Escape") {
+        event.preventDefault(); closeEquipmentFilterClipboardImport();
+      } else if (event.key === "Tab") {
+        const controls = [...clipboardModal.querySelector(".scheme-import-dialog").querySelectorAll("button:not(:disabled), textarea")];
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if ((!event.shiftKey && document.activeElement === last) || !clipboardModal.contains(document.activeElement)) {
+          event.preventDefault(); first?.focus();
+        }
+      }
+      return;
+    }
     if (event.key !== "Escape") return;
     if (!$("desktopCloseModal")?.classList.contains("hidden")) {
       event.preventDefault();

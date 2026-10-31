@@ -3,6 +3,8 @@ package com.openrubi.lucimatools
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ContentValues
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -130,6 +132,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private inner class FileBridge {
+        @JavascriptInterface
+        fun writeClipboardText(text: String): String = try {
+            require(text.toByteArray(Charsets.UTF_8).size <= EQUIPMENT_FILTER_FILE_MAX_BYTES) {
+                "方案内容超过 1 MB，无法复制"
+            }
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("装备筛选方案", text))
+            jsonResult(true)
+        } catch (error: Exception) {
+            jsonResult(false, detail = error.message ?: "复制方案失败")
+        }
+
+        @JavascriptInterface
+        fun readClipboardText(): String = try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = clipboard.primaryClip
+            val text = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).text?.toString().orEmpty() else ""
+            require(text.toByteArray(Charsets.UTF_8).size <= EQUIPMENT_FILTER_FILE_MAX_BYTES) {
+                "方案内容超过 1 MB，无法导入"
+            }
+            JSONObject().put("ok", true).put("text", text).toString()
+        } catch (error: Exception) {
+            jsonResult(false, detail = error.message ?: "读取剪贴板失败")
+        }
+
         @JavascriptInterface
         fun getDownloadLocation(): String = currentDownloadLocation()
 

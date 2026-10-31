@@ -11,7 +11,6 @@
 |---|---|---|
 | 正式发布 | `build.bat` / `build.bat win` / `build.bat android` | `releases/<版本号>/` |
 | 本地测试 | `build-debug.bat` / `build-debug.bat win` / `build-debug.bat android` | `debug/<版本号>/` |
-| Git Bash 测试 | `./build.sh` / `./build.sh win` / `./build.sh android` | `debug/<版本号>/` |
 
 `build.bat` 会构建 Windows Release 和使用正式证书签名的 Android Release，并在输出前
 验证应用版本、更新端点、APK 完整签名与证书指纹。任一检查失败时不会生成可发布结果。
@@ -34,8 +33,9 @@ debug/<版本号>/
 └── LucimaTools-android-debug-<版本号>.apk
 ```
 
-`build/`、`dist/` 与 `android/app/build/` 都是可重新生成的中间目录；`debug/` 和
-`releases/` 分别保存测试包与已验证的正式包，均不进入 Git。
+`dist/` 与 `android/app/build/` 是可重新生成的中间目录；`build/` 还包含本机发布工具、
+发布状态和历史备份，目前不能整目录删除。`debug/` 和 `releases/` 分别保存测试包
+与已验证的正式包，上述目录均不进入 Git。
 
 ## 正式构建本机配置
 
@@ -108,7 +108,7 @@ releases/
 
 1. 修改 `backend/version.py` 的版本号，运行 `build.bat`，生成安装包、增量补丁和预览清单。
 2. 在测试设备验证候选版本的安装、启动、设置保留和主要任务。
-3. 测试通过后，运行 `promote-release.bat`，或执行以下命令，仅在本地生成稳定清单：
+3. 测试通过后，使用本机发布工具切换到稳定通道。需要单独生成本地稳定清单时，可执行：
 
    ```powershell
    python tools/publish_update.py --promote releases/preview.json
@@ -159,6 +159,9 @@ python tools/analyze_release_delta.py `
 
 ## 更新运行资源
 
+图鉴资料与媒体独立构建：`build-encyclopedia.bat --version <资源版本> --cards`。
+该命令不会构建软件安装包或上传文件；完整流程见 [图鉴资源](docs/encyclopedia-resources.md)。
+
 外部资源库不与编译流程建立依赖。更新资源时，把已提取的内容原样复制到
 `assets_full/`，无需调整其中的中文目录或文件名，然后双击 `assets/sync_full.bat`，
 或在项目根执行（需要 Python 3.10+，仅使用标准库）：
@@ -188,7 +191,7 @@ python assets/sync_full.py
 的资源内容被 Git 忽略，只有筛选后的运行资源和精简数据表会进入
 仓库和安装包。映射细节见 `assets_full/README.md`。
 
-同步是独立的手动步骤；`build.bat`、`build-debug.bat` 和 `build.sh` 直接使用仓库中
+同步是独立的手动步骤；`build.bat` 和 `build-debug.bat` 直接使用仓库中
 已有的运行资源与商品目录，不读取 `assets_full/`。同步后的 `assets/`、
 `assets/` 和 `backend/` 中相关 JSON 应一并提交，其他人即可直接编译。
 没有 `assets_full/` 时，手动脚本也会提示跳过，不修改现有资源。

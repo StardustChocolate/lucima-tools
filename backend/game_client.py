@@ -72,16 +72,18 @@ _LOGIN_ROUTES = frozenset({
 })
 
 
-def _log_game_response(route: str, status: int, body: Any, *, login: bool) -> None:
-    """Log ordinary responses in full; login responses only get metadata."""
-    if login:
-        log.info("[game<-] %s HTTP %s response body suppressed (login)", route, status)
-    else:
-        log.info("[game<-] %s HTTP %s %s", route, status, format_payload(body))
+def _log_game_response(route: str, status: int, body: Any, *, is_json: bool = True) -> None:
+    """Keep redacted game responses, including login snapshots and parse failures."""
+    log.info("[game<-] %s HTTP %s %s%s", route, status,
+             "" if is_json else "[non-JSON] ", format_payload(body))
 
 
 class GameError(Exception):
     """游戏后端返回的业务错误。"""
+
+
+class TaskDeferred(GameError):
+    """No request was sent: an account prerequisite is still pending."""
 
 
 class GameMessage(Exception):
@@ -98,6 +100,10 @@ class GameMessage(Exception):
 
 class DuplicateLoginError(GameMessage):
     """The game rejected this session because the account logged in elsewhere."""
+
+
+class MaintenanceError(GameError):
+    """The official server is closed or this session is awaiting recovery."""
 
 
 def is_duplicate_login_message(value: Any) -> bool:
@@ -161,17 +167,23 @@ class GameClient:
             self._login_in_progress = False
 
     def connection_status(self) -> dict[str, Any]:
+        from .maintenance import service as maintenance_service
         self._ensure_connection_state()
         return {
             "connected": self._connection_state == "connected",
             "reason": self._connection_reason,
             "changedAt": self._connection_changed_at,
+            "maintenance": maintenance_service.active,
+            "maintenanceEpoch": maintenance_service.epoch,
         }
 
     def is_connected(self) -> bool:
         return bool(self.connection_status()["connected"])
 
     def _mark_disconnected(self, reason: str = "connection_error") -> None:
+        from .maintenance import service as maintenance_service
+        if maintenance_service.active:
+            reason = "maintenance"
         self._ensure_connection_state()
         changed = self._connection_state != "disconnected" or self._connection_reason != reason
         if changed:
@@ -183,11 +195,22 @@ class GameClient:
             callback()
 
     def _mark_connected(self) -> None:
-        self._ensure_connection_state()
-        if self._connection_state != "connected" or self._connection_reason is not None:
-            self._connection_changed_at = int(time.time() * 1000)
-        self._connection_state = "connected"
-        self._connection_reason = None
+        from .maintenance import service as maintenance_service
+        with maintenance_service.lock:
+            maintenance_service.require_open()
+            self._ensure_connection_state()
+            if self._connection_state != "connected" or self._connection_reason is not None:
+                self._connection_changed_at = int(time.time() * 1000)
+            self._connection_state = "connected"
+            self._connection_reason = None
+
+    def require_connection(self):
+        from .maintenance import service as maintenance_service
+        maintenance_service.require_open()
+        if not self.is_connected():
+            if self.connection_status().get("reason") == "maintenance":
+                raise MaintenanceError("维护后等待重新登录，任务保持停止")
+            raise DuplicateLoginError("Duplicate Login")
 
     def _sync_login_auth(self, force: bool = False) -> None:
         """在登录握手前同步安全存储中的 V2 Token，不向调用方暴露凭证。"""
@@ -360,7 +383,7 @@ class GameClient:
         if not hasattr(self, "_call_serial_lock"):
             self._call_serial_lock = threading.RLock()
 
-    def _request_http(self, method: str, url: str, **kwargs):
+    def _request_http(self, method: str, url: str, *, game_route=None, **kwargs):
         """Send one game request while serializing transport calls.
 
         Delays intentionally do not live here: login, developer-console calls,
@@ -369,6 +392,13 @@ class GameClient:
         """
         self._ensure_request_transport()
         with self._request_serial_lock:
+            if game_route != "GameServerDBSettingHandler.QueryBulletinInfoResult":
+                from .maintenance import service as maintenance_service
+                maintenance_service.require_open()
+            guard = getattr(self, "before_game_request", None)
+            if (callable(guard) and game_route and game_route not in _LOGIN_ROUTES
+                    and game_route != "GameServerDBSettingHandler.QueryBulletinInfoResult"):
+                guard(game_route)
             return self._client.request(method, url, **kwargs)
 
     def call(self, route: str, data: dict | None = None) -> dict:
@@ -377,17 +407,23 @@ class GameClient:
         # Keep parsing and inventory settlement in the same order as requests.
         # The short inventory lock is separate, so snapshots never wait on HTTP.
         with self._call_serial_lock:
+            guard = getattr(self, "before_game_request", None)
+            if callable(guard) and route not in _LOGIN_ROUTES and route != "GameServerDBSettingHandler.QueryBulletinInfoResult":
+                guard(route)
             return self._call_serial(route, data)
 
     def _call_serial(self, route: str, data: dict | None = None) -> dict:
+        from .maintenance import service as maintenance_service
         self._ensure_connection_state()
         self._sync_proxy()
         payload = {"data": data or {}, "route": route}
         body = json.dumps(payload).encode("utf-8")
         login = route in _LOGIN_ROUTES
         bootstrap_route = "GameServerDBSettingHandler.QueryBulletinInfoResult"
+        if route != bootstrap_route:
+            maintenance_service.require_open()
         if not login and route != bootstrap_route and not self._login_in_progress and not self.is_connected():
-            raise DuplicateLoginError("Duplicate Login")
+            self.require_connection()
         # route 下拉框仅记录 route 名称，开发者模式下登录 route 也可用于排查流程；
         # 完整请求历史仍由下面的 record_request 保持登录请求排除。
         history_id = None
@@ -404,8 +440,9 @@ class GameClient:
             log.info("[game->] %s request body suppressed (login)", route)
         else:
             log.info("[game->] %s %s", route, format_payload(payload))
+        bulletin_token = maintenance_service.observation_token()
         try:
-            resp = self._request_http("PUT", config.GAME_ROUTER, content=body)
+            resp = self._request_http("PUT", config.GAME_ROUTER, game_route=route, content=body)
         except (httpx.ProxyError, httpx.ConnectError) as e:
             # 代理连不上（用户关了代理软件，系统设置/短期缓存尚未更新）。
             # 游戏后端登录后可直连，故自动改直连重试一次——同浏览器的容错表现。
@@ -415,7 +452,7 @@ class GameClient:
             self._proxy = ""
             self._client = self._build_client("")
             try:
-                resp = self._request_http("PUT", config.GAME_ROUTER, content=body)
+                resp = self._request_http("PUT", config.GAME_ROUTER, game_route=route, content=body)
             except Exception as retry_error:
                 self.update_request_history(history_id, error=str(retry_error))
                 raise
@@ -446,12 +483,10 @@ class GameClient:
                 is_json=False,
                 gzip=was_gzip,
             )
-            if login:
-                log.info("[game<-] %s HTTP %s response body suppressed (login)",
-                         route, resp.status_code)
-            else:
-                log.info("[game<-] %s HTTP %s %s", route, resp.status_code,
-                         format_payload(msg))
+            _log_game_response(route, resp.status_code, text, is_json=False)
+            if maintenance_service.observe_response(text):
+                self._mark_disconnected("maintenance")
+                raise MaintenanceError("游戏维护中，任务已停止，等待维护结束后自动重登")
             if duplicate_login or is_duplicate_login_message(msg):
                 self._mark_disconnected("duplicate_login")
                 log.warning("[game] %s returned Duplicate Login; connection marked disconnected", route)
@@ -466,7 +501,10 @@ class GameClient:
             is_json=True,
             gzip=was_gzip,
         )
-        _log_game_response(route, resp.status_code, body, login=login)
+        _log_game_response(route, resp.status_code, body)
+        if maintenance_service.observe_response(body):
+            self._mark_disconnected("maintenance")
+            raise MaintenanceError("游戏维护中，任务已停止，等待维护结束后自动重登")
         if duplicate_login or is_duplicate_login_message(body):
             self._mark_disconnected("duplicate_login")
             log.warning("[game] %s returned Duplicate Login; connection marked disconnected", route)
@@ -476,6 +514,9 @@ class GameClient:
         # NowItem（该物品操作后的绝对新余额）。把它写回缓存 ItemContainer，状态栏就能
         # 零额外请求地反映工具自己领取/购买/花费的结果（游戏没有单独查背包的接口）。
         if isinstance(body, dict):
+            if route == bootstrap_route:
+                from .resource_update import service as resource_service
+                resource_service.observe(body, token=bulletin_token)
             self._apply_now_items(body)
             self._apply_commodity_record(body)
             self._apply_store_records(body)
@@ -824,6 +865,9 @@ class GameClient:
         records.append(rec)   # 首次购买的新档：快照里还没有，整条塞进去
 
     def _auth_data(self, extra: dict | None = None) -> dict:
+        guard = getattr(self, "before_game_request", None)
+        if callable(guard):
+            guard()
         if not self.aid or not self.session_id:
             raise GameError("未登录：缺少 AID/SessionID")
         d = {"AID": self.aid, "SessionID": self.session_id}
@@ -845,6 +889,8 @@ class GameClient:
 
         # 1. 公告/服务器配置(可选，确认连通)
         self.call("GameServerDBSettingHandler.QueryBulletinInfoResult", {})
+        from .maintenance import service as maintenance_service
+        maintenance_service.require_open()
 
         # V2 门户已经返回 userId，可直接作为 LoginID；旧 WebGL jwt 才需要 QueryUserID。
         if self._fixed_login_id:

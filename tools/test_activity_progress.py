@@ -101,7 +101,7 @@ class ActivityProgressTests(unittest.TestCase):
         self.assertEqual(len(emitted), 13)
         for entry, stage in zip(emitted, ap.scenes(self.client.account_state, "BH610")):
             self.assertTrue(entry["ok"])
-            self.assertEqual(entry["name"], f"活动自动推图·{stage['name']}")
+            self.assertEqual(entry["name"], f"活动自动推关·{stage['name']}")
             self.assertEqual(len(entry["lines"]), 1)
         self.assertEqual(emitted[0]["lines"], ["获得 250金币"])
         self.assertEqual(emitted[-1]["lines"], ["获得 700金币"])
@@ -267,7 +267,7 @@ class ActivityProgressTests(unittest.TestCase):
                 self.assertEqual(snapshot["enemies"][0]["avatar"], "/assets/avatars/H016.png")
                 self.assertEqual(snapshot["enemies"][0]["hpPercent"], 50)
                 self.assertNotIn("avatar", progress["battle"]["enemies"][0])
-                partial = {"ok": True, "name": "活动自动推图·关卡1", "lines": ["获得 250金币"]}
+                partial = {"ok": True, "name": "活动自动推关·关卡1", "lines": ["获得 250金币"]}
                 kwargs["on_partial"](partial)
                 acc.push_log.assert_called_once_with(partial, "")
                 server._route_api("POST", "/api/activity/progress/cancel", {"account": acc.email}, {})

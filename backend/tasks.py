@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from . import runtime_data as resources
+
 import inspect
 import json
 import math
@@ -18,7 +20,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable
 
-from .game_client import GameClient, GameError, GameMessage
+from .game_client import GameClient, GameError, GameMessage, TaskDeferred
+from .voting import status as voting_status, task as task_activity_vote
 
 
 class UnknownEquipmentError(Exception):
@@ -42,18 +45,8 @@ _ITEM_NAMES = None
 
 
 def _localization() -> dict:
-    """懒加载官方 loc_CHS_FINAL，资源不存在或损坏时返回空映射。"""
-    global _LOCALIZATION
-    if _LOCALIZATION is None:
-        root = Path(os.environ.get("ARK_ASSET_ROOT") or Path(__file__).resolve().parent.parent)
-        path = root / "assets" / "localization" / "loc_CHS_FINAL.json"
-        try:
-            with path.open(encoding="utf-8") as stream:
-                payload = json.load(stream)
-            _LOCALIZATION = payload if isinstance(payload, dict) else {}
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            _LOCALIZATION = {}
-    return _LOCALIZATION
+    """Read official CHS from the task's pinned game-data snapshot."""
+    return _LOCALIZATION if _LOCALIZATION is not None else resources.read_json("assets/localization/loc_CHS_FINAL.json", {})
 
 
 def _localized_text(key: str) -> str | None:
@@ -67,23 +60,22 @@ def _localized_text(key: str) -> str | None:
 
 
 def _item_names() -> dict:
-    global _ITEM_NAMES
-    if _ITEM_NAMES is None:
-        p = os.path.join(os.path.dirname(__file__), "item_names.json")
-        try:
-            with open(p, encoding="utf-8") as f:
-                _ITEM_NAMES = json.load(f)
-        except Exception:
-            _ITEM_NAMES = {}
-        # loc_CHS_FINAL 会随游戏版本更新，优先覆盖发布时的旧精简表。
-        prefix = "T_Item_Name_"
-        for key, value in _localization().items():
-            if key.startswith(prefix) and isinstance(value, str):
-                sid = key[len(prefix):]
-                text = _localized_text(key)
-                if sid and text:
-                    _ITEM_NAMES[sid] = text
-    return _ITEM_NAMES
+    if _ITEM_NAMES is not None:
+        return _ITEM_NAMES
+    return _resource_item_names()
+
+
+@resources.cached
+def _resource_item_names() -> dict:
+    result = dict(resources.read_json("backend/item_names.json", {}))
+    prefix = "T_Item_Name_"
+    for key, value in _localization().items():
+        if key.startswith(prefix) and isinstance(value, str):
+            sid = key[len(prefix):]
+            text = _localized_text(key)
+            if sid and text:
+                result[sid] = text
+    return result
 
 
 def item_name(sid) -> str:
@@ -171,6 +163,8 @@ def task_month_signin(c: GameClient, params: dict | None = None,
                     details.append("今日已完成月历签到")
                 else:
                     errors.append(f"月历签到失败：{message.msg}")
+            except TaskDeferred:
+                raise
             except Exception as error:
                 errors.append(f"月历签到失败：{error}")
             else:
@@ -194,6 +188,8 @@ def task_month_signin(c: GameClient, params: dict | None = None,
             res = c.call("ServerStatusHandler.Query", c._auth_data())
             if not isinstance(res, dict):
                 raise GameError("账户每日奖励响应格式异常")
+        except TaskDeferred:
+            raise
         except Exception as error:
             errors.append(f"月卡日奖励查询失败：{error}")
         else:
@@ -218,6 +214,8 @@ def task_month_signin(c: GameClient, params: dict | None = None,
     if runtime.get("pendingMailRevision") == revision:
         try:
             mails = _query_mail(c)
+        except TaskDeferred:
+            raise
         except Exception as error:
             errors.append(f"奖励邮件查询失败：{error}")
         else:
@@ -536,6 +534,8 @@ def _task_activity_signins(c: GameClient, runtime: dict) -> dict:
                            else "活动签到：今日登录已记录，未新增签到奖励")
             results.append({"activity": record["ActivityID"], "day": response["SignInDay"],
                             "rewarded": advanced})
+        except TaskDeferred:
+            raise
         except Exception as error:
             errors.append(f"活动签到：失败，{error}")
     if not errors:
@@ -669,6 +669,8 @@ def task_send_meal(c: GameClient, params: dict | None = None,
             if not _is_done_msg(message.msg):
                 return retry(f"{label}体力投递失败：{message.msg}", message.msg)
             response = {}
+        except TaskDeferred:
+            raise
         except Exception as error:
             return retry(f"{label}体力投递失败：{error}")
         # 登录快照和接口响应的字段名不同，必须写回登录字段才可在下轮正确去重。
@@ -681,6 +683,8 @@ def task_send_meal(c: GameClient, params: dict | None = None,
     # 原客户端成功后无条件查邮件，HasMail=false 不能作为跳过依据。
     try:
         mails = _query_mail(c)
+    except TaskDeferred:
+        raise
     except Exception as error:
         return retry(f"{label}体力邮件查询失败：{error}")
     match = next((mail for mail in mails
@@ -1093,11 +1097,16 @@ CUSTOMIZED_EQUIP_MAIN_STATS = {
 # 结果界面显示"强化芯片"打勾、后端却从不买芯片，用户报"免费刷商店漏买芯片"。
 # key=存档用的稳定标识（改了会让已存的账号配置失效）；ids=该项展开的物品 StaticID；
 # stat=日志统计用的短名（label 带部位说明，汇总里太长）。
+SHOP_CHIP_PARTS = [
+    {"id": "EC11", "label": "武器"}, {"id": "EC21", "label": "头盔"},
+    {"id": "EC31", "label": "铠甲"}, {"id": "EC41", "label": "项链"},
+    {"id": "EC51", "label": "戒指"}, {"id": "EC61", "label": "鞋子"},
+]
 BUY_TARGETS = [
     {"key": "recruit", "label": "招募契约", "stat": "招募契约", "ids": ["5"]},
     {"key": "mystery", "label": "神秘契约", "stat": "神秘契约", "ids": ["6"]},
-    {"key": "chip", "label": "强化芯片（下级 · 全部位）", "stat": "下级强化芯片",
-     "ids": ["EC11", "EC21", "EC31", "EC41", "EC51", "EC61"]},
+    {"key": "chip", "label": "强化芯片", "grade": "下级", "stat": "下级强化芯片",
+     "ids": [part["id"] for part in SHOP_CHIP_PARTS], "parts": SHOP_CHIP_PARTS},
 ]
 # 缺省 = 全部目标（与前端"未配置时全选"一致）。account 的 params 为空时用它。
 DEFAULT_SHOP_WANTED = [sid for t in BUY_TARGETS for sid in t["ids"]]
@@ -1177,15 +1186,7 @@ _EQUIP_REF = None
 
 
 def _equip_ref() -> dict:
-    global _EQUIP_REF
-    if _EQUIP_REF is None:
-        p = os.path.join(os.path.dirname(__file__), "equip_ref.json")
-        try:
-            with open(p, encoding="utf-8") as f:
-                _EQUIP_REF = json.load(f)
-        except Exception:
-            _EQUIP_REF = {}
-    return _EQUIP_REF
+    return _EQUIP_REF if _EQUIP_REF is not None else resources.read_json("backend/equip_ref.json", {})
 
 def _aux_score(subs: list) -> int:
     """副属性分数：Σ(值×系数)，百分比按整数百分点。四舍五入(.5舍去)。"""
@@ -1881,7 +1882,10 @@ def task_shop_free(c: GameClient, params: dict | None = None) -> dict:
     目标道具也已经处理，不会因为覆盖货架而丢失。
     """
     params = params or {}
-    wanted = [str(x) for x in (params.get("wanted") or DEFAULT_SHOP_WANTED)]
+    configured_wanted = params.get("wanted")
+    wanted = [str(x) for x in (
+        configured_wanted if isinstance(configured_wanted, list) else DEFAULT_SHOP_WANTED
+    )]
     equipment_scheme = params.get("equipmentScheme")
     equipment_mode = str(params.get("equipmentMode") or "display")
     if equipment_mode not in {"display", "auto"}:
@@ -2003,6 +2007,7 @@ BUY_STORES = [
 # 每条都是"请求 Count=N → 响应 CostItems/Drop"换算出的单份值，MedalHonor2 是
 # Count=3 花 90 得 120能源 → 单价 30、单份 40。
 # 新增星源粉末/誓约之证档位直接读取并核对 sd_Commodity.txt 的价格与产出字段。
+# 新增友情商品由 2026-10-28 的两次抓包验证，并与 sd_Commodity.txt 交叉确认。
 # ⚠️ VIPQuick4 未实抓，价格按用户确认"与前三个同价"、产出按"比 3 多五张快速战斗券"。
 COMMODITY_PRICE = {
     "VIPGIFT_VIPQuick1": {"cost": ("1", 500), "gain": [("110", 10), ("3", 30)]},
@@ -2011,8 +2016,12 @@ COMMODITY_PRICE = {
     "VIPGIFT_VIPQuick4": {"cost": ("1", 500), "gain": [("110", 25), ("3", 30)]},
     "FriendShip3": {"cost": ("24", 100), "gain": [("3", 40)]},
     "FriendShip4": {"cost": ("24", 100), "gain": [("4", 5)]},
+    "FriendShip5": {"cost": ("24", 1000), "gain": [("102", 1)]},
+    "FriendShip6": {"cost": ("24", 100), "gain": [("72", 20)]},
+    "FriendShip7": {"cost": ("24", 100), "gain": [("73", 20)]},
     "FriendShip10": {"cost": ("24", 1000), "gain": [("1", 100000)]},
     "FriendShip11": {"cost": ("24", 100), "gain": [("110", 5)]},
+    "FriendShip12": {"cost": ("24", 1000), "gain": [("77", 1)]},
     "MedalHonor2": {"cost": ("26", 30), "gain": [("3", 40)]},
     # MedalHonor1 = 技能模块，价格与产出已经由 sd_Commodity.txt 交叉确认。
     # name: loc 未收录该档时的显示名（我们自己起的标签，非官方文案）。
@@ -2033,7 +2042,8 @@ COMMODITY_PRICE = {
 STORE_GOODS = {
     "VIPGift": ["VIPGIFT_VIPQuick1", "VIPGIFT_VIPQuick2",
                 "VIPGIFT_VIPQuick3", "VIPGIFT_VIPQuick4"],
-    "FriendShip": ["FriendShip3", "FriendShip4", "FriendShip11", "FriendShip10"],
+    "FriendShip": ["FriendShip3", "FriendShip4", "FriendShip11", "FriendShip10",
+                   "FriendShip12", "FriendShip6", "FriendShip7", "FriendShip5"],
     "MedalHonor": ["MedalHonor1", "MedalHonor2"],
     "Normal": ["Normal22"],
     "OathCertificate": ["OathCertificate3", "OathCertificate12",
@@ -2061,30 +2071,13 @@ _COMMODITY_CATALOG = None
 
 
 def _commodity_names() -> dict:
-    """读取随应用发布的档位 StaticID -> {store, name, tip?} 索引。"""
-    global _COMMODITY_NAMES
-    if _COMMODITY_NAMES is None:
-        p = os.path.join(os.path.dirname(__file__), "commodity_names.json")
-        try:
-            with open(p, encoding="utf-8") as f:
-                _COMMODITY_NAMES = json.load(f)
-        except Exception:
-            _COMMODITY_NAMES = {}
-    return _COMMODITY_NAMES
+    return _COMMODITY_NAMES if _COMMODITY_NAMES is not None else resources.read_json("backend/commodity_names.json", {})
 
 
 def _commodity_catalog() -> dict:
-    """读取由官方 sd_Commodity.txt 生成的限购规则索引。"""
-    global _COMMODITY_CATALOG
-    if _COMMODITY_CATALOG is None:
-        p = os.path.join(os.path.dirname(__file__), "commodity_catalog.json")
-        try:
-            with open(p, encoding="utf-8") as f:
-                payload = json.load(f)
-            _COMMODITY_CATALOG = payload.get("commodities", {})
-        except Exception:
-            _COMMODITY_CATALOG = {}
-    return _COMMODITY_CATALOG
+    if _COMMODITY_CATALOG is not None:
+        return _COMMODITY_CATALOG
+    return resources.read_json("backend/commodity_catalog.json", {}).get("commodities", {})
 
 
 def _gain_text(gain: list) -> str:
@@ -2741,15 +2734,9 @@ _EQUIP_REF_CACHE: dict | None = None
 
 
 def _battle_equip_slot(static_id: str) -> str | None:
-    """Resolve the equipment slot from the static catalog, with legacy fallback."""
-    global _EQUIP_REF_CACHE
-    if _EQUIP_REF_CACHE is None:
-        try:
-            with open(os.path.join(os.path.dirname(__file__), "equip_ref.json"), encoding="utf-8") as fh:
-                _EQUIP_REF_CACHE = json.load(fh)
-        except (OSError, json.JSONDecodeError):
-            _EQUIP_REF_CACHE = {}
-    ref = _EQUIP_REF_CACHE.get(str(static_id)) or {}
+    """Resolve equipment using the same snapshot as the battle definitions."""
+    catalog = _EQUIP_REF_CACHE if _EQUIP_REF_CACHE is not None else _equip_ref()
+    ref = catalog.get(str(static_id)) or {}
     slot = _BATTLE_SLOT_NAME.get(str(ref.get("slot") or "").lower())
     return slot or _BATTLE_SLOT_KEY.get(str(static_id)[-1:])
 
@@ -2818,6 +2805,7 @@ _SCENE_FAILURE_MESSAGES = {
     "NeedServerBattle": "挑战失败：该关卡需要实时战斗",
     "Battle failed. If this persists, submit feedback via the link at Settings > Customer Support.":
         "挑战失败：战力不足，请升等或穿戴些许装备后重试",
+    "Artifact backpack is full": "挑战失败：羁绊背包已满",
 }
 
 
@@ -2929,6 +2917,7 @@ def _finish_scene(c: GameClient, scene_id: str, team_id: str,
     return {"ok": True, **drop, "raw": None, **urgent_result}
 
 
+@resources.pinned
 def sweep_once(c: GameClient, scene_id: str, team_id: str, quick_battle: bool = True) -> dict:
     """讨伐扫荡/元素探索一次(无助战)。见 _finish_scene。"""
     return _finish_scene(c, scene_id, team_id, quick_battle, support=None, fail_label="扫荡")
@@ -2942,23 +2931,22 @@ _ACTIVITY_NAMES: dict | None = None
 
 
 def _activity_names() -> dict:
-    """读取官方 loc 的 BH### -> 章节中文名，旧索引作为兜底。"""
-    global _ACTIVITY_NAMES
-    if _ACTIVITY_NAMES is None:
-        p = os.path.join(os.path.dirname(__file__), "activity_names.json")
-        try:
-            with open(p, encoding="utf-8") as f:
-                _ACTIVITY_NAMES = json.load(f)
-        except Exception:
-            _ACTIVITY_NAMES = {}
-        prefix = "T_Chapter_Name_Branch"
-        for key in _localization():
-            if key.startswith(prefix):
-                family = key[len(prefix):]
-                text = _localized_text(key)
-                if family and text:
-                    _ACTIVITY_NAMES["BH" + family[1:] if family.startswith("H") else family] = text
-    return _ACTIVITY_NAMES
+    if _ACTIVITY_NAMES is not None:
+        return _ACTIVITY_NAMES
+    return _resource_activity_names()
+
+
+@resources.cached
+def _resource_activity_names() -> dict:
+    result = dict(resources.read_json("backend/activity_names.json", {}))
+    prefix = "T_Chapter_Name_Branch"
+    for key in _localization():
+        if key.startswith(prefix):
+            family = key[len(prefix):]
+            text = _localized_text(key)
+            if family and text:
+                result["BH" + family[1:] if family.startswith("H") else family] = text
+    return result
 
 
 def _activity_schedule(state: dict) -> dict:
@@ -3482,6 +3470,8 @@ def arena_sweep_once(c: GameClient, n: int, team_id: str) -> dict:
         if "cooldown" in m.msg.lower() or "冷却" in m.msg:
             return wait_for_login(m.msg)
         return {"ok": False, "detail": f"{name}：{m.msg}", "raw": m.msg}
+    except TaskDeferred:
+        raise
     except Exception as error:
         return wait_for_login(f"领券结果无法确认：{error}")
     log_id = chk.get("LogID") if isinstance(chk, dict) else None
@@ -3583,6 +3573,8 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
         sid = arena_scene_id(n)
         try:
             r = arena_sweep_once(c, n, team_id)
+        except TaskDeferred:
+            raise
         except Exception as e:
             # 配置或网络异常也归入当前 NPC，避免整任务退避阻挡其它已到期 NPC。
             r = {"ok": False, "detail": str(e)}
@@ -3651,6 +3643,8 @@ def _query_redeem_mail(c: GameClient, code: str, *,
             response = c.call("MailHandler.QueryNewestMails", c._auth_data({"MailID": cursor}))
         except GameMessage as message:
             return None, message.msg
+        except TaskDeferred:
+            raise
         except Exception as error:
             return None, f"邮件查询失败（{type(error).__name__}）"
         for mail in response.get("Mails", []) or []:
@@ -3728,6 +3722,8 @@ def task_redeem_codes(client: GameClient, params: dict | None = None,
                     retryable = retryable or not invalid
                     time.sleep(0.5)
                     continue
+            except TaskDeferred:
+                raise
             except Exception as error:
                 record.update({"status": "pending", "errorReason": "transient",
                                "updatedAt": datetime.now(timezone.utc).isoformat(),
@@ -3823,6 +3819,11 @@ TASKS: dict[str, dict] = {
         "name": "每日/周成就", "desc": "按勾选领取每日、每周积分阶段奖励，任务状态更新时自动检测",
         "fn": task_daily_achievement, "kind": "toggle", "ui": "achievement",
     },
+    "activity_vote": {
+        "name": "活动投票", "desc": "自动领取已完成的活动奖励，将选票投给选定团员",
+        "fn": task_activity_vote, "kind": "toggle", "ui": "voting",
+        "wantsRuntime": True, "streamsResults": True, "needsFreshState": True,
+    },
     "redeem_code": {
         "name": "兑换码领取", "desc": "自动抓取并兑换最新兑换码奖励",
         "fn": task_redeem_codes, "kind": "toggle", "wantsRuntime": True, "ui": "redeem_code",
@@ -3867,6 +3868,7 @@ TASKS: dict[str, dict] = {
 }
 
 
+@resources.pinned
 def run_task(client: GameClient, task_id: str, params: dict | None = None,
              runtime: dict | None = None,
              on_partial: Callable[[dict], None] | None = None) -> dict:
@@ -3899,6 +3901,8 @@ def run_auto_tasks(client: GameClient,
             break
         try:
             r = run_task(client, tid)
+        except TaskDeferred:
+            break
         except Exception as e:
             r = {"ok": False, "detail": str(e)}
         result = {"id": tid, "name": t["name"], **r}
@@ -3930,6 +3934,8 @@ def run_toggle_tasks(client: GameClient, task_ids: list[str], params: dict | Non
                 def emit(partial, task_id=tid, task=t):
                     on_partial({"id": task_id, "name": task["name"], **partial})
             r = run_task(client, tid, p, runtime.setdefault(tid, {}), emit)
+        except TaskDeferred as error:
+            r = {"ok": True, "skipped": True, "deferred": True, "detail": str(error)}
         except Exception as e:
             r = {"ok": False, "detail": str(e)}
         results.append({"id": tid, "name": t["name"], **r})
@@ -3983,6 +3989,8 @@ def next_claim_times(state: dict, params: dict | None = None, *,
     out: dict = {}
     out["month_signin"] = month_signin_status((runtime or {}).get("month_signin"), now_ms)
     out["send_meal"] = send_meal_status(state, (runtime or {}).get("send_meal"), now_ms)
+    out['activity_vote'] = voting_status(state, (params or {}).get('activity_vote'),
+                                         (runtime or {}).get('activity_vote'), now_ms=now_ms)
 
     daily = daily_achievement_status(state)
     weekly = weekly_achievement_status(state)

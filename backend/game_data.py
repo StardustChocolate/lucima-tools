@@ -1,7 +1,8 @@
 """Small shared game configuration and client-native activity time checks."""
 from __future__ import annotations
 
-from functools import lru_cache
+from . import runtime_data as resources
+
 import json
 import os
 from pathlib import Path
@@ -9,11 +10,11 @@ from pathlib import Path
 from .game_client import GameError
 
 
-@lru_cache(maxsize=1)
+@resources.cached
 def metadata() -> dict:
     root = Path(os.environ.get("ARK_ASSET_ROOT") or Path(__file__).resolve().parent.parent)
     try:
-        data = json.loads((root / "assets/game_config.json").read_text(encoding="utf-8"))
+        data = resources.read_json("assets/game_config.json")
         if data.get("schema") == 1 and all(isinstance(data["tables"][key], dict)
                                           for key in ("PublicVariable", "Activity")):
             return data

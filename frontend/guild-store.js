@@ -59,6 +59,7 @@
     if (!$('guildStoreRow')) return;
     const session = ACCOUNTS[activeAccount], store = session?.guild?.store, st = session && state(session);
     const joined = session?.guild?.joined === true, picked = selected(session);
+    const waiting = session?.guild?.waiting;
     const saving = Boolean(st?.saving), running = Boolean(store?.running);
     const toggle = $('guildAutoStore');
     toggle.checked = Boolean(session?.toggles?.guild_auto_store);
@@ -68,7 +69,7 @@
     $('guildManualStoreOptions').disabled = !joined;
     const rows = (store?.goods || []).filter(row => row.reset);
     const choices = rows.filter(row => picked.includes(row.id));
-    $('guildStoreState').textContent = !joined ? '未加入佣兵团，暂不执行' : !picked.length ? '请在选项中选择商品'
+    $('guildStoreState').textContent = waiting ? waiting : !joined ? '未加入佣兵团，暂不执行' : !picked.length ? '请在选项中选择商品'
       : running ? '正在购买…' : choices.some(row => row.blocked || row.error) ? '购买记录待确认，请重新登录'
       : choices.length && choices.every(row => row.remaining === 0) ? '本周期已购齐，等待周／月刷新'
       : !toggle.checked ? '自动购买已关闭' : '本周期尚未购齐，货币充足时自动购买';
@@ -76,7 +77,7 @@
     const autoHTML = ['Week', 'Month'].map(reset => `<div class="guild-store-group"><div class="guild-weekly-heading">${reset === 'Week' ? '每周' : '每月'}</div>
       <div class="guild-store-grid">${rows.filter(row => row.reset === reset).map(row => card(row, true, picked.includes(row.id), !joined || saving, st)).join('')}</div></div>`).join('');
     const manualHTML = (store?.goods || []).filter(row => !row.reset).map(row => card(row, false, false,
-      !joined || Boolean(st?.buying) || running || session?.connection?.connected === false, st)).join('');
+      !joined || Boolean(waiting) || Boolean(st?.buying) || running || session?.connection?.connected === false, st)).join('');
     // Retain input focus and an in-progress quantity while regular status polling paints.
     for (const [id, html] of [['guildStoreGoods', autoHTML], ['guildManualStoreGoods', manualHTML]]) {
       const el = $(id);
@@ -104,7 +105,7 @@
     $('guildCaptainStoreBalances').innerHTML = balances(captainStore);
     const captainChoices = captainRows.filter(row => captainPicked.includes(row.id));
     const captainRunning = captainStore?.running;
-    $('guildCaptainStoreState').textContent = !joined ? '未加入佣兵团，暂不执行'
+    $('guildCaptainStoreState').textContent = waiting ? waiting : !joined ? '未加入佣兵团，暂不执行'
       : !captainAllowed ? (captainAccess?.reason || '职位信息未确认，暂停购买')
       : !captainPicked.length ? '请在选项中选择商品'
       : captainRunning ? '正在购买…'
@@ -188,23 +189,11 @@
     } finally { st.buying = ''; paint(); }
   }
   function init() {
-    for (const [button, body, label] of [['guildStoreOptions', 'guildStoreBody', '选项'], ['guildManualStoreOptions', 'guildManualStoreBody', '商店']]) {
-      $(button).addEventListener('click', () => {
-        const expanded = $(body).classList.contains('hidden');
-        $(body).classList.toggle('hidden', !expanded);
-        $(button).setAttribute('aria-expanded', String(expanded));
-        $(button).textContent = `${label} ${expanded ? '▾' : '▸'}`;
-      });
-    }
+    // 与 guild.js 共用控件约定；重复扫描只会补充既有绑定，不会重复监听。
+    const restorePanels = bindControlledAccountPanels($('section-guild'), 'guild');
     $('guildAutoStore').addEventListener('change', () => save());
     $('guildStoreGoods').addEventListener('change', () => save([...$('guildStoreGoods').querySelectorAll('input:checked')].map(input => input.value)));
     $('guildAutoCaptainStore').addEventListener('change', () => saveCaptain());
-    $('guildCaptainStoreOptions').addEventListener('click', () => {
-      const expanded = $('guildCaptainStoreBody').classList.contains('hidden');
-      $('guildCaptainStoreBody').classList.toggle('hidden', !expanded);
-      $('guildCaptainStoreOptions').setAttribute('aria-expanded', String(expanded));
-      $('guildCaptainStoreOptions').textContent = `选项 ${expanded ? '▾' : '▸'}`;
-    });
     $('guildCaptainStoreGoods').addEventListener('change', () => saveCaptain(
       [...$('guildCaptainStoreGoods').querySelectorAll('input:checked')].map(input => input.value)));
     $('guildManualStoreGoods').addEventListener('input', event => {
@@ -214,7 +203,10 @@
       const button = event.target.closest('[data-buy]');
       if (button) buy(button.dataset.buy);
     });
-    window.addEventListener('lucima:account-change', paint);
+    window.addEventListener('lucima:account-change', () => {
+      restorePanels.forEach((restore) => restore?.());
+      paint();
+    });
     window.addEventListener('lucima:guild-change', event => { if (event.detail.account === activeAccount) paint(); });
     paint();
   }

@@ -6,6 +6,8 @@ state needed to choose the next action is retained.
 """
 from __future__ import annotations
 
+from . import runtime_data as resources
+
 import asyncio
 import json
 import random
@@ -379,9 +381,17 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
                on_progress=None, activity_start=None) -> dict:
     single_team = activity_start is not None
     label = "活动" if single_team else "虚构深渊"
+    from .maintenance import service as maintenance_service
+    maintenance_epoch = maintenance_service.epoch
     def check_cancelled():
+        maintenance_service.require_open()
+        if maintenance_epoch != maintenance_service.epoch:
+            raise GameError(f"{label}战斗因维护已中止，未自动重新开战")
         if cancel_event is not None and cancel_event.is_set():
             raise GameError(f"{label}战斗已中止，未自动重新开战")
+        connected = getattr(c, "is_connected", None)
+        if callable(connected) and not connected():
+            raise GameError(f"{label}战斗连接已断开，未自动重新开战")
 
     check_cancelled()
     try:
@@ -435,7 +445,11 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
     async with connect(url, extra_headers=headers, max_size=8 * 1024 * 1024, max_queue=4,
                        read_limit=64 * 1024, write_limit=64 * 1024,
                        compression=None, ping_interval=None, open_timeout=timeout, **tls_options) as ws:
-        await ws.send(json.dumps({"ServerID": server_id}, separators=(",", ":")))
+        async def send(raw):
+            check_cancelled()
+            await ws.send(raw)
+
+        await send(json.dumps({"ServerID": server_id}, separators=(",", ":")))
         client_index = client_oid = None
         sent_start = False
         sent_action = False
@@ -451,8 +465,9 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=5)
             except asyncio.TimeoutError:
-                await ws.send('{"HB":1}')
+                await send('{"HB":1}')
                 continue
+            check_cancelled()
             if raw is None:
                 break
             try:
@@ -477,16 +492,16 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
             if isinstance(souls, list) and len(souls) >= 2:
                 camp_souls = list(souls[:2])
             if "NetID" in msg and not sent_auth:
-                await ws.send(json.dumps({"RoomDBInfo": room_id, "AID": aid}, separators=(",", ":")))
+                await send(json.dumps({"RoomDBInfo": room_id, "AID": aid}, separators=(",", ":")))
                 sent_auth = True
             if not sent_start and msg.get("CType") is not None and msg.get("Index") is not None:
                 client_index, client_oid = msg.get("Index"), msg.get("OID")
                 envelope = {"StartBattleInfo": start_info,
                             "Index": client_index, "OID": client_oid}
-                await ws.send(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
+                await send(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
                 sent_start = True
             if msg.get("HB") == 0:
-                await ws.send('{"HB":1}')
+                await send('{"HB":1}')
             step = msg.get("Step")
             if sent_start and step == "NowRoleBeforeRound" and not sent_action:
                 rr = msg.get("RoundResult") or {}
@@ -541,7 +556,7 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
                                   "IsUseSoul": int(use_soul and _can_use_soul(role_live, skill, int(camp_souls[0]), allies, enemies)),
                                   "Priority": 1, "ActionType": "Main",
                                   "ActionInfo": "None", "Index": client_index, "OID": client_oid}
-                        await ws.send(json.dumps(action, separators=(",", ":")))
+                        await send(json.dumps(action, separators=(",", ":")))
                         actions_sent += 1
                         log.info("[abyss] action source=%s skill=%s level=%s target=%s soul=%s decision=%s",
                                  source, skill, level, target, action["IsUseSoul"], decision)
@@ -549,7 +564,7 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
             if step == "RoleAction":
                 sent_action = False
             if "NetBattleGameOverCmd" in msg:
-                await ws.send(json.dumps(msg, separators=(",", ":")))
+                await send(json.dumps(msg, separators=(",", ":")))
             if "BattleEndData" in msg:
                 result = msg.get("BattleEndData") or {}
                 reward = msg.get("SceneRewardData") or {}
@@ -575,6 +590,7 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
     return response
 
 
+@resources.pinned
 def run_activity_battle(c, start_info: dict, *, cancel_event=None, on_progress=None) -> dict:
     try:
         return asyncio.run(_run(c, start_info["SceneData"]["StaticID"], {}, activity_start=start_info,
@@ -583,6 +599,7 @@ def run_activity_battle(c, start_info: dict, *, cancel_event=None, on_progress=N
         raise GameError("战斗服务器证书验证失败，请检查网络或更新软件后重试") from exc
 
 
+@resources.pinned
 def run_abyss_battle(c, params: dict) -> dict:
     scene_id = str(params.get("sceneId") or "")
     waves = params.get("waves") or {}

@@ -20,9 +20,13 @@ from . import appcore
 from . import config
 from . import redeem_codes
 from .encyclopedia_resources import resource_config as encyclopedia_resource_config
+from .encyclopedia import EncyclopediaError, service as encyclopedia_service
 from .updater import UpdateError, service as update_service
+from .resource_update import service as resource_service
+from . import runtime_data as resources
+from . import maintenance
 from .appcore import ApiError
-from .game_client import DuplicateLoginError
+from .game_client import DuplicateLoginError, MaintenanceError
 from .logutil import setup as _setup_log
 
 log = _setup_log()
@@ -40,6 +44,8 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 27843
 
 
+@resources.pinned
+@maintenance.operation
 def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
     """把 (method, path, body, query) 分派到 appcore，返回结果 dict。
     多账号：account 参数 POST 从 body 取、GET 从 query 取。"""
@@ -49,9 +55,13 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
         "/api/preferences", "/api/diagnostics/runtime",
         "/api/encyclopedia/resources", "/api/encyclopedia/save-image",
     }
-    if update_service.is_installing() and path not in update_routes:
+    if update_service.is_installing() and path not in update_routes and not path.startswith("/api/encyclopedia/"):
         raise ApiError(409, "正在准备软件更新，请等待当前操作完成")
     if method == "POST":
+        if path == "/api/encyclopedia/check":
+            return encyclopedia_service.check(force=body.get("force") is True)
+        if path == "/api/resources/check":
+            return resource_service.request_check()
         if path == "/api/login":
             return appcore.login(body["account"], body["password"])
         if path == "/api/login/saved":
@@ -224,6 +234,8 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             return appcore.abyss_options(query.get("account"))
         if path == "/api/arena/options":
             return appcore.arena_options(query.get("account"))
+        if path == '/api/voting/options':
+            return appcore.voting_options(query.get('account'))
         if path == "/api/config":
             return appcore.get_config()
         if path == "/api/preferences":
@@ -243,8 +255,14 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             )
         if path == "/api/update/status":
             return update_service.status()
+        if path == "/api/resources/status":
+            return resource_service.status()
         if path == "/api/encyclopedia/resources":
             return encyclopedia_resource_config()
+        if path == "/api/encyclopedia/catalog":
+            return encyclopedia_service.catalog()
+        if path == "/api/encyclopedia/detail":
+            return encyclopedia_service.detail(query.get("version"), query.get("id"))
         if path == "/api/logs":
             return appcore.get_logs()
     raise ApiError(404, f"未知接口 {method} {path}")
@@ -266,10 +284,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_bytes(self, data: bytes, ctype: str, status: int = 200):
+    def _send_bytes(self, data: bytes, ctype: str, status: int = 200, immutable: bool = False):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        if immutable:
+            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(data)
 
@@ -300,6 +320,10 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     self._send_json({"detail": "非法路径"}, 403)
                     return True
+                resource_name = "assets/" + safe if prefix == "/assets/" else ""
+                if resource_name in resources.DATA_FILES:
+                    self._send_json(resources.read_json(resource_name))
+                    return True
                 return self._serve_file(target)
         return False
 
@@ -317,6 +341,13 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method: str):
         parsed = urlparse(self.path)
         path = parsed.path
+        if method == "GET" and path.startswith("/api/encyclopedia/objects/"):
+            try:
+                data, ctype = encyclopedia_service.object(path.removeprefix("/api/encyclopedia/objects/"))
+                self._send_bytes(data, ctype, immutable=True)
+            except EncyclopediaError as error:
+                self._send_json({"detail": str(error)}, 503)
+            return
         if path.startswith("/api/"):
             body = self._read_body() if method == "POST" else {}
             query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
@@ -329,14 +360,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result)
                 # 日志增量接口由每个在线页面持续轮询；正常响应没有诊断价值，
                 # 记录它只会刷屏并挤掉真正有用的开发者日志。异常仍走下方分支记录。
-                if path not in {"/api/logs/auto", "/api/inventory", "/api/dev/history", "/api/update/status", "/api/guild/quests"}:
+                if path not in {"/api/logs/auto", "/api/inventory", "/api/dev/history", "/api/update/status", "/api/resources/status", "/api/guild/quests"}:
                     log.info("%s %s -> 200", method, path)
+            except EncyclopediaError as e:
+                self._send_json({"detail": str(e)}, 503)
             except ApiError as e:
                 self._send_json(
                     appcore.attach_connection({"detail": e.message}, request_account),
                     e.status,
                 )
                 log.warning("%s %s -> %d %s", method, path, e.status, e.message)
+            except MaintenanceError as error:
+                self._send_json(appcore.attach_connection({"detail": str(error)}, request_account), 409)
+                log.warning("%s %s -> 409 %s", method, path, error)
             except DuplicateLoginError:
                 # Direct task endpoints can propagate the protocol marker;
                 # normalize it so the UI receives the disconnected state.
@@ -370,6 +406,7 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> ThreadingHTTPServer:
     redeem_codes.start_scheduler()
     update_service.start()
+    resource_service.start()
     return ThreadingHTTPServer((host, port), Handler)
 
 

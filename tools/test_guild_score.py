@@ -80,6 +80,13 @@ class GuildScoreTests(unittest.TestCase):
     def claims(self):
         return [body['RewardQuestInfos'][0]['ID'] for body in self.client.routes('RewardQuest')]
 
+    def test_score_job_uses_summary_without_member_gid(self):
+        self.client.own.pop('GID')
+        self.client.account_state['PlayerGuildInfo'].pop('GID')
+        result = self.start()
+        self.assertEqual((result['state'], result['score']), ('completed', 2800))
+        self.assertNotIn('GID', self.client.account_state['PlayerGuildInfo'])
+
     def test_highest_point_finished_task_repeats_planned_times_then_verifies_score(self):
         result = self.start()
         self.assertEqual((result['state'], result['score'], result['target']), ('completed', 2800, 2800))
@@ -216,10 +223,10 @@ class GuildScoreTests(unittest.TestCase):
         self.assertEqual(len(self.claims()), 2)
 
     def test_no_guild_or_disconnected_never_queries_or_claims(self):
-        self.client.account_state['PlayerGuildInfo']['GID'] = ''
+        self.client.account_state['Info'].pop('GuildSubInfo')
         self.assertEqual(self.start()['state'], 'failed')
         self.assertEqual(self.client.calls, [])
-        self.client.account_state['PlayerGuildInfo']['GID'] = 'guild'
+        self.client.account_state['Info']['GuildSubInfo'] = {'_id': 'guild'}
         self.client.connected = False
         self.assertEqual(self.start()['state'], 'failed')
         self.assertEqual(self.client.calls, [])
@@ -259,13 +266,15 @@ class GuildScoreTests(unittest.TestCase):
                 self.client = ScoreClient()
                 self.acc.client = self.client
                 self.acc.guild_runtime.clear()
+                self.acc.guild_runtime['stateSyncedAtMs'] = int(time.time() * 1000)
                 self.acc.guild_runtime['weeklyPersonalWeek'] = self.client.week
+                self.client.before_game_request = self.acc._before_game_request
                 def after_claim(_):
                     if change == 'relogin':
                         self.acc.state_revision += 1
                         self.acc.guild_runtime.clear()
                     elif change == 'guild':
-                        self.client.account_state['PlayerGuildInfo']['GID'] = 'another-guild'
+                        self.client.account_state['Info']['GuildSubInfo'] = {'_id': 'another-guild'}
                     else:
                         self.client.account_state['GuildData']['Record']['LastResetQuestWeek'] += 1
                 self.client.after_claim = after_claim

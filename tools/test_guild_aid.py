@@ -41,7 +41,7 @@ class AidClient(GameClient):
         self.aid, self.session_id = "local-player", "local-session"
         self.connected = True
         self.now = NOW
-        self.info = {"CUID": 101, "Name": "Local"}
+        self.info = {"CUID": 101, "Name": "Local", "GuildSubInfo": {"_id": "guild"}}
         self.own = {"GID": "guild", "LastCheckInTime": {"$date": NOW},
                     "LastRequestGuildAidTime": {"$date": NOW - DAY_MS},
                     "DaySupportGuildAidRewardCount": 0, "CanLastDayCheckReward": False,
@@ -151,6 +151,16 @@ class GuildAidTests(unittest.TestCase):
     def run_aid(self):
         self.acc._run_guild_if_due()
 
+    def test_request_and_support_work_without_member_gid(self):
+        self.client.own.pop("GID")
+        self.client.account_state["PlayerGuildInfo"].pop("GID")
+        self.client.records = [aid_record("h1")]
+        self.run_aid()
+        self.assertTrue(self.acc.guild_snapshot()["joined"])
+        self.assertTrue(self.aid.snapshot()["requested"])
+        self.assertEqual(len(self.client.routes("SupportGuildAid")), 1)
+        self.assertNotIn("GID", self.client.account_state["PlayerGuildInfo"])
+
     def test_login_requests_once_supports_allowed_items_and_merges_balances(self):
         self.client.records = [aid_record("h1"), aid_record("h2"), aid_record("e1", "R008"),
                                aid_record("c1", "C001")]
@@ -212,9 +222,13 @@ class GuildAidTests(unittest.TestCase):
         self.client.now += DAY_MS
         self.clock.return_value += DAY_MS / 1000
         self.run_aid()
+        self.assertEqual(len(self.client.routes("GuildMemberCheckIn")), 0)
+        self.client.account_state["Utc"] = str(self.client.now // 1000)
+        self.acc.note_state_refreshed()
+        self.run_aid()
         self.assertEqual(len(self.client.routes("GuildMemberCheckIn")), 1)
         self.assertEqual([row["ItemID"] for row in self.client.routes("RequestGuildAid")], ["R008"])
-        self.assertEqual(len(self.client.routes("QueryGuildDataForSync")), 1)
+        self.assertEqual(len(self.client.routes("QueryFullGuildData")), 2)
 
     def test_omitted_empty_list_stays_silent_and_polls_hourly(self):
         self.client.omit_empty_aid_list = True
@@ -289,7 +303,7 @@ class GuildAidTests(unittest.TestCase):
         self.assertEqual(len(self.client.calls), 5)
         self.assertIsNone(self.acc._guild_due_delay())
         self.acc.toggles["guild_auto_aid"] = True
-        self.client.account_state["PlayerGuildInfo"]["GID"] = ""
+        self.client.account_state["Info"].pop("GuildSubInfo")
         self.run_aid()
         self.assertEqual(len(self.client.calls), 5)
 

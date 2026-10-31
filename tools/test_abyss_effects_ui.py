@@ -83,6 +83,7 @@ class AbyssEffectsUITests(unittest.TestCase):
                 "/api/tasks": {"toggle": [], "manual": [TASK], "buyTargets": {}},
                 "/api/update/status": {"testServer": True, "available": False},
                 "/api/update/check": {"testServer": True, "available": False},
+                "/api/resources/status": {"phase": "ready"},
                 "/api/logs/auto": {"entries": [], "logSeq": 0},
             }
             if path not in responses:
@@ -99,7 +100,8 @@ class AbyssEffectsUITests(unittest.TestCase):
         route.fulfill(body=file.read_bytes(), content_type=mimetypes.guess_type(file.name)[0] or "application/octet-stream")
 
     def open_options(self):
-        self.page.locator(".abyss-toggle").click()
+        if self.page.locator(".abyss-widget .shop-body").is_hidden():
+            self.page.locator(".abyss-toggle").click()
         self.page.wait_for_function("document.querySelector('.abyss-widget').dataset.loaded === '1'")
 
     def select_scene(self, floor):

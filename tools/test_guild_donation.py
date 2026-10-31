@@ -18,7 +18,7 @@ class DonationClient(GameClient):
         self.own = {"GID": "guild", "LastCheckInTime": {"$date": NOW},
                     "DayDonateGoldCount": 0, "DayDonateCourageCount": 0,
                     "CanLastDayCheckReward": False}
-        self.info = {"CUID": "donor"}
+        self.info = {"CUID": "donor", "GuildSubInfo": {"_id": "guild"}}
         self.balance = {"1": gold, "28": courage}
         self.account_state = {"Info": self.info, "Utc": str(NOW // 1000),
                               "PlayerGuildInfo": copy.deepcopy(self.own),
@@ -87,6 +87,20 @@ class GuildDonationTests(unittest.TestCase):
         # Existing protocol cases deliberately spend the entire available balance.
         self.acc.params["guild_auto_donate"] = {"reserve": {"gold": 0, "courage": 0}}
         self.service = GuildService(self.client, self.acc.guild_runtime, {"gold": 0, "courage": 0})
+
+    def test_entry_and_donation_work_without_member_gid(self):
+        self.client.info["_id"] = {"$oid": "donor-id"}
+        self.client.own.pop("GID")
+        self.client.own["_id"] = {"$oid": "donor-id"}
+        self.client.own["LastCheckInTime"] = {"$date": 0}
+        self.client.account_state["PlayerGuildInfo"] = copy.deepcopy(self.client.own)
+        self.acc.toggles["guild_auto_donate"] = True
+        self.acc._run_guild_if_due()
+        self.assertTrue(self.acc.guild_snapshot()["joined"])
+        self.assertEqual(self.client.donations(), [("GuildHandler.DonateGold", 10),
+                                                 ("GuildHandler.DonateCourage", 3)])
+        self.assertNotIn("GID", self.client.account_state["PlayerGuildInfo"])
+        self.assertEqual(self.client.account_state["PlayerGuildInfo"]["DayDonateGoldCount"], 10)
 
     def test_affordable_count_is_bounded_by_balance_and_daily_remainder(self):
         for balance, donated, expected in ((0, 0, 0), (4999, 0, 0), (5000, 0, 1),
@@ -198,6 +212,9 @@ class GuildDonationTests(unittest.TestCase):
         self.clock.return_value += 86400
         self.client.now += 86400000
         self.assertEqual(self.service.donation_status()["gold"]["count"], 0)
+        self.acc._run_guild_if_due()
+        self.assertEqual(self.client.donations(), [])
+        self.client.account_state["Utc"] = str(self.client.now // 1000)
         self.acc.note_state_refreshed()
         self.acc._run_guild_if_due()
         routes = [route for route, _ in self.client.calls]
@@ -210,7 +227,7 @@ class GuildDonationTests(unittest.TestCase):
                 self.client.account_state["PlayerGuildInfo"]["DayDonateGoldCount"] = invalid
                 self.assertEqual(self.service.donate_if_due("gold"), 0)
         self.acc.toggles["guild_auto_donate"] = True
-        self.client.account_state["PlayerGuildInfo"]["GID"] = ""
+        self.client.account_state["Info"].pop("GuildSubInfo")
         self.acc._run_guild_if_due()
         self.assertEqual(self.client.calls, [])
 

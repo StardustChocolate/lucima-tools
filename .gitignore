@@ -8,6 +8,8 @@ settings.local.json
 .browser_profiles/
 # 运行日志（含账号名、请求路径、traceback）
 logs/
+encyclopedia-cache/
+game-data/
 *.log
 
 # ===================== 本地研究 / 预览 =====================

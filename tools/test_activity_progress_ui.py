@@ -54,6 +54,28 @@ class ActivityProgressUITests(unittest.TestCase):
           let activeAccount = 'alpha';
           const $ = id => document.getElementById(id);
           const values = {}, calls = [], logs = [];
+          const uiState = {};
+          const accountUi = () => uiState[activeAccount] ||= {panels:{}, optionCache:{}};
+          const accountPanelExpanded = key => accountUi().panels[key] === true;
+          const setAccountPanelExpanded = (key, expanded) => { accountUi().panels[key] = !!expanded; };
+          const accountOptionCache = key => accountUi().optionCache[key] ?? null;
+          const setAccountOptionCache = (key, value) => { accountUi().optionCache[key] = value; };
+          const bindAccountPanel = (button, body, key, {label='选项', onOpen, onRestore}={}) => {
+            const restore = () => {
+              const expanded = accountPanelExpanded(key);
+              body.classList.toggle('hidden', !expanded);
+              button.textContent = `${label} ${expanded ? '▾' : '▸'}`;
+              return expanded;
+            };
+            if (restore() && onRestore) void onRestore();
+            button.addEventListener('click', event => {
+              event.preventDefault(); event.stopPropagation();
+              const expanded = body.classList.contains('hidden');
+              setAccountPanelExpanded(key, expanded); restore();
+              if (expanded && onOpen) void onOpen();
+            });
+            return restore;
+          };
           const frontendStorageGet = key => values[key];
           const frontendStorageSet = (key, value) => {values[key] = value;};
           const taskIconHTML = () => '';
@@ -108,7 +130,7 @@ class ActivityProgressUITests(unittest.TestCase):
         self.assertFalse(self.page.locator('.act-count').is_visible())
         self.assertFalse(self.page.locator('.act-quick-row').is_visible())
         self.assertFalse(self.page.locator('.act-urgent-control').is_visible())
-        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推图')
+        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推关')
         self.page.click('[data-act-mode="sweep"]')
         self.assertTrue(self.page.locator('.act-count').is_visible())
         self.assertTrue(self.page.locator('.act-scene-slot').is_visible())
@@ -126,16 +148,38 @@ class ActivityProgressUITests(unittest.TestCase):
         self.page.evaluate("activeAccount = 'beta'; mount();")
         self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始扫荡')
         self.page.evaluate("activeAccount = 'alpha'; mount();")
-        self.assertEqual(self.page.locator('.act-start').inner_text(), '停止推图')
+        self.assertEqual(self.page.locator('.act-start').inner_text(), '停止推关')
         self.page.click('.act-start')
         self.assertEqual(self.page.evaluate('calls.at(-1).body.account'), 'alpha')
         self.assertEqual(self.page.evaluate('calls.at(-1).path'), '/api/activity/progress/cancel')
         self.assertEqual(self.page.locator('.act-start').inner_text(), '停止中…')
-        self.page.evaluate("finishRun({ok:false,detail:'自动推图已停止',activityProgress:{running:false,progress:{completed:3,total:13,detail:'自动推图已停止'}}})")
+        self.page.evaluate("finishRun({ok:false,detail:'自动推关已停止',activityProgress:{running:false,progress:{completed:3,total:13,detail:'自动推关已停止'}}})")
         self.page.wait_for_function("!actProgressRunning.alpha")
         self.assertIn('已停止', self.page.locator('.act-progress-status').inner_text())
-        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推图')
+        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推关')
         self.assertFalse(self.page.locator('.act-battle-progress').is_visible())
+        self.assertEqual(self.errors, [])
+
+    def test_returning_to_an_open_running_panel_uses_its_account_cache_without_new_work(self):
+        self.page.wait_for_function("document.querySelector('.act-family .dd-cur')")
+        # The fixture starts with the body visible. Close then reopen it through
+        # the real control so alpha records its expanded panel state.
+        self.page.click('.act-toggle')
+        self.page.click('.act-toggle')
+        self.select_progress()
+        self.page.click('.act-start')
+        self.assertEqual(self.page.evaluate('calls.at(-1).path'), '/api/activity/progress/run')
+        option_calls = self.page.evaluate("calls.filter(call => call.path === '/api/activity/options').length")
+        progress_calls = self.page.evaluate("calls.filter(call => call.path === '/api/activity/progress/run').length")
+
+        self.page.evaluate("activeAccount = 'beta'; mount(); activeAccount = 'alpha'; mount();")
+        self.page.wait_for_timeout(30)
+
+        self.assertEqual(self.page.evaluate("calls.filter(call => call.path === '/api/activity/options').length"), option_calls)
+        self.assertEqual(self.page.evaluate("calls.filter(call => call.path === '/api/activity/progress/run').length"), progress_calls)
+        self.assertEqual(self.page.locator('.act-start').inner_text(), '停止推关')
+        self.page.evaluate("finishRun({ok:false,detail:'已停止',activityProgress:{running:false,progress:{completed:0,total:13,detail:'已停止'}}})")
+        self.page.wait_for_function("!actProgressRunning.alpha")
         self.assertEqual(self.errors, [])
 
     def test_battle_window_updates_health_and_waves_and_restores_only_its_account(self):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -35,6 +36,25 @@ _REDACT_KEYS = frozenset({
     "proxy-authorization",
 })
 
+# Failed responses may be plain text or incomplete JSON. Keep their diagnostic
+# text while masking the same credential fields as structured responses.
+_TEXT_CREDENTIAL = re.compile(
+    r"(?<![\w-])(?P<prefix>[\"']?(?:"
+    + "|".join(re.escape(key) for key in sorted(_REDACT_KEYS, key=lambda key: (-len(key), key)))
+    + r")[\"']?\s*[:=]\s*)"
+    + r"(?:\"(?:\\.|[^\"\\])*\"?|'(?:\\.|[^'\\])*'?|(?:Bearer|Basic)\s+[^\s,;&<>{}\[\]\"']+|[^\s,;&<>{}\[\]\"']+)",
+    re.IGNORECASE,
+)
+_TEXT_CREDENTIAL_HEADER = re.compile(
+    r"^([ \t]*(?:authorization|proxy-authorization|cookie|set-cookie)[ \t]*:[ \t]*)[^\r\n]*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _redact_text(value: str) -> str:
+    value = _TEXT_CREDENTIAL_HEADER.sub(lambda match: match[1] + REDACTED, value)
+    return _TEXT_CREDENTIAL.sub(lambda match: match['prefix'] + REDACTED, value)
+
 
 def redact(value: Any) -> Any:
     """Recursively redact credential/session fields before writing a trace."""
@@ -47,6 +67,8 @@ def redact(value: Any) -> Any:
         return [redact(item) for item in value]
     if isinstance(value, tuple):
         return tuple(redact(item) for item in value)
+    if isinstance(value, str):
+        return _redact_text(value)
     return value
 
 

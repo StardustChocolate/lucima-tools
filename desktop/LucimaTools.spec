@@ -16,6 +16,7 @@
 import glob
 import json
 import os
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = os.path.abspath(os.getcwd())
@@ -33,8 +34,10 @@ elif os.path.exists(update_endpoint):
 # 数据文件：(源路径, 打包内相对目录)
 datas = [
     (os.path.join(ROOT, "frontend"), "frontend"),
-    (os.path.join(ROOT, "assets"), "assets"),
 ]
+for asset in Path(os.path.join(ROOT, "assets")).iterdir():
+    if asset.name != "encyclopedia" and asset.suffix not in {".py", ".pyc"} and asset.name != "__pycache__":
+        datas.append((str(asset), "assets/" + asset.name if asset.is_dir() else "assets"))
 if update_url:
     datas.append((update_endpoint, "."))
 for name in ("encyclopedia-endpoint.json", "redeem-codes-endpoint.json"):

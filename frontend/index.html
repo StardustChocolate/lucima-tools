@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>LucimaTools · 璐茜玛的深层幻影</title>
   <link rel="icon" type="image/png" href="/assets/app-icon.png?v=77">
-  <link rel="stylesheet" href="/static/style.css?v=244">
-  <link rel="stylesheet" href="/static/encyclopedia-card.css?v=5">
+  <link rel="stylesheet" href="/static/style.css?v=256">
+  <link rel="stylesheet" href="/static/encyclopedia-card.css?v=6">
 </head>
 <body>
   <!-- Lucide interface icons (ISC): local sprite, colored through currentColor. -->
@@ -110,6 +110,14 @@
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
       <path d="m7 10 5 5 5-5"></path>
     </symbol>
+    <symbol id="ui-copy" viewBox="0 0 24 24">
+      <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </symbol>
+    <symbol id="ui-clipboard" viewBox="0 0 24 24">
+      <rect x="8" y="2" width="8" height="4" rx="1"></rect>
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+    </symbol>
     <symbol id="ui-gift" viewBox="0 0 24 24">
       <rect x="3" y="8" width="18" height="4" rx="1"></rect>
       <path d="M12 8v13M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"></path>
@@ -163,6 +171,13 @@
       <circle cx="12" cy="12" r="10"></circle>
       <path d="m16 12-4-4-4 4"></path>
       <path d="M12 16V8"></path>
+    </symbol>
+    <symbol id="ui-loader-circle" viewBox="0 0 24 24">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+    </symbol>
+    <symbol id="ui-badge-check" viewBox="0 0 24 24">
+      <path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"></path>
+      <path d="m9 12 2 2 4-4"></path>
     </symbol>
     <symbol id="ui-circle-help" viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="10"></circle>
@@ -587,7 +602,7 @@
                   <div class="encyclopedia-status-selected-icons" id="encyclopediaStatusSelectedIcons" role="list" aria-label="已选状态"></div>
                 </div>
               </div>
-              <div class="encyclopedia-filter-meta"><span>已筛选：</span><strong id="encyclopediaResultCount">—</strong><span> / </span><strong id="encyclopediaTotalCount">—</strong></div>
+              <div class="encyclopedia-filter-meta"><span>已筛选：</span><strong id="encyclopediaResultCount">—</strong><span> / </span><strong id="encyclopediaTotalCount">—</strong><button type="button" class="encyclopedia-sync" id="encyclopediaSync" title="检查图鉴更新"><svg aria-hidden="true"><use href="#nav-refresh-cw"></use></svg><span>同步</span></button></div>
             </div>
 
             <div class="encyclopedia-preview-panel">
@@ -730,6 +745,15 @@
                 <div class="dev-hint dev-update-status" id="devUpdateChannelStatus" role="status"></div>
               </div>
             </div>
+            <div class="settings-row dev-update-settings dev-game-data-settings">
+              <div class="settings-row-copy"><b>游戏数据</b></div>
+              <div class="settings-row-content">
+                <div class="dev-update-controls">
+                  <span class="dev-game-data-version" id="gameDataVersion" role="status">内置资料</span>
+                  <button class="act-options-refresh dev-update-refresh" id="gameDataCheckBtn" type="button" title="检查游戏数据更新" aria-label="检查游戏数据更新"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-rotate-cw"></use></svg></button>
+                </div>
+              </div>
+            </div>
             <div class="dev-section-title">协议控制台</div>
             <p class="card-note dev-warn">直接向游戏服务器发任意请求，用于抓协议、核对报文。
               <b>请求会真实生效</b>。</p>
@@ -808,8 +832,14 @@
             <!-- 版本号由 app.js 从 /api/config 注入（唯一真源 backend/version.py），勿写死 -->
             <div class="about-version-row">
               <span class="about-ver" id="aboutVer">v…</span>
-              <button class="about-update hidden" id="aboutUpdateBtn" type="button" title="查看可用更新" aria-label="查看可用更新">
-                <svg aria-hidden="true"><use href="#ui-circle-arrow-up"></use></svg>
+              <button class="about-update-state" id="aboutUpdateBtn" type="button" data-state="idle" title="检查更新" aria-label="检查更新" aria-busy="false">
+                <span class="about-update-face" aria-hidden="true">
+                  <span class="about-update-icon" data-update-icon="checking"><span class="about-update-rotor"><svg viewBox="0 0 24 24"><use href="#ui-loader-circle"></use></svg></span></span>
+                  <svg class="about-update-icon" data-update-icon="latest" viewBox="0 0 24 24"><use href="#ui-badge-check"></use></svg>
+                  <svg class="about-update-icon" data-update-icon="update" viewBox="0 0 24 24"><use href="#ui-circle-arrow-up"></use></svg>
+                  <svg class="about-update-icon" data-update-icon="error" viewBox="0 0 24 24"><use href="#ui-triangle-alert"></use></svg>
+                  <svg class="about-update-icon" data-update-icon="idle" viewBox="0 0 24 24"><use href="#ui-rotate-cw"></use></svg>
+                </span>
               </button>
             </div>
           </div>
@@ -826,7 +856,7 @@
             <div class="about-list">
               <div class="about-row"><span class="about-k">开发</span><span class="about-v">巧克力、花崎桜雪、一拳</span></div>
               <div class="about-row"><span class="about-k">GitHub</span><a class="about-v" href="https://github.com/StardustChocolate/lucima-tools" target="_blank" rel="noopener noreferrer">https://github.com/StardustChocolate/lucima-tools</a></div>
-              <div class="about-row"><span class="about-k">QQ群</span><a class="about-v" href="https://qm.qq.com/q/YsvXane7Wq" target="_blank" rel="noopener noreferrer">1032070842</a></div>
+              <div class="about-row"><span class="about-k">QQ群</span><span class="about-v"><a href="https://qm.qq.com/q/YsvXane7Wq" target="_blank" rel="noopener noreferrer">1032070842</a>、<a href="https://qun.qq.com/universal-share/share?ac=1&amp;authKey=ct6uDAN6W9AVf4AWgFWT6lkObE5H6IwL8qKDD28HNkvM6lN1a1l2XPDtOC463dvN&amp;busi_data=eyJncm91cENvZGUiOiIxMDMzNDgyMjI3IiwidG9rZW4iOiIzNzFyN3hZckdEVWRTc0FFbnZUU1BraVY5SVl6Sk9uemhuTmJQTFgvM2NoOGEreXBlczFCUE5VOW5ta0dPRHdYIiwidWluIjoiMTE2OTQwNDM2MSJ9&amp;data=Vt87d_ubu9bdFytXDKah2nJQQCb-7WCAiAA2WyEGAFJcvMqSz-Rqq9WqX4Gphs_N9rvCH9WehDLeM-zppHjoIQ&amp;svctype=4&amp;tempid=h5_group_info" target="_blank" rel="noopener noreferrer">1033482227</a></span></div>
               <div class="about-row"><span class="about-k">Discord</span><a class="about-v" href="https://discord.com/invite/NnTce6zvKY" target="_blank" rel="noopener noreferrer">NnTce6zvKY</a></div>
             </div>
           </div>
@@ -917,6 +947,33 @@
 
   <input id="schemeImportFile" type="file" accept=".json,application/json" hidden>
 
+  <div class="scheme-transfer-menu hidden" id="schemeTransferMenu" role="menu" aria-label="方案传输方式">
+    <div class="scheme-transfer-context" id="schemeTransferContext"></div>
+    <button type="button" role="menuitem" data-scheme-transfer="clipboard"><svg aria-hidden="true"><use href="#ui-copy"></use></svg><span></span></button>
+    <button type="button" role="menuitem" data-scheme-transfer="file"><svg aria-hidden="true"><use href="#ui-download"></use></svg><span></span></button>
+  </div>
+
+  <div class="scheme-import-modal scheme-clipboard-modal hidden" id="schemeClipboardModal" role="dialog" aria-modal="true" aria-labelledby="schemeClipboardTitle" aria-describedby="schemeClipboardHint">
+    <button class="scheme-import-backdrop" type="button" data-clipboard-close aria-label="取消导入"></button>
+    <div class="scheme-import-dialog scheme-clipboard-dialog">
+      <div class="scheme-import-head">
+        <h3 id="schemeClipboardTitle">从剪贴板导入</h3>
+        <button class="scheme-import-close" type="button" data-clipboard-close aria-label="关闭导入窗口">×</button>
+      </div>
+      <p class="scheme-clipboard-hint" id="schemeClipboardHint"></p>
+      <div class="scheme-clipboard-input-head">
+        <label for="schemeClipboardInput">方案内容</label>
+        <button class="mini" id="schemeClipboardPaste" type="button">粘贴</button>
+      </div>
+      <textarea id="schemeClipboardInput" placeholder="粘贴复制的方案内容" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+      <div class="scheme-import-error" id="schemeClipboardError" role="alert"></div>
+      <div class="scheme-import-actions">
+        <button class="scheme-import-cancel" type="button" data-clipboard-close>取消</button>
+        <button class="scheme-import-confirm" id="schemeClipboardConfirm" type="button">导入并替换</button>
+      </div>
+    </div>
+  </div>
+
   <div class="confirm-modal hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
     <button class="confirm-backdrop" type="button" data-confirm-cancel aria-label="取消"></button>
     <div class="confirm-dialog">
@@ -982,14 +1039,16 @@
   </div>
 
   <script src="/static/encyclopedia-scaling.js?v=1"></script>
+  <script src="/static/encyclopedia-data.js?v=1"></script>
   <script src="/static/encyclopedia-palette.js?v=1"></script>
   <script src="/static/encyclopedia-card.js?v=3"></script>
   <script src="/static/encyclopedia-framing.js?v=1"></script>
   <script src="/static/encyclopedia-player.js?v=6"></script>
   <script src="/static/encyclopedia-media.js?v=3"></script>
   <script src="/static/encyclopedia-export.js?v=4"></script>
-  <script src="/static/app.js?v=257"></script>
-  <script src="/static/guild.js?v=9"></script>
-  <script src="/static/guild-store.js?v=3"></script>
+  <script src="/static/voting.js?v=2"></script>
+  <script src="/static/app.js?v=272"></script>
+  <script src="/static/guild.js?v=12"></script>
+  <script src="/static/guild-store.js?v=5"></script>
 </body>
 </html>

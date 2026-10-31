@@ -6,6 +6,8 @@ Windows(server.py) 与 Android(Chaquopy) 共用本模块。
 """
 from __future__ import annotations
 
+from . import runtime_data as resources
+
 import base64
 import binascii
 import json
@@ -13,7 +15,7 @@ import os
 import re
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from . import config
@@ -155,27 +157,11 @@ _ROLE_JOB: dict | None = None
 
 
 def _item_rank() -> dict:
-    """读取随应用发布的 StaticID -> 稀有度(0~5) 索引，懒加载。"""
-    global _ITEM_RANK
-    if _ITEM_RANK is None:
-        p = Path(__file__).resolve().parent / "item_rank.json"
-        try:
-            _ITEM_RANK = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            _ITEM_RANK = {}
-    return _ITEM_RANK
+    return _ITEM_RANK if _ITEM_RANK is not None else resources.read_json("backend/item_rank.json", {})
 
 
 def _item_category() -> dict:
-    """读取由官方 sd_Item 表生成的 StaticID -> 物品页分类索引。"""
-    global _ITEM_CATEGORY
-    if _ITEM_CATEGORY is None:
-        p = ASSETS_DIR / "item_categories.json"
-        try:
-            _ITEM_CATEGORY = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            _ITEM_CATEGORY = {}
-    return _ITEM_CATEGORY
+    return _ITEM_CATEGORY if _ITEM_CATEGORY is not None else resources.read_json("assets/item_categories.json", {})
 
 
 def _item_category_fallback(sid: str) -> str:
@@ -196,28 +182,11 @@ def _item_category_fallback(sid: str) -> str:
 
 
 def _role_element() -> dict:
-    """读取由官方 sd_Role 表生成的角色 StaticID -> 属性索引。"""
-    global _ROLE_ELEMENT
-    if _ROLE_ELEMENT is None:
-        p = ASSETS_DIR / "role_elements.json"
-        try:
-            _ROLE_ELEMENT = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            _ROLE_ELEMENT = {}
-    return _ROLE_ELEMENT
+    return _ROLE_ELEMENT if _ROLE_ELEMENT is not None else resources.read_json("assets/role_elements.json", {})
 
 
 def _role_job() -> dict:
-    """复用随应用发布的图鉴索引，读取角色 StaticID -> 职业。"""
-    global _ROLE_JOB
-    if _ROLE_JOB is None:
-        try:
-            data = json.loads((ASSETS_DIR / "encyclopedia/index.json").read_text(encoding="utf-8"))
-            _ROLE_JOB = {row["id"]: row["job"] for row in data["characters"]
-                         if isinstance(row, dict) and row.get("id") and row.get("job")}
-        except (OSError, ValueError, KeyError, TypeError):
-            _ROLE_JOB = {}
-    return _ROLE_JOB
+    return _ROLE_JOB if _ROLE_JOB is not None else resources.read_json("assets/role_jobs.json", {})
 
 
 def _roster_items(raw_items: list[dict]) -> list[dict]:
@@ -396,6 +365,8 @@ def connection_status(account: str | None) -> dict | None:
                     "connected": bool(value.get("connected", True)),
                     "reason": value.get("reason"),
                     "changedAt": int(changed_at) if changed_at is not None else None,
+                    "maintenance": bool(value.get("maintenance")),
+                    "maintenanceEpoch": value.get("maintenanceEpoch", 0),
                 }
         except Exception:
             pass
@@ -445,6 +416,9 @@ def _require(account: str | None, *, allow_disconnected: bool = False) -> accoun
     if not allow_disconnected:
         status = connection_status(account)
         if status and not status.get("connected", True):
+            if status.get("reason") == "maintenance":
+                raise ApiError(409, "游戏维护中，等待维护结束后自动重登" if status.get("maintenance")
+                               else "维护后等待重新登录，任务保持停止")
             raise ApiError(409, "[重复登录] 当前连接已断开")
     if not acc:
         raise ApiError(401, "账号未登录或已下线")
@@ -459,7 +433,9 @@ def _guild_account(account):
     try:
         if accounts.get(acc.email) is not acc:
             raise ApiError(401, "登录会话已变更，请使用当前账号")
-        yield acc
+        acc.require_current_day()
+        with acc._request_scope():
+            yield acc
     except (GameError, GameMessage) as error:
         status = 409 if is_duplicate_login_message(error) else 400
         raise ApiError(status, describe_error(error)) from error
@@ -479,9 +455,11 @@ def guild_overview(account):
 def guild_action(account, action, data=None):
     data = data or {}
     with _guild_account(account) as acc:
-        service = GuildService(acc.client)
+        if action == "checkin" or acc.guild_runtime.get("enteredRevision") != acc.state_revision:
+            acc.refresh_guild_locked(log_success=False)
+        service = GuildService(acc.client, acc.guild_runtime)
         if action == "checkin":
-            result = service.checkin()
+            result = service.snapshot()
         elif action == "attendance":
             result = service.attendance()
         elif action == "buy":
@@ -551,7 +529,8 @@ def login(account: str, password: str) -> dict:
         raise ApiError(400, f"门户登录失败：{e}")
     acc = _bootstrap_and_register(account, auth)
     try:
-        config.save_account(account, auth=auth)
+        name = ((acc.client.account_state or {}).get("Info") or {}).get("Name")
+        config.save_account(account, auth=auth, name=name)
     except Exception as e:
         accounts.remove(account)
         log.exception("账号 %s 的登录 Token 无法安全保存: %s", account, e)
@@ -573,6 +552,12 @@ def login_saved(account: str) -> dict:
     if not auth:
         raise ApiError(401, "该账号没有已保存的 Token，请重新输入密码登录")
     acc = _bootstrap_and_register(account, auth)
+    name = ((acc.client.account_state or {}).get("Info") or {}).get("Name")
+    if name and name != record.get("name"):
+        try:
+            config.save_account(account, name=name)
+        except Exception as error:
+            log.warning("账号 %s 的游戏昵称无法保存: %s", account, error)
     return _account_payload(acc)
 
 
@@ -599,13 +584,14 @@ def list_accounts() -> dict:
         rec = saved.get(email, {})
         item = {
             "account": email,
+            "name": rec.get("name"),
             "online": acc is not None,
             "hasToken": bool(rec.get("auth")),
             "tokenError": bool(rec.get("auth_error")),
         }
         if acc:
             st = summarize(acc.client.account_state or {})
-            item["name"] = st.get("name")
+            item["name"] = st.get("name") or rec.get("name")
             item["level"] = st.get("level")
             item["avatar"] = st.get("avatar")
             item["connection"] = connection_status(email)
@@ -721,7 +707,7 @@ def refresh_status(account: str) -> dict:
     """
     acc = _require(account, allow_disconnected=True)
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             state = acc.client.bootstrap()
             # 与后台任务在同一把锁内重置，避免刚完成的体力邮件确认被并发清空。
             acc.reset_task_runtime()
@@ -763,6 +749,7 @@ def arena_state(acc) -> dict:
             "nextMs": None if paused else nxt,
             "retryMs": None if paused else retry_map.get(sid),
             "waitingForLogin": paused,
+            "waiting": acc.automation_wait_reason(),
         })
     return {"npcs": items, "teamId": str(params.get("teamId") or "0"),
             "teams": _arena_teams(acc)}
@@ -779,6 +766,15 @@ def _arena_teams(acc) -> list[dict]:
 def arena_options(account: str) -> dict:
     """GET /api/arena/options —— 展开页首次打开时拉 NPC 清单 + 队伍 + 冷却。"""
     return arena_state(_require(account))
+
+
+def voting_options(account: str) -> dict:
+    """Read full candidates and activity progress without querying the game."""
+    from .voting import status
+    acc = _require(account, allow_disconnected=True)
+    with resources.pin():
+        return status(acc.client.account_state, acc.params.get('activity_vote'),
+                      acc.task_runtime.get('activity_vote'), candidates=True)
 
 
 def arena_set(account: str, picked: list | None, team_id: str | None) -> dict:
@@ -823,11 +819,16 @@ def run_auto(account: str, task_ids: list[str], params: dict) -> dict:
 def run(account: str, task_ids: list[str], params: dict) -> dict:
     acc = _require(account)
     results = []
-    with acc.lock:
+    with acc.lock, resources.pin():
         for tid in task_ids:
             name = TASKS.get(tid, {}).get("name", tid)
             try:
-                r = run_task(acc.client, tid, params.get(tid))
+                automated = TASKS.get(tid, {}).get("kind") in {"always", "toggle"}
+                scope = acc._request_scope(login_task=tid in accounts.LOGIN_TASK_IDS) if automated else nullcontext()
+                with scope:
+                    if automated:
+                        acc._before_game_request()
+                    r = run_task(acc.client, tid, params.get(tid))
                 results.append({"id": tid, "name": name, **r})
             except Exception as e:
                 results.append({"id": tid, "name": name, "ok": False, "detail": str(e)})
@@ -839,7 +840,7 @@ def shop_reset_ep(account: str, use_gold: bool, auto_buy: list[str],
     acc = _require(account)
     if equipment_scheme is not None and not isinstance(equipment_scheme, dict):
         raise ApiError(400, "装备筛选方案格式无效")
-    with acc.lock:
+    with acc.lock, resources.pin():
         r = shop_reset(acc.client, use_gold, auto_buy, equipment_scheme)
     acc.shop_shelf = r.get("records", [])
     out = {k: v for k, v in r.items() if k != "records"}
@@ -851,7 +852,7 @@ def shop_buy_ep(account: str, index: int) -> dict:
     acc = _require(account)
     shelf = acc.shop_shelf or []
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             r = shop_buy_index(acc.client, shelf, index)
     except UnknownEquipmentError as e:
         raise ApiError(422, f"装备 StaticID={e.static_id} 不在图鉴数据中，"
@@ -865,7 +866,7 @@ def star_source_refresh_ep(account: str, scheme: dict) -> dict:
     if not isinstance(scheme, dict):
         raise ApiError(400, "筛选方案格式无效")
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             r = star_source_refresh(acc.client, scheme)
     except UnknownEquipmentError as e:
         raise ApiError(
@@ -878,7 +879,7 @@ def star_source_refresh_ep(account: str, scheme: dict) -> dict:
 
 def star_source_buy_ep(account: str, shop_index: int) -> dict:
     acc = _require(account)
-    with acc.lock:
+    with acc.lock, resources.pin():
         result = star_source_buy(acc.client, shop_index)
     result.update(_status_snapshot(acc))
     return result
@@ -886,7 +887,7 @@ def star_source_buy_ep(account: str, shop_index: int) -> dict:
 
 def star_source_query_ep(account: str) -> dict:
     acc = _require(account)
-    with acc.lock:
+    with acc.lock, resources.pin():
         r = star_source_query(acc.client)
     r.update(_status_snapshot(acc))
     return r
@@ -910,7 +911,7 @@ def customized_equip_ep(account: str, action: str, body: dict) -> dict:
     if callback is None:
         raise ApiError(400, "无效的装备活动操作")
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             result = callback()
     except UnknownEquipmentError as error:
         raise ApiError(
@@ -947,7 +948,7 @@ def store_buy_ep(account: str, picks: list[dict]) -> dict:
     acc = _require(account)
     if not isinstance(picks, list) or not picks:
         raise ApiError(400, "没有选择要购买的商品")
-    with acc.lock:
+    with acc.lock, resources.pin():
         r = store_buy(acc.client, picks)
     r.update(_status_snapshot(acc))   # 带回最新货币，前端购买后即时刷新主页
     return r
@@ -973,7 +974,7 @@ def sweep_options(account: str, kind: str = "hunt") -> dict:
 def sweep_run(account: str, scene_id: str, team_id: str, quick_battle: bool = True) -> dict:
     acc = _require(account)
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             r = sweep_once(acc.client, scene_id, team_id, quick_battle)
     except GameError as e:
         raise ApiError(400, str(e))
@@ -1001,7 +1002,7 @@ def activity_options(account: str) -> dict:
     acc = _require(account)
     state = acc.client.account_state or {}
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             friends, raw = query_support_friends(acc.client)
     except GameError as e:
         raise ApiError(400, str(e))
@@ -1089,7 +1090,7 @@ def activity_run(account: str, scene_id: str, team_id: str,
     entry = _activity_support_entry(acc, support_cuid)
     urgent_modes = _normalize_urgent_specializations(urgent_specializations)
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             r = activity_once(acc.client, scene_id, team_id, entry, quick_battle)
             if r.get("ok") and urgent_modes is not None:
                 try:
@@ -1133,9 +1134,11 @@ def activity_progress_run(account: str, family: str, team_id: str, support_cuid=
         raise ApiError(400, "请选择当前活动")
     entry = _activity_support_entry(acc, support_cuid)
     event = threading.Event()
+    from .maintenance import service as maintenance_service
+    maintenance_service.track_event(event)
     with _activity_sessions_lock:
         if acc.email in _activity_sessions:
-            raise ApiError(409, "当前账号已有自动推图正在运行")
+            raise ApiError(409, "当前账号已有自动推关正在运行")
         _activity_sessions[acc.email] = event
         _activity_progress.pop(acc.email, None)
 
@@ -1147,7 +1150,7 @@ def activity_progress_run(account: str, family: str, team_id: str, support_cuid=
                 _activity_progress[acc.email] = snapshot
 
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             result = activity_progress.run(acc.client, family, team_id, entry,
                                            cancel_event=event, on_progress=on_progress,
                                            on_partial=lambda partial: acc.push_log(partial, ""))
@@ -1166,7 +1169,7 @@ def activity_clear_urgent(account: str, team_id: str,
     acc = _require(account)
     entry = _activity_support_entry(acc, support_cuid)
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             result = cleanup_urgent_missions(
                 acc.client, team_id, entry, clear_all=True)
     except GameError as e:
@@ -1247,7 +1250,7 @@ def _battle_progress_brief(snapshot: dict) -> dict:
 
 def abyss_cancel(account: str) -> dict:
     """Signal the running executor without waiting on its account task lock."""
-    acc = _require(account)
+    acc = _require(account, allow_disconnected=True)
     with _abyss_sessions_lock:
         event = _abyss_sessions.get(acc.email)
         if event is not None:
@@ -1260,7 +1263,7 @@ def abyss_rewards(account: str) -> dict:
     if _abyss_snapshot(acc.email)["running"]:
         raise ApiError(409, "请在深渊战斗结束后领取奖励")
     try:
-        with acc.lock:
+        with acc.lock, resources.pin():
             result = abyss_claim_rewards(acc.client)
     except GameError as error:
         raise ApiError(400, str(error)) from error
@@ -1277,6 +1280,8 @@ def abyss_run(account: str, scene_id, waves, auto_advance: bool = False) -> dict
     if auto_advance is True:
         normalized["autoAdvance"] = True
     cancel_event = threading.Event()
+    from .maintenance import service as maintenance_service
+    maintenance_service.track_event(cancel_event)
     with _abyss_sessions_lock:
         if acc.email in _abyss_sessions:
             raise ApiError(409, "当前账号已有深渊战斗正在运行")
@@ -1293,7 +1298,7 @@ def abyss_run(account: str, scene_id, waves, auto_advance: bool = False) -> dict
         acc.params = {**acc.params, "abyss_auto": normalized}
         config.save_account(acc.email, toggles=acc.toggles, params=acc.params)
         acc.notify_config_changed()
-        with acc.lock:
+        with acc.lock, resources.pin():
             if cancel_event.is_set():
                 raise GameError("深渊战斗已中止，未自动重新开战")
             result = run_task(acc.client, "abyss_auto", {**normalized, "_cancel_event": cancel_event,
@@ -1470,7 +1475,7 @@ def dev_call(account: str, route: str, data: dict | None, use_auth: bool = True,
         ensure_transport()
     # Keep response application in the same order as normal game requests.
     # The inventory lock itself is only held briefly by the shared merger.
-    with acc.lock:
+    with acc.lock, resources.pin():
         with getattr(c, "_call_serial_lock", nullcontext()):
             return _dev_call_locked(c, route, data, use_auth)
 
@@ -1505,6 +1510,8 @@ def _dev_call_locked(c, route: str, data: dict, use_auth: bool) -> dict:
             record_route(route)
 
     t0 = _time.time()
+    from .maintenance import service as maintenance_service
+    bulletin_token = maintenance_service.observation_token()
     try:
         c._sync_proxy()
         request_http = getattr(c, "_request_http", None)
@@ -1544,7 +1551,14 @@ def _dev_call_locked(c, route: str, data: dict, use_auth: bool) -> dict:
         out["isJson"] = True
     except _json.JSONDecodeError:
         pass
-    if is_duplicate_login_message(text):
+    if (200 <= resp.status_code < 300 and out["isJson"]
+            and route == "GameServerDBSettingHandler.QueryBulletinInfoResult"):
+        from .resource_update import service as resource_service
+        resource_service.observe(out["json"], token=bulletin_token)
+    if maintenance_service.observe_response(out["json"] if out["isJson"] else text):
+        c._mark_disconnected("maintenance")
+        log.warning("[dev] %s returned Server Maintain; tasks stopped", route)
+    elif is_duplicate_login_message(text):
         mark_disconnected = getattr(c, "_mark_disconnected", None)
         if callable(mark_disconnected):
             mark_disconnected("duplicate_login")

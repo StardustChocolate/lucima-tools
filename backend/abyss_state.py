@@ -8,8 +8,9 @@ callback before filling HP; later trusted events supply current battle values.
 """
 from __future__ import annotations
 
+from . import runtime_data as resources
+
 from copy import deepcopy
-from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -20,12 +21,12 @@ from .game_client import GameError
 from .game_data import activity_open, enabled, timestamp
 
 
-@lru_cache(maxsize=1)
+@resources.cached
 def metadata() -> dict:
     root = Path(os.environ.get("ARK_ASSET_ROOT") or Path(__file__).resolve().parent.parent)
     path = root / "assets" / "abyss_battle_static.json"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = resources.read_json("assets/abyss_battle_static.json")
     except (OSError, ValueError) as exc:
         raise GameError("缺少深渊战斗静态资料，请更新资源") from exc
     required = {"Role", "Skill", "Status", "Fantasy", "AIAction", "Scene", "Activity", "RoleProperty",

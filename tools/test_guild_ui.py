@@ -151,6 +151,7 @@ class GuildUITests(unittest.TestCase):
                 "/api/tasks": {"toggle": [], "manual": [], "buyTargets": {}},
                 "/api/update/status": {"testServer": True, "available": False},
                 "/api/update/check": {"testServer": True, "available": False},
+                "/api/resources/status": {"bundled": True, "phase": "ready", "version": ""},
                 "/api/logs/auto": {"entries": [], "logSeq": 0},
                 "/api/guild/overview": {"guild": summary("刷新后的佣兵团", 4)},
                 "/api/guild/store/buy": {"guild": summary(revision=10)},
@@ -177,6 +178,27 @@ class GuildUITests(unittest.TestCase):
 
     def count(self, path):
         return sum(row[0] == path for row in self.requests)
+
+    def test_daily_login_and_guild_sync_waits_are_visible_without_disabling_settings(self):
+        self.enter_guild()
+        for index, reason in enumerate(('等待每日重登', '等待佣兵团同步')):
+            self.page.evaluate("guild => applyGuildSnapshot('first', guild)",
+                               summary(revision=10 + index, waiting=reason, claimError='old error'))
+            for identifier in ('guildSigninState', 'guildDonateState', 'guildAidState',
+                               'guildWeeklyState', 'guildStoreState', 'guildCaptainStoreState', 'guildScoreState'):
+                self.assertEqual(self.page.locator('#' + identifier).inner_text(), reason)
+                classes = self.page.locator('#' + identifier).get_attribute('class') or ''
+                self.assertNotIn('ready', classes)
+                self.assertNotIn('error', classes)
+            self.assertTrue(self.page.locator('#guildAutoSignin').is_enabled())
+            self.assertTrue(self.page.locator('#guildAutoDonate').is_enabled())
+            self.assertEqual(self.page.locator('#guildRefresh').is_disabled(), reason == '等待每日重登')
+            self.assertTrue(self.page.locator('#guildScoreStart').is_disabled())
+            if index == 0:
+                self.page.locator('#guildManualStoreOptions').click()
+            self.assertTrue(all(self.page.locator('#guildManualStoreGoods button').nth(i).is_disabled()
+                                for i in range(self.page.locator('#guildManualStoreGoods button').count())))
+        self.assertEqual(self.count('/api/guild/overview'), 0)
 
     def test_cached_summary_no_extra_entry_requests_and_other_features_absent(self):
         self.enter_guild()
@@ -361,6 +383,56 @@ class GuildUITests(unittest.TestCase):
         self.page.evaluate("activeAccount='first'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
         self.assertEqual(inputs.nth(0).input_value(), "0")
         self.assertEqual(inputs.nth(1).input_value(), "0")
+
+    def test_donation_reserve_editing_survives_background_refresh(self):
+        self.page.set_viewport_size({"width": 390, "height": 900})
+        self.enter_guild()
+        self.page.locator("#guildDonateOptions").click()
+        for key, value in (("courage", "25"), ("gold", "50000")):
+            field = self.page.locator(f'.guild-donate-reserve[data-key="{key}"]')
+            saved_before = self.count("/api/toggles")
+            field.fill("")
+            for length in range(len(value) + 1):
+                if length:
+                    field.press(value[length - 1])
+                self.page.evaluate("applyGuildSnapshot('first', {...ACCOUNTS.first.guild, revision:ACCOUNTS.first.guild.revision+1})")
+                self.assertEqual(field.input_value(), value[:length])
+                self.assertTrue(field.evaluate("el => document.activeElement === el"))
+            self.assertEqual(field.input_value(), value)
+            self.assertEqual(self.count("/api/toggles"), saved_before)
+            field.press("Tab")
+            self.page.wait_for_function("!document.getElementById('guildAutoDonate').disabled")
+            saved = [body for path, body in self.requests if path == "/api/toggles"][-1]
+            self.assertEqual(saved["params"]["guild_auto_donate"]["reserve"][key], int(value))
+            self.assertEqual(field.input_value(), value)
+
+    def test_donation_reserve_drafts_stay_with_the_account_and_session(self):
+        self.enter_guild()
+        self.page.locator("#guildDonateOptions").click()
+        field = self.page.locator('.guild-donate-reserve[data-key="courage"]')
+        field.fill("25")
+        self.page.evaluate("activeAccount='second'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
+        self.assertEqual(field.input_value(), "10")
+        self.page.evaluate("activeAccount='first'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
+        self.assertEqual(field.input_value(), "25")
+        self.page.evaluate("""() => {
+            ACCOUNTS.first = {...ACCOUNTS.first, params:{guild_auto_donate:{reserve:{courage:17}}}};
+            window.dispatchEvent(new CustomEvent('lucima:account-change'));
+        }""")
+        self.assertEqual(field.input_value(), "17")
+        self.assertEqual(self.count("/api/toggles"), 0)
+
+    def test_donation_reserve_failed_save_restores_saved_value(self):
+        self.enter_guild()
+        self.page.locator("#guildDonateOptions").click()
+        field = self.page.locator('.guild-donate-reserve[data-key="courage"]')
+        field.fill("25")
+        self.toggle_error = True
+        field.press("Tab")
+        self.page.wait_for_function("(ACCOUNTS.first.logHtml || '').includes('自动捐赠设置保存失败')")
+        self.assertEqual(field.input_value(), "10")
+        self.page.evaluate("applyGuildSnapshot('first', {...ACCOUNTS.first.guild, revision:ACCOUNTS.first.guild.revision+1})")
+        self.assertEqual(field.input_value(), "10")
 
     def test_mobile_desktop_light_dark_layout(self):
         self.enter_guild()

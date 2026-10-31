@@ -1,14 +1,15 @@
 """Member shop: cached eligibility, periodic automation and explicit purchases."""
 from __future__ import annotations
 
+from . import runtime_data as resources
+
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 import json
 import os
 from pathlib import Path
 
-from .game_client import GameError
+from .game_client import GameError, TaskDeferred
 from .game_data import activity_open
 from .guild import has_guild, object_id, positive_int, _nonnegative_int
 from .tasks import _buy_payload, _synth_record
@@ -16,10 +17,10 @@ from .tasks import _buy_payload, _synth_record
 UTC = timezone.utc
 
 
-@lru_cache(maxsize=1)
+@resources.cached
 def _catalog():
     root = Path(os.environ.get('ARK_ASSET_ROOT') or Path(__file__).resolve().parents[1])
-    data = json.loads((root / 'assets/guild_store.json').read_text(encoding='utf-8'))
+    data = resources.read_json("assets/guild_store.json")
     if data.get('schema') != 1 or not data.get('goods'):
         raise GameError('团员商店清单无效，请更新应用资源')
     return data
@@ -172,7 +173,11 @@ class GuildStoreService:
         uncertain[identifier] = {'currency': meta['currency'], 'hold': True}
         # Do not clear this guard on a guild refresh: only a new login includes
         # authoritative personal StoreRecordContainer records.
-        result = self.guild._call('StoreHandler.BuyCommodity', _buy_payload(self.client, record, count))
+        try:
+            result = self.guild._call('StoreHandler.BuyCommodity', _buy_payload(self.client, record, count))
+        except TaskDeferred:
+            uncertain.pop(identifier, None)
+            raise
         costs = result.get('CostItems')
         confirmed_balance = isinstance(costs, list) and any(
             isinstance(entry, dict) and isinstance(entry.get('NowItem'), dict)

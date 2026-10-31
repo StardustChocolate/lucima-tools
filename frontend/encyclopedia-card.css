@@ -45,7 +45,7 @@
 
 .encyclopedia-ark2 .portrait-layer {
   position: absolute;
-  z-index: 0;
+  z-index: 3;
   top: 30px;
   right: 30px;
   width: var(--portrait-width);
@@ -289,7 +289,7 @@
 
 .encyclopedia-ark2 .card-content {
   position: relative;
-  z-index: 3;
+  z-index: 4;
   min-height: var(--card-min-height);
 }
 

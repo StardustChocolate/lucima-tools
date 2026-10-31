@@ -61,6 +61,10 @@ _VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Z
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
+def routine_check_delay():
+    return CHECK_INTERVAL + random.uniform(-CHECK_JITTER, CHECK_JITTER)
+
+
 class UpdateError(RuntimeError):
     pass
 
@@ -238,10 +242,12 @@ class UpdateService:
             if self._wake.wait(delay):
                 self._wake.clear()
             ok = self.check_now()
-            delay = (
-                CHECK_INTERVAL + random.uniform(-CHECK_JITTER, CHECK_JITTER)
-                if ok else RETRY_INTERVAL
-            )
+            delay = routine_check_delay() if ok else RETRY_INTERVAL
+            try:
+                from .resource_update import service as resource_service
+                resource_service.on_software_check(delay)
+            except Exception:
+                log.exception("未能唤醒游戏数据检查")
 
     def _validated_payload(self, payload: dict) -> dict:
         if payload.get("schema") != 1 or payload.get("channel") != self._channel:
