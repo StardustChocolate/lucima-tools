@@ -45,8 +45,8 @@ goto summary
 echo.
 echo === [Windows] Building debug package ===
 taskkill /F /IM LucimaTools.exe >nul 2>&1
-if exist "dist\LucimaTools" rmdir /s /q "dist\LucimaTools"
-python -m PyInstaller desktop\LucimaTools.spec --noconfirm --clean
+if exist "build\windows\dist\LucimaTools" rmdir /s /q "build\windows\dist\LucimaTools"
+python -m PyInstaller desktop\LucimaTools.spec --noconfirm --clean --distpath build\windows\dist --workpath build\windows\work
 exit /b %errorlevel%
 
 :android
@@ -61,11 +61,11 @@ popd
 exit /b %GRADLE_RESULT%
 
 :package_all
-python tools\package_debug.py --clean --windows-dir dist\LucimaTools --android-apk android\app\build\outputs\apk\debug\app-debug.apk
+python tools\package_debug.py --clean --windows-dir build\windows\dist\LucimaTools --android-apk android\app\build\outputs\apk\debug\app-debug.apk
 exit /b %errorlevel%
 
 :package_win
-python tools\package_debug.py --windows-dir dist\LucimaTools
+python tools\package_debug.py --windows-dir build\windows\dist\LucimaTools
 exit /b %errorlevel%
 
 :package_android

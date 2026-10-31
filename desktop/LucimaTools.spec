@@ -2,9 +2,9 @@
 """PyInstaller 打包配置：LucimaTools 桌面版。
 
 用法（在项目根目录）：
-    pyinstaller desktop/LucimaTools.spec --noconfirm
+    pyinstaller desktop/LucimaTools.spec --noconfirm --distpath build/windows/dist --workpath build/windows/work
 
-产物：dist/LucimaTools/LucimaTools.exe （onedir，双击运行）
+产物：build/windows/dist/LucimaTools/LucimaTools.exe （onedir，双击运行）
 
 说明：
 - 前端 frontend/、运行资源 assets/、backend/*.json 数据表作为数据一并打包。
@@ -23,7 +23,7 @@ ROOT = os.path.abspath(os.getcwd())
 
 # 更新服务地址只允许在本地构建环境注入，不进入源码仓库。
 update_url = os.environ.get("LUCIMA_UPDATE_URL", "").strip()
-update_endpoint = os.path.join(ROOT, "build", "update-endpoint.json")
+update_endpoint = os.path.join(ROOT, "build", "windows", "update-endpoint.json")
 if update_url:
     os.makedirs(os.path.dirname(update_endpoint), exist_ok=True)
     with open(update_endpoint, "w", encoding="utf-8") as stream:

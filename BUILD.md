@@ -33,9 +33,19 @@ debug/<版本号>/
 └── LucimaTools-android-debug-<版本号>.apk
 ```
 
-`dist/` 与 `android/app/build/` 是可重新生成的中间目录；`build/` 还包含本机发布工具、
+`build/windows/` 与 `android/app/build/` 是可重新生成的中间目录；`build/` 还包含本机发布工具、
 发布状态和历史备份，目前不能整目录删除。`debug/` 和 `releases/` 分别保存测试包
 与已验证的正式包，上述目录均不进入 Git。
+
+Windows 的构建内容集中保存，不再在项目根生成 `dist/`：
+
+```text
+desktop/                         # 启动代码、图标和打包配置
+build/windows/
+├── work/LucimaTools/             # PyInstaller 编译中间文件
+├── dist/LucimaTools/             # 可直接运行的程序及依赖
+└── update-endpoint.json          # 正式构建时生成的更新配置
+```
 
 ## 正式构建本机配置
 
@@ -198,7 +208,7 @@ python assets/sync_full.py
 
 中间产物：
 
-- Windows：`dist/LucimaTools/`（含 `LucimaTools.exe` + `_internal`）
+- Windows：`build/windows/dist/LucimaTools/`（含 `LucimaTools.exe` + `_internal`）
 - Android Release：`android/app/build/outputs/apk/release/app-release.apk`
 - Android Debug：`android/app/build/outputs/apk/debug/app-debug.apk`
 
@@ -223,7 +233,7 @@ python assets/sync_full.py
 - **桌面壳联调**：`python -m desktop.run`
 - **正式打包**：`build.bat win`
 - **测试打包**：`build-debug.bat win`
-- **产物**：`dist\LucimaTools\LucimaTools.exe`，双击运行，弹出独立原生窗口。
+- **产物**：`build\windows\dist\LucimaTools\LucimaTools.exe`，双击运行，弹出独立原生窗口。
 - **关闭窗口**：点击标题栏关闭按钮会显示主题化确认弹窗，勾选“最小化到托盘”后点击“确认”
   可让自动化继续在后台运行；托盘菜单可恢复窗口或退出程序。
 - 网络统一跟随操作系统，使用代理时在系统侧配置。
