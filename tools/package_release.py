@@ -58,10 +58,10 @@ def expected_endpoint(raw: bytes, expected_url: str, label: str) -> None:
 
 def validate_windows(source: Path, expected_url: str) -> None:
     source = source.resolve()
-    expected = {"LucimaTools.exe", "_internal"}
+    expected = {"LucimaTools.debug.exe", "_internal"}
     if not source.is_dir() or {entry.name for entry in source.iterdir()} != expected:
         raise SystemExit(
-            "Windows bundle must contain only LucimaTools.exe and _internal"
+            "Windows bundle must contain only LucimaTools.debug.exe and _internal"
         )
     endpoint = source / "_internal" / "update-endpoint.json"
     if not endpoint.is_file():

@@ -49,9 +49,9 @@ goto summary
 :win
 echo.
 echo === [Windows] Building release package ===
-taskkill /F /IM LucimaTools.exe >nul 2>&1
-if exist "build\windows\dist\LucimaTools" rmdir /s /q "build\windows\dist\LucimaTools"
-python -m PyInstaller desktop\LucimaTools.spec --noconfirm --clean --distpath build\windows\dist --workpath build\windows\work
+taskkill /F /IM LucimaTools.debug.exe >nul 2>&1
+if exist "dist\LucimaTools.debug" rmdir /s /q "dist\LucimaTools.debug"
+python -m PyInstaller desktop\LucimaTools.spec --noconfirm --clean
 exit /b %errorlevel%
 
 :android
@@ -74,11 +74,11 @@ popd
 exit /b %GRADLE_RESULT%
 
 :package_all
-python tools\package_release.py --clean --windows-dir build\windows\dist\LucimaTools --android-apk android\app\build\outputs\apk\release\app-release.apk --update-url "%LUCIMA_UPDATE_URL%"
+python tools\package_release.py --clean --windows-dir dist\LucimaTools.debug --android-apk android\app\build\outputs\apk\release\app-release.apk --update-url "%LUCIMA_UPDATE_URL%"
 exit /b %errorlevel%
 
 :package_win
-python tools\package_release.py --windows-dir build\windows\dist\LucimaTools --update-url "%LUCIMA_UPDATE_URL%"
+python tools\package_release.py --windows-dir dist\LucimaTools.debug --update-url "%LUCIMA_UPDATE_URL%"
 exit /b %errorlevel%
 
 :package_android
@@ -93,8 +93,7 @@ echo ============================================
 echo   Verified release build finished.
 python -c "from backend.version import APP_VERSION; print(f'  Output: releases\\{APP_VERSION}\\')"
 echo   Candidate manifest: releases\preview.json
-echo   Preview publishing: publish-preview.bat
-echo   After testing: publish-stable.bat
+echo   Manual promotion only: promote-release.bat
 echo ============================================
 pause
 exit /b 0

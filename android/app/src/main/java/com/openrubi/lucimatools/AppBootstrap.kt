@@ -1,9 +1,11 @@
 package com.openrubi.lucimatools
 
 import android.content.Context
+import android.util.Log
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -18,9 +20,17 @@ import kotlin.concurrent.thread
  */
 object AppBootstrap {
 
-    const val PORT = 27843
+    private const val PREFERRED_PORT = 27843
+    private val instanceId = UUID.randomUUID().toString()
 
     private val started = AtomicBoolean(false)
+    private val checking = AtomicBoolean(false)
+    @Volatile var status = "正在准备启动"
+        private set
+    @Volatile var failure: String? = null
+        private set
+    @Volatile var endpoint: LocalServerEndpoint? = null
+        private set
 
     /** web 资源释放目标目录（frontend/ 与 assets/），Python 标准库服务器 open() 从这里读。 */
     fun assetRoot(ctx: Context): File = File(ctx.filesDir, "web")
@@ -30,29 +40,55 @@ object AppBootstrap {
      * 之后调用直接返回。可从 Service.onStartCommand 或 Activity.onCreate 调用。
      */
     fun ensureStarted(ctx: Context) {
-        if (!started.compareAndSet(false, true)) return
-
+        EquipmentNotifications.initialize(ctx.applicationContext)
         val app = ctx.applicationContext
-
-        // 1) 启动 Python 运行时（进程内单例）
-        if (!Python.isStarted()) {
-            Python.start(AndroidPlatform(app))
+        if (!started.compareAndSet(false, true)) {
+            val current = endpoint ?: return
+            if (!checking.compareAndSet(false, true)) return
+            thread(isDaemon = true, name = "ark-server-health") {
+                try {
+                    if (!current.isReady()) {
+                        val runningPort = if (Python.isStarted()) Python.getInstance()
+                            .getModule("backend.android_entry").callAttr("running_port").toInt() else 0
+                        if (runningPort == 0 && endpoint === current) {
+                            endpoint = null
+                            started.set(false)
+                            ensureStarted(app)
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.e("LucimaStartup", "Unable to check local server", error)
+                } finally { checking.set(false) }
+            }
+            return
         }
-
-        // 2) 释放打包前端与静态资源到私有目录（Python open() 需要真实文件系统）
-        val assetRoot = assetRoot(app)
-        AssetSync.syncWeb(app, assetRoot)
-
-        // 3) 后台线程起标准库 HTTP 服务（serve_forever 永久阻塞）。
-        //    代理参数保留为空，网络由系统 VPN/TUN 接管。
+        failure = null
+        status = "正在初始化运行环境"
+        // Both Python.start and first-install extraction can take seconds.
+        // Never run either on the Activity/Service main thread.
         thread(isDaemon = true, name = "ark-server") {
             try {
-                Python.getInstance()
+                if (!Python.isStarted()) Python.start(AndroidPlatform(app))
+                status = "正在准备界面资源，首次启动可能需要稍等"
+                val assetRoot = assetRoot(app)
+                AssetSync.syncWeb(app, assetRoot)
+                status = "正在启动本地服务"
+                val boundPort = Python.getInstance()
                     .getModule("backend.android_entry")
-                    .callAttr("start", app.filesDir.absolutePath, assetRoot.absolutePath, "", PORT,
-                        app.applicationInfo.sourceDir)
+                    .callAttr("start", app.filesDir.absolutePath, assetRoot.absolutePath, "", PREFERRED_PORT,
+                        app.applicationInfo.sourceDir, instanceId).toInt()
+                endpoint = LocalServerEndpoint(boundPort, instanceId)
+                status = "本地服务已就绪"
             } catch (e: Throwable) {
-                // 起服务失败：复位标志，允许后续重试引导
+                Log.e("LucimaStartup", "Startup failed at $status", e)
+                val detail = "$status\n${Log.getStackTraceString(e)}"
+                runCatching {
+                    val file = File(app.filesDir, "logs/startup.log")
+                    file.parentFile?.mkdirs()
+                    file.writeText(detail.take(64 * 1024))
+                }
+                failure = detail
+                endpoint = null
                 started.set(false)
             }
         }

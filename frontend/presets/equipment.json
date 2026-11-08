@@ -1,0 +1,1258 @@
+{
+  "format": "ark-equipment-filter-scheme",
+  "version": 2,
+  "scheme": {
+    "id": "plan-equipment-20261027",
+    "name": "装备1027",
+    "slots": {
+      "weapon": [
+        {
+          "id": "example-weapon-output",
+          "color": 0,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Torrent",
+            "Penetration",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Critical",
+            "Immunity",
+            "Rage",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "detail-1790200915715-6ng5k",
+          "color": 1,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Health",
+            "Defense",
+            "Immunity",
+            "Counter",
+            "Injury",
+            "Resist"
+          ]
+        },
+        {
+          "id": "detail-1790244339354-o1jgv",
+          "color": 2,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "5",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 37,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1790359853948-ctahw",
+          "color": 3,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 40,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        }
+      ],
+      "helmet": [
+        {
+          "id": "example-helmet-output",
+          "color": 0,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Torrent",
+            "Penetration",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Lifesteal",
+            "Rage",
+            "Immunity",
+            "Critical"
+          ]
+        },
+        {
+          "id": "example-helmet-survival",
+          "color": 1,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Immunity",
+            "Resist",
+            "Counter",
+            "Injury",
+            "Rage"
+          ]
+        },
+        {
+          "id": "detail-1790359890632-rpqwm",
+          "color": 2,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "7",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 40,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1792001345529-lyjwx",
+          "color": 3,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter"
+          ]
+        }
+      ],
+      "armor": [
+        {
+          "id": "example-armor-output",
+          "color": 0,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Critical",
+            "Immunity",
+            "Rage",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "detail-1790201567747-7bn5c",
+          "color": 1,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Counter",
+            "Injury",
+            "Revenge",
+            "Rage"
+          ]
+        },
+        {
+          "id": "detail-1790359963334-v29dg",
+          "color": 2,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "6",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 40,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Speed",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1792001492258-kkzaz",
+          "color": 3,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Health",
+            "Injury",
+            "Immunity"
+          ]
+        }
+      ],
+      "necklace": [
+        {
+          "id": "example-necklace-output",
+          "color": 0,
+          "main": "CriticalDamageRate",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Critical",
+            "Rage",
+            "Immunity",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "example-necklace-hp",
+          "color": 1,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Injury",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-necklace-defense",
+          "color": 2,
+          "main": "DefenceRate",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Injury",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-necklace-counter",
+          "color": 3,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "mixed"
+            },
+            {
+              "stat": "DefenceValue",
+              "value": "28",
+              "mode": "mixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "mixed"
+            }
+          ],
+          "mixRequired": 2,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Pinch",
+            "Immunity",
+            "Health",
+            "Defense",
+            "Resist"
+          ]
+        },
+        {
+          "id": "example-necklace-bruiser",
+          "color": 4,
+          "main": "CriticalDamageRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Lifesteal",
+            "Defense"
+          ]
+        },
+        {
+          "id": "example-necklace-speed",
+          "color": 5,
+          "main": "",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 45,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1790360020320-ecgcm",
+          "color": 6,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "AttackValue",
+              "value": "33",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "7",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1793084879926-cl70k",
+          "color": 7,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "minScore": 38,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Defense",
+            "Health",
+            "Lifesteal",
+            "Immunity",
+            "Counter",
+            "Injury",
+            "Revenge",
+            "Resist"
+          ],
+          "mixRequired": 0
+        }
+      ],
+      "ring": [
+        {
+          "id": "example-ring-output",
+          "color": 0,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Critical",
+            "Rage",
+            "Immunity",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "example-ring-bruiser",
+          "color": 1,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "mixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "mixed"
+            }
+          ],
+          "mixRequired": 1,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Pinch",
+            "Lifesteal",
+            "Immunity",
+            "Penetration"
+          ]
+        },
+        {
+          "id": "example-ring-hp",
+          "color": 2,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Immunity",
+            "Injury",
+            "Resist",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-ring-resist",
+          "color": 3,
+          "main": "ResistanceRate",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Resist",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "example-ring-speed",
+          "color": 4,
+          "main": "",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 45,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1790360091108-xmru3",
+          "color": 5,
+          "main": "ResistanceRate",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 37,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1792001617927-vtvaq",
+          "color": 6,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Health",
+            "Immunity"
+          ]
+        },
+        {
+          "id": "detail-1792001677063-m8hrw",
+          "color": 7,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Immunity",
+            "Health",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1792458520772-adw85",
+          "color": 0,
+          "main": "ResistanceRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "5",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceValue",
+              "value": "28",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "3",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "detail-1793085131887-j8b9l",
+          "color": 1,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Lifesteal",
+            "Injury",
+            "Revenge",
+            "Counter"
+          ],
+          "mixRequired": 0
+        }
+      ],
+      "boots": [
+        {
+          "id": "example-boots-speed-output",
+          "color": 0,
+          "main": "SpeedValue",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Lifesteal",
+            "Rage",
+            "Critical",
+            "Immunity",
+            "Speed",
+            "Attack",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-boots-attack-output",
+          "color": 1,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Critical",
+            "Lifesteal",
+            "Counter",
+            "Rage",
+            "Pinch",
+            "Attack",
+            "Speed",
+            "Immunity",
+            "Penetration",
+            "Torrent"
+          ]
+        },
+        {
+          "id": "example-boots-survival",
+          "color": 2,
+          "main": "SpeedValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1790201123251-yid2w",
+          "color": 3,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1790360142399-b5t3w",
+          "color": 4,
+          "main": "SpeedValue",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "7",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 37,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1792001730259-a21d8",
+          "color": 5,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Immunity",
+            "Health",
+            "Counter",
+            "Resist",
+            "Injury",
+            "Revenge",
+            "Lifesteal",
+            "Defense"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -7,11 +7,17 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.Handler
+import android.os.Looper
+import com.chaquo.python.Python
+import kotlin.concurrent.thread
 import androidx.core.app.NotificationCompat
 
 /**
@@ -31,11 +37,36 @@ class AutomationService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private val healthHandler = Handler(Looper.getMainLooper())
+    private val healthCheck = object : Runnable {
+        override fun run() {
+            acquireLocks()
+            AppBootstrap.ensureStarted(this@AutomationService)
+            healthHandler.postDelayed(this, 60_000)
+        }
+    }
+    private val wakeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            acquireLocks()
+            thread(isDaemon = true, name = "automation-wake") {
+                try {
+                    if (Python.isStarted()) Python.getInstance().getModule("backend.background").callAttr("wake_all")
+                } catch (_: Exception) { /* The health thread retries independently. */ }
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         serviceRunning = true
         createChannel()
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(wakeReceiver, filter, RECEIVER_NOT_EXPORTED)
+        else @Suppress("DEPRECATION") registerReceiver(wakeReceiver, filter)
+        healthHandler.postDelayed(healthCheck, 60_000)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -51,6 +82,8 @@ class AutomationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        healthHandler.removeCallbacks(healthCheck)
+        unregisterReceiver(wakeReceiver)
         releaseLocks()
         serviceRunning = false
         super.onDestroy()
@@ -110,7 +143,11 @@ class AutomationService : Service() {
 
         if (wifiLock == null) {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            // Android 10–13 low-latency locks only apply with screen on and
+            // foreground UI. High-perf also covers screen-off on those releases.
+            // Android 14+ maps high-perf to low-latency; CPU/service recovery
+            // must remain independent of that Wi-Fi optimization.
+            val mode = if (Build.VERSION.SDK_INT >= 34)
                 WifiManager.WIFI_MODE_FULL_LOW_LATENCY
             else
                 @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF

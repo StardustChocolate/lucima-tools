@@ -55,9 +55,14 @@ LucimaTools · 璐茜玛的深层幻影 是一个致力于降低星陨玩家日�
 登录密码仅用于当次换取令牌，不会保存到磁盘。登录令牌由 Windows DPAPI 或 Android
 Keystore 加密保护。
 
+Windows 安装包支持 Windows 10 1809 及以上、Windows 11 的 64 位系统，内置 Python 3.11.9，
+无需安装 Python 或配置环境变量，也不受电脑已有 Python 版本影响。安装程序检测并离线补齐
+Microsoft Edge WebView2 运行时。系统自带的 .NET Framework 需可用；若被移除或损坏，启动提示会给出修复方式。
+启动失败时会弹出原因，日志位于 `%LOCALAPPDATA%\LucimaTools.debug\UserData\logs\startup.log`。
+
 ### 开发者构建
 
-安装依赖，以下命令在 Windows 项目根目录执行，需先安装 Python 3.12：
+安装依赖，以下命令在 Windows 项目根目录执行，桌面端使用 Python 3.11.9：
 
 ```powershell
 python -m venv .venv

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import hashlib
 from ctypes import wintypes
 
 
@@ -111,10 +112,32 @@ def _android_vault():
         raise TokenVaultError("Android Keystore 桥不可用") from error
 
 
+def _macos_keychain(plaintext,account):
+    """Keep login secrets in the current user's native Keychain; files hold a reference."""
+    try:
+        import Security
+        query={Security.kSecClass:Security.kSecClassGenericPassword,
+               Security.kSecAttrService:'com.openrubi.lucimatools.debug.login',Security.kSecAttrAccount:account}
+        if plaintext is None:
+            query.update({Security.kSecReturnData:True,Security.kSecMatchLimit:Security.kSecMatchLimitOne})
+            status,data=Security.SecItemCopyMatching(query,None)
+            if status!=0:raise TokenVaultError(f'macOS钥匙串读取失败 ({status})')
+            return bytes(data).decode('utf-8')
+        values={Security.kSecValueData:plaintext.encode('utf-8')}
+        result=Security.SecItemAdd({**query,**values},None)
+        status=result[0] if isinstance(result,tuple) else result
+        if status==Security.errSecDuplicateItem:status=Security.SecItemUpdate(query,values)
+        if status!=0:raise TokenVaultError(f'macOS钥匙串保存失败 ({status})')
+        return 'keychain-v1:'+hashlib.sha256(account.encode()).hexdigest()
+    except TokenVaultError:raise
+    except Exception as error:raise TokenVaultError('macOS钥匙串不可用') from error
+
+
 def protect(platform: str, plaintext: str, account: str) -> str:
     """使用当前平台安全存储加密文本，返回带版本前缀的密文。"""
     if not plaintext:
         raise TokenVaultError("不能保存空登录令牌")
+    if platform=='macos':return _macos_keychain(plaintext,account)
     if platform == "android":
         try:
             return str(_android_vault().encrypt(plaintext, account))
@@ -133,6 +156,10 @@ def protect(platform: str, plaintext: str, account: str) -> str:
 
 def unprotect(platform: str, ciphertext: str, account: str) -> str:
     """解密 :func:`protect` 返回的密文。"""
+    if platform=='macos':
+        expected='keychain-v1:'+hashlib.sha256(account.encode()).hexdigest()
+        if ciphertext!=expected:raise TokenVaultError('macOS钥匙串引用与账号不一致')
+        return _macos_keychain(None,account)
     if platform == "android":
         try:
             return str(_android_vault().decrypt(ciphertext, account))

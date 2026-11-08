@@ -1,240 +1,216 @@
-"""Read the game's UnityFS text bundles using only the Python standard library.
+"""Small, bounded UnityFS/TextAsset reader for the official game data bundles.
 
-Only TextAsset and the known CHS localization layout are accepted. Blocks are
-spooled to disk, so reading CHS does not retain all ten languages in memory.
+Only UnityFS 6–8 and serialized files 17–22 are supported. Unknown formats fail
+before publication. Blocks are expanded to disk, not one large in-memory image.
+No executable Unity objects or downloaded Python are loaded.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import io
 import re
 import struct
-import tempfile
+from pathlib import Path
 
-
-MAX_UNPACKED = 256 * 1024 * 1024
-
-
-class BundleError(ValueError):
-    pass
+MAX_BLOCK = 32 * 1024 * 1024
+MAX_TOTAL = 768 * 1024 * 1024
 
 
 class Reader:
-    def __init__(self, stream, endian=">", start=0, size=None):
-        self.stream, self.endian, self.start = stream, endian, start
-        self.end = None if size is None else start + size
-        stream.seek(start)
+    def __init__(self, stream, endian='>'):
+        self.stream, self.endian = stream, endian
 
     def read(self, size):
-        if size < 0 or (self.end is not None and self.stream.tell() + size > self.end):
-            raise BundleError("Unity 数据越界")
-        data = self.stream.read(size)
-        if len(data) != size:
-            raise BundleError("Unity 数据不完整")
-        return data
-
-    def value(self, fmt):
-        return struct.unpack(self.endian + fmt, self.read(struct.calcsize(fmt)))[0]
-
-    def count(self, limit=1_000_000):
-        value = self.value("i")
-        if not 0 <= value <= limit:
-            raise BundleError("Unity 数据数量异常")
+        if not 0 <= size <= MAX_TOTAL:
+            raise ValueError('游戏资料长度无效')
+        value = self.stream.read(size)
+        if len(value) != size:
+            raise ValueError('游戏资料下载不完整')
         return value
 
-    def align(self, alignment=4):
-        self.read((-(self.stream.tell() - self.start)) % alignment)
+    def number(self, fmt):
+        return struct.unpack(self.endian + fmt, self.read(struct.calcsize(fmt)))[0]
 
-    def zero(self):
-        data = bytearray()
-        while len(data) < 4096:
-            char = self.read(1)
-            if char == b"\0":
-                return data.decode("utf-8")
-            data.extend(char)
-        raise BundleError("Unity 字符串过长")
+    def align(self, size=4):
+        self.stream.seek((-self.stream.tell()) % size, 1)
 
     def string(self):
-        raw = self.read(self.count(32 * 1024 * 1024))
-        self.align()
-        return raw.decode("utf-8-sig")
+        value = bytearray()
+        while len(value) < 4096:
+            char = self.read(1)
+            if char == b'\0':
+                return value.decode('utf-8')
+            value.extend(char)
+        raise ValueError('游戏资料字符串过长')
 
 
-def lz4(data, expected):
-    """Decode a raw LZ4 block, including overlapping back references."""
-    out, cursor = bytearray(), 0
-
-    def length(initial):
-        nonlocal cursor
-        result = initial
-        if initial == 15:
+def lz4_block(data, expected):
+    if not 0 <= expected <= MAX_BLOCK:
+        raise ValueError('游戏资料压缩块过大')
+    output = bytearray()
+    index = 0
+    while index < len(data):
+        token = data[index]
+        index += 1
+        literal = token >> 4
+        if literal == 15:
             while True:
-                if cursor >= len(data):
-                    raise BundleError("LZ4 长度不完整")
-                extra = data[cursor]; cursor += 1
-                result += extra
+                extra = data[index]; index += 1; literal += extra
                 if extra != 255:
                     break
-        return result
-
-    while cursor < len(data):
-        token = data[cursor]; cursor += 1
-        size = length(token >> 4)
-        if cursor + size > len(data) or len(out) + size > expected:
-            raise BundleError("LZ4 字面量越界")
-        out.extend(data[cursor:cursor + size]); cursor += size
-        if cursor == len(data):
+        if index + literal > len(data) or len(output) + literal > expected:
+            raise ValueError('游戏资料压缩块无效')
+        output.extend(data[index:index + literal]); index += literal
+        if index == len(data):
             break
-        if cursor + 2 > len(data):
-            raise BundleError("LZ4 引用不完整")
-        offset = data[cursor] | data[cursor + 1] << 8; cursor += 2
-        size = length(token & 15) + 4
-        if offset == 0 or offset > len(out) or len(out) + size > expected:
-            raise BundleError("LZ4 引用越界")
-        # Repeating the referenced period handles overlap without a byte loop.
-        begin = len(out) - offset
-        period = out[begin:begin + min(offset, size)]
-        out.extend((period * ((size + offset - 1) // offset))[:size])
-    if len(out) != expected:
-        raise BundleError("LZ4 解压大小不符")
-    return bytes(out)
+        offset = data[index] | data[index + 1] << 8; index += 2
+        length = (token & 15) + 4
+        if (token & 15) == 15:
+            while True:
+                extra = data[index]; index += 1; length += extra
+                if extra != 255:
+                    break
+        if not offset or offset > len(output) or len(output) + length > expected:
+            raise ValueError('游戏资料压缩引用无效')
+        start = len(output) - offset
+        pattern = output[start:start + min(offset, length)]
+        output.extend((pattern * ((length + offset - 1) // offset))[:length])
+    if len(output) != expected:
+        raise ValueError('游戏资料解压长度不符')
+    return output
 
 
-def unpack(data, size, flags):
-    if not 0 <= size <= MAX_UNPACKED:
-        raise BundleError("Unity 解压大小异常")
-    mode = flags & 63
-    if mode == 0:
-        if len(data) != size:
-            raise BundleError("Unity 块大小不符")
+def decompress(data, size, flags):
+    kind = flags & 63
+    if kind == 0 and len(data) == size:
         return data
-    if mode in (2, 3):
-        return lz4(data, size)
-    raise BundleError(f"暂不支持的数据包压缩方式：{mode}")
+    if kind in (2, 3):
+        return lz4_block(data, size)
+    raise ValueError('游戏资料使用了尚不支持的压缩格式')
 
 
-@contextmanager
-def bundle_files(path):
-    with open(path, "rb") as stream, tempfile.TemporaryFile() as expanded:
-        reader = Reader(stream)
-        if reader.zero() != "UnityFS":
-            raise BundleError("不是 UnityFS 数据包")
-        version = reader.value("I")
-        if version not in (6, 7, 8):
-            raise BundleError("不支持的 UnityFS 版本")
-        reader.zero()
-        engine = reader.zero()
-        total = reader.value("q")
-        compressed, raw_size, flags = (reader.value("I") for _ in range(3))
-        if flags & ~0x3ff or flags & 0x400:
-            raise BundleError("不支持的 UnityFS 标记")
-        header_end = stream.tell()
-        stream.seek(0, 2)
-        if stream.tell() != total:
-            raise BundleError("UnityFS 文件大小不符")
-        stream.seek(header_end)
-        if version >= 7 or tuple(map(int, re.findall(r"\d+", engine)[:3])) >= (2019, 4, 15):
-            reader.align(16)
-        start = stream.tell()
-        if flags & 0x80:
-            stream.seek(total - compressed)
-        info = Reader(io.BytesIO(unpack(reader.read(compressed), raw_size, flags)))
-        info.read(16)
-        blocks = [(info.value("I"), info.value("I"), info.value("H")) for _ in range(info.count(10000))]
-        nodes = [(info.value("q"), info.value("q"), info.value("I"), info.zero())
-                 for _ in range(info.count(10000))]
-        stream.seek(start if flags & 0x80 else start + compressed)
-        if flags & 0x200:
-            reader.align(16)
-        if sum(block[0] for block in blocks) > MAX_UNPACKED:
-            raise BundleError("UnityFS 数据包展开后过大")
-        for raw_size, compressed, block_flags in blocks:
-            expanded.write(unpack(reader.read(compressed), raw_size, block_flags))
-        size = expanded.tell()
-        if any(offset < 0 or count < 0 or offset + count > size for offset, count, _, _ in nodes):
-            raise BundleError("UnityFS 文件目录越界")
-        yield expanded, nodes
+def extract_texts(bundle: Path, output: Path, *, wanted=None):
+    """Return the verified TextAsset names written under output (flat files)."""
+    output.mkdir(parents=True, exist_ok=True)
+    scratch = output / '.bundle-blocks'
+    try:
+        with bundle.open('rb') as source, scratch.open('w+b') as expanded:
+            reader = Reader(source)
+            if reader.string() != 'UnityFS':
+                raise ValueError('游戏资料资源包签名无效')
+            version = reader.number('I')
+            if version not in (6, 7, 8):
+                raise ValueError('游戏资料资源包版本不受支持')
+            reader.string(); reader.string()
+            total = reader.number('Q')
+            compressed, plain, flags = (reader.number('I') for _ in range(3))
+            if total != bundle.stat().st_size or compressed > MAX_BLOCK or plain > MAX_BLOCK:
+                raise ValueError('游戏资料资源包长度无效')
+            if version >= 7:
+                reader.align(16)
+            start = source.tell()
+            if flags & 128:
+                source.seek(total - compressed)
+            info = Reader(io.BytesIO(decompress(reader.read(compressed), plain, flags)))
+            source.seek(start if flags & 128 else source.tell())
+            info.read(16)
+            blocks = []
+            count = info.number('i')
+            if not 0 < count <= 100000:
+                raise ValueError('游戏资料块数量无效')
+            for _ in range(count):
+                blocks.append((info.number('I'), info.number('I'), info.number('H')))
+            expanded_size = sum(row[0] for row in blocks)
+            if expanded_size > MAX_TOTAL:
+                raise ValueError('游戏资料资源包过大')
+            nodes = []
+            count = info.number('i')
+            if not 0 < count <= 100:
+                raise ValueError('游戏资料文件数量无效')
+            for _ in range(count):
+                offset, size = info.number('Q'), info.number('Q')
+                info.number('I'); info.string()
+                nodes.append((offset, size))
+            if flags & 512:
+                reader.align(16)
+            for plain_size, compressed_size, block_flags in blocks:
+                if compressed_size > MAX_BLOCK:
+                    raise ValueError('游戏资料压缩块过大')
+                expanded.write(decompress(reader.read(compressed_size), plain_size, block_flags))
+            expanded.flush()
+            names = set()
+            for offset, size in nodes:
+                if offset + size > expanded_size:
+                    raise ValueError('游戏资料文件偏移无效')
+                names.update(_serialized_texts(expanded, offset, size, output, wanted))
+            return names
+    finally:
+        scratch.unlink(missing_ok=True)
 
 
-def objects(stream, start, size):
-    reader = Reader(stream, start=start, size=size)
-    _, file_size, version, data_offset = (reader.value("I") for _ in range(4))
+def _serialized_texts(stream, base, size, output, wanted):
+    stream.seek(base)
+    reader = Reader(stream)
+    reader.number('I'); file_size = reader.number('I')
+    version, data_offset = reader.number('I'), reader.number('I')
     if not 17 <= version <= 22:
-        raise BundleError("不支持的 Unity 数据版本")
-    endian = reader.read(1); reader.read(3)
+        raise ValueError('游戏资料对象版本不受支持')
+    endian = reader.number('B'); reader.read(3)
     if version >= 22:
-        reader.value("I")
-        file_size, data_offset = reader.value("q"), reader.value("q")
-        reader.value("q")
-    if file_size != size or not 0 < data_offset < size:
-        raise BundleError("Unity 数据文件头无效")
-    reader.endian = ">" if endian != b"\0" else "<"
-    reader.zero(); reader.value("i")
-    trees = reader.read(1) != b"\0"
+        reader.number('I'); file_size = reader.number('Q')
+        data_offset = reader.number('Q'); reader.number('Q')
+    if file_size != size or endian not in (0, 1):
+        raise ValueError('游戏资料对象文件无效')
+    reader.endian = '<' if endian == 0 else '>'
+    reader.string(); reader.number('i')
+    type_tree = reader.number('B')
     types = []
-    for _ in range(reader.count(1000)):
-        class_id = reader.value("i")
-        reader.read(1); reader.value("h")
+    type_count = reader.number('i')
+    if not 0 < type_count < 1000:
+        raise ValueError('游戏资料对象类型数量无效')
+    for _ in range(type_count):
+        class_id = reader.number('i'); types.append(class_id)
+        reader.number('B'); reader.number('h')
         if class_id == 114:
             reader.read(16)
         reader.read(16)
-        fields = []
-        if trees:
-            count, strings_size = reader.count(100000), reader.count(8 * 1024 * 1024)
-            nodes = []
-            for _ in range(count):
-                raw = reader.read(32 if version >= 19 else 24)
-                nodes.append(struct.unpack(reader.endian + "HBBIIiii", raw[:24]))
-            strings = reader.read(strings_size)
-            common = {349: "m_Enabled", 374: "m_GameObject", 427: "m_Name", 490: "m_Script"}
-            for _, level, _, _, name, _, _, _ in nodes:
-                if level == 1:
-                    field = common.get(name & 0x7fffffff, "?") if name & 0x80000000 else strings[name:].split(b"\0", 1)[0].decode()
-                    fields.append(field)
+        if type_tree:
+            nodes, strings = reader.number('i'), reader.number('i')
+            if not 0 <= nodes <= 100000 or not 0 <= strings <= MAX_BLOCK:
+                raise ValueError('游戏资料类型树无效')
+            reader.read(nodes * (32 if version >= 19 else 24) + strings)
             if version >= 21:
-                reader.read(reader.count(100000) * 4)
-        types.append((class_id, fields))
-    result = []
-    for _ in range(reader.count(100000)):
-        reader.align(); reader.value("q")
-        offset = reader.value("q" if version >= 22 else "I")
-        count, type_id = reader.value("I"), reader.value("i")
-        if not 0 <= type_id < len(types) or offset < 0 or data_offset + offset + count > size:
-            raise BundleError("Unity 对象索引无效")
-        class_id, fields = types[type_id]
-        if class_id in (49, 114):
-            result.append((start + data_offset + offset, count, class_id, fields, reader.endian))
-    return result
-
-
-def text_assets(path, names=None, localization=False):
-    """Return selected TextAssets, or the verified CHS localization key map."""
-    result = {}
-    with bundle_files(path) as (stream, files):
-        for offset, size, flags, name in files:
-            if not flags & 4:
-                continue
-            for start, count, kind, fields, endian in objects(stream, offset, size):
-                reader = Reader(stream, endian, start, count)
-                if kind == 49 and not localization:
-                    if fields and fields != ["m_Name", "m_Script"]:
-                        raise BundleError("TextAsset 结构已变化")
-                    name = reader.string()
-                    if names is None or name in names:
-                        if name in result:
-                            raise BundleError("TextAsset 名称重复")
-                        result[name] = reader.read(reader.count(32 * 1024 * 1024))
-                elif kind == 114 and localization:
-                    if fields != ["m_GameObject", "m_Enabled", "m_Script", "m_Name", "TextItemList"]:
-                        raise BundleError("简中补充包结构已变化")
-                    reader.read(12); reader.read(1); reader.align(); reader.read(12)
-                    if reader.string().upper() != "CHS":
-                        continue
-                    for _ in range(reader.count(250000)):
-                        key, value = reader.string(), reader.string()
-                        if key in result:
-                            raise BundleError("简中补充键重复")
-                        result[key] = value
-    if not result:
-        raise BundleError("数据包中没有所需文本")
-    return result
+                count = reader.number('i')
+                if not 0 <= count < 100000:
+                    raise ValueError('游戏资料类型依赖无效')
+                reader.read(count * 4)
+    count = reader.number('i')
+    if not 0 <= count <= 100000:
+        raise ValueError('游戏资料对象数量无效')
+    objects = []
+    for _ in range(count):
+        reader.align(); reader.number('q')
+        offset = reader.number('q' if version >= 22 else 'I')
+        length, type_id = reader.number('I'), reader.number('i')
+        if not 0 <= type_id < len(types) or offset < 0 or offset + length + data_offset > size:
+            raise ValueError('游戏资料对象偏移无效')
+        if types[type_id] == 49:
+            objects.append((base + data_offset + offset, length))
+    names = set()
+    for offset, length in objects:
+        stream.seek(offset)
+        name_size = reader.number('i')
+        if not 0 < name_size <= 200:
+            raise ValueError('游戏资料文本名称无效')
+        name = reader.read(name_size).decode('utf-8')
+        reader.align()
+        text_size = reader.number('i')
+        if text_size < 0 or stream.tell() + text_size > offset + length:
+            raise ValueError('游戏资料文本长度无效')
+        if not re.fullmatch(r'[A-Za-z0-9_]+', name):
+            raise ValueError('游戏资料文本名称不安全')
+        if wanted is None or name in wanted:
+            if name in names:
+                raise ValueError('游戏资料包含重复文本')
+            (output / ('sd_' + name + '.txt')).write_bytes(reader.read(text_size))
+            names.add(name)
+    return names

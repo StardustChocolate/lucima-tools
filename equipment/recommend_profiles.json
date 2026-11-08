@@ -1,0 +1,362 @@
+{
+  "schemaVersion": 1,
+  "version": "20261025.3",
+  "sourceDocument": "按角色自动配装方案.docx",
+  "sourceSha256": "36ec128de016fc375ed4e829a5fc46a11b267c5819c81c519e2805dfad769d76",
+  "scope": "按当前羁绊的面板属性方向推荐；不含战斗模拟、自动羁绊挑选或全账号全局最优",
+  "roles": {
+    "H001": [
+      {
+        "id": "tank",
+        "title": "速度＋生命",
+        "description": "提高行动与保护能力，兼顾生命和防御。",
+        "priorities": [
+          "Speed",
+          "HP",
+          "Defence"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H001：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "control",
+        "title": "速度＋命中",
+        "description": "用速度与状态命中支持控制开局。",
+        "priorities": [
+          "Speed",
+          "EffectHitRate",
+          "HP"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H001：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "hp-output",
+        "title": "生命输出",
+        "description": "以最大生命、有效暴击和暴伤比较生命输出方向。",
+        "priorities": [
+          "damage",
+          "HP",
+          "Speed"
+        ],
+        "damageStat": "HP",
+        "critical": true,
+        "source": "H001：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H121": [
+      {
+        "id": "control",
+        "title": "速度＋命中",
+        "description": "控制用途；状态命中不包含技能的命中率加成。",
+        "priorities": [
+          "Speed",
+          "EffectHitRate",
+          "HP"
+        ],
+        "damageStat": "Attack",
+        "critical": false,
+        "source": "H121：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "speed-output",
+        "title": "速度输出",
+        "description": "比较速度与普通暴击输出属性，不假定对敌速度差。",
+        "priorities": [
+          "Speed",
+          "damage",
+          "HP"
+        ],
+        "damageStat": "Attack",
+        "critical": true,
+        "source": "H121：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H182": [
+      {
+        "id": "finisher",
+        "title": "输出优先",
+        "description": "偏输出配装：优先攻击、暴击率和暴击伤害，兼顾速度。适合追求更高的单次攻击输出。",
+        "priorities": [
+          "damage",
+          "Speed",
+          "HP"
+        ],
+        "damageStat": "Attack",
+        "critical": true,
+        "source": "H182：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "speed-pressure",
+        "title": "速度＋输出",
+        "description": "兼顾速度和输出，不强制百暴。需要优先抢第一速、拉起队友时，选择“最高速度＋百暴”。",
+        "priorities": [
+          "Speed",
+          "damage",
+          "HP"
+        ],
+        "damageStat": "Attack",
+        "critical": true,
+        "source": "H182：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "speed-crit",
+        "title": "最高速度＋百暴",
+        "description": "暴击率至少 100%，先把速度堆高，用于抢先手拉条；同速度再比较输出。",
+        "priorities": [
+          "Speed",
+          "damage",
+          "HP"
+        ],
+        "damageStat": "Attack",
+        "critical": true,
+        "ranking": "speed-first",
+        "hardConditions": [
+          {
+            "stat": "CriticalRate",
+            "min": 100,
+            "max": null
+          }
+        ],
+        "source": "H182：用户补充的先手拉条用途；当前面板暴击率至少 100% 后按速度优先"
+      }
+    ],
+    "H189": [
+      {
+        "id": "control",
+        "title": "速度＋命中",
+        "description": "存活控场；不要求满暴，不给暴击暴伤增加输出分。",
+        "priorities": [
+          "Speed",
+          "EffectHitRate",
+          "HP"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H189：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "survive",
+        "title": "速度＋生命",
+        "description": "提高行动与存活，保留不同生命和抗性组合。",
+        "priorities": [
+          "Speed",
+          "HP",
+          "ResistanceRate"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H189：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "hp-pressure",
+        "title": "生命＋命中",
+        "description": "比较生命与状态命中，不把当前生命压制当普通暴击伤害。",
+        "priorities": [
+          "HP",
+          "EffectHitRate",
+          "Speed"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H189：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H191": [
+      {
+        "id": "cleanse",
+        "title": "速度＋抗性",
+        "description": "优先及时行动与抗控，支持净化和循环。",
+        "priorities": [
+          "Speed",
+          "ResistanceRate",
+          "HP"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H191：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "support",
+        "title": "速度＋生命",
+        "description": "兼顾行动与存活，不按普通输出角色要求暴击。",
+        "priorities": [
+          "Speed",
+          "HP",
+          "Defence"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H191：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H192": [
+      {
+        "id": "def-output",
+        "title": "防御输出",
+        "description": "伤害依赖自身防御；暴击按当前实际技能和羁绊计算。",
+        "priorities": [
+          "damage",
+          "Defence",
+          "Speed"
+        ],
+        "damageStat": "Defence",
+        "critical": true,
+        "source": "H192：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "counter",
+        "title": "防御＋抗性",
+        "description": "兼顾防御反打、抗控和生存，不预判反击触发次数。",
+        "priorities": [
+          "Defence",
+          "ResistanceRate",
+          "HP"
+        ],
+        "damageStat": "Defence",
+        "critical": true,
+        "source": "H192：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "speed-def",
+        "title": "速度＋防御",
+        "description": "兼顾行动速度与防御输出属性。",
+        "priorities": [
+          "Speed",
+          "damage",
+          "Defence"
+        ],
+        "damageStat": "Defence",
+        "critical": true,
+        "source": "H192：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H193": [
+      {
+        "id": "resist",
+        "title": "速度＋抗性",
+        "description": "提高抗控与保护能力；队友站位光环不计入个人面板。",
+        "priorities": [
+          "Speed",
+          "ResistanceRate",
+          "HP"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H193：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "protect",
+        "title": "生命＋抗性",
+        "description": "偏生存保护，兼顾自身生命、防御与抗性。",
+        "priorities": [
+          "HP",
+          "ResistanceRate",
+          "Defence"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H193：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H197": [
+      {
+        "id": "cleanse",
+        "title": "速度＋抗性",
+        "description": "净化支援，优先行动与抗控。",
+        "priorities": [
+          "Speed",
+          "ResistanceRate",
+          "HP"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H197：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "support",
+        "title": "速度＋生命",
+        "description": "兼顾行动与生存，不强制暴击门槛。",
+        "priorities": [
+          "Speed",
+          "HP",
+          "Defence"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H197：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "hp-pierce",
+        "title": "生命输出",
+        "description": "仅按 S2 不暴击的生命攻击方向比较，不扩大为所有技能禁止暴击。",
+        "priorities": [
+          "HP",
+          "Speed",
+          "ResistanceRate"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H197：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H200": [
+      {
+        "id": "control",
+        "title": "速度＋命中",
+        "description": "比较无凝聚时的控制属性；不提前计入条件无视抗性。",
+        "priorities": [
+          "Speed",
+          "EffectHitRate",
+          "HP"
+        ],
+        "damageStat": "Attack",
+        "critical": false,
+        "source": "H200：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "speed-output",
+        "title": "速度输出",
+        "description": "兼顾速度与普通输出属性；条件收益不当成常驻。",
+        "priorities": [
+          "Speed",
+          "damage",
+          "HP"
+        ],
+        "damageStat": "Attack",
+        "critical": true,
+        "source": "H200：文档第九章角色用途与原始技能定义"
+      }
+    ],
+    "H204": [
+      {
+        "id": "opener",
+        "title": "速度＋抗性",
+        "description": "抢速支援与抗控；不把个人速度当整队行动收益。",
+        "priorities": [
+          "Speed",
+          "ResistanceRate",
+          "HP"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H204：文档第九章角色用途与原始技能定义"
+      },
+      {
+        "id": "cleanse",
+        "title": "速度＋生命",
+        "description": "净化支援，兼顾行动与存活。",
+        "priorities": [
+          "Speed",
+          "HP",
+          "Defence"
+        ],
+        "damageStat": "HP",
+        "critical": false,
+        "source": "H204：文档第九章角色用途与原始技能定义"
+      }
+    ]
+  }
+}

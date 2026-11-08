@@ -8,6 +8,9 @@ function applyGuildSnapshot(account, value) {
   if (previous && (login < Number(previous.loginRevision || 0)
       || (login === Number(previous.loginRevision || 0)
           && Number(value.revision || 0) < Number(previous.revision || 0)))) return;
+  // api() and callers can apply the same response; unchanged background
+  // snapshots should not rebuild the whole guild page or restart its images.
+  if (previous && JSON.stringify(previous) === JSON.stringify(value)) return;
   session.guild = value;
   window.dispatchEvent(new CustomEvent('lucima:guild-change', { detail: { account } }));
 }
@@ -15,6 +18,7 @@ function applyGuildSnapshot(account, value) {
 (() => {
   const $ = id => document.getElementById(id);
   const states = new Map();
+  let globalBound = false;
   const donationLabels = { gold: '金币', courage: '英勇证明' };
   const donationCosts = { gold: 5000, courage: 1 };
   const donationReserveDefaults = { gold: 200000, courage: 10 };
@@ -23,6 +27,12 @@ function applyGuildSnapshot(account, value) {
   let aidCatalogPromise = null;
   let scorePollTimer = null;
   const scoreWarning = '该功能非常规功能，请在明确功能含义的情况下执行，建议使用非正式账号';
+  async function settingsRequest(path, body, timeout = 8000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try { return await api(path, body, { signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+  }
   function aidOptions(session) {
     const value = session?.params?.guild_auto_aid || {};
     // A previously disabled request must stay disabled when removing its checkbox.
@@ -122,7 +132,6 @@ function applyGuildSnapshot(account, value) {
   function state(account) {
     if (!states.has(account) || states.get(account).session !== ACCOUNTS[account]) {
       states.set(account, { session: ACCOUNTS[account], refreshPending: false, savePending: false,
-        donationReserveDrafts: {},
         scoreJob: null, scoreChecked: false, scorePending: false, scoreConfirming: false, scorePolling: false, scoreGeneration: 0, scoreError: '' });
     }
     return states.get(account);
@@ -151,9 +160,9 @@ function applyGuildSnapshot(account, value) {
     const personal = weekly.personal || [];
     const tiers = weekly.tiers || [];
     const status = $('guildWeeklyState');
-    status.classList.toggle('error', joined && !guild.waiting && Boolean(weekly.error));
-    status.classList.toggle('ready', joined && !guild.waiting && !weekly.error && [...personal, ...tiers].some(row => row.state === 'ready'));
-    status.textContent = guild?.waiting ? guild.waiting : noGuild ? '未加入佣兵团，暂不执行'
+    status.classList.toggle('error', joined && Boolean(weekly.error));
+    status.classList.toggle('ready', joined && !weekly.error && [...personal, ...tiers].some(row => row.state === 'ready'));
+    status.textContent = noGuild ? '未加入佣兵团，暂不执行'
       : !joined || weekly.week == null ? '等待同步周任务'
       : weekly.running ? ({ query: '正在检查周任务…', personal: '正在领取个人任务奖励…', tiers: '正在领取全团积分奖励…' }[weekly.running] || '正在领取…')
       : weekly.error ? '领取未确认，5 分钟后查询确认'
@@ -191,21 +200,22 @@ function applyGuildSnapshot(account, value) {
     const running = Boolean(job?.running);
     const target = job?.target || Math.max(0, ...(guild?.weekly?.tiers || []).map(row => Number(row.target) || 0)) || 2800;
     const score = guild?.weekly ? guild.weekly.score ?? '—' : job?.score ?? '—';
+    const full = typeof score === 'number' && score >= target;
     const status = $('guildScoreState');
     const count = job?.running && job.planned > 0 ? `${job.completed || 0} / ${job.planned}` : job?.completed || 0;
     const progress = `全团积分 ${score} / ${target}${job ? ` · 已领取 ${count} 次` : ''}`;
-    status.textContent = guild?.waiting ? guild.waiting : !joined ? (guild?.joined === false ? '未加入佣兵团，暂不执行' : '等待同步全团积分')
+    status.textContent = !joined ? (guild?.joined === false ? '未加入佣兵团，暂不执行' : '等待同步全团积分')
       : st.scoreError ? st.scoreError
       : job?.state === 'failed' ? `${progress} · ${job.message}`
       : `${progress}${job ? ` · ${job.state === 'completed' ? '已完成' : job.state === 'cancelled' ? '已停止'
           : job.state === 'stopping' ? '正在停止…' : job.phase === 'verifying' ? '正在校验…' : '进行中…'}` : ''}`;
-    status.classList.toggle('error', !guild?.waiting && (Boolean(st.scoreError) || job?.state === 'failed'));
-    status.classList.toggle('ready', !guild?.waiting && job?.state === 'completed');
+    status.classList.toggle('error', Boolean(st.scoreError) || job?.state === 'failed');
+    status.classList.toggle('ready', job?.state === 'completed');
     const button = $('guildScoreStart');
     button.textContent = st.scorePending ? (running ? '处理中…' : '启动中…')
-      : job?.state === 'stopping' ? '正在停止…' : running ? '停止' : '开始';
+      : job?.state === 'stopping' ? '正在停止…' : running ? '停止' : full ? '团队积分已满' : '开始';
     button.disabled = st.scorePending || st.scoreConfirming || job?.state === 'stopping'
-      || (!running && (!joined || guild?.waiting || session?.connection?.connected === false || !st.scoreChecked || st.scorePolling));
+      || (!running && (full || !joined || session?.connection?.connected === false || !st.scoreChecked || st.scorePolling));
     $('guildScoreRow').classList.toggle('on', running);
   }
   function scheduleScorePoll(delay = 0) {
@@ -286,6 +296,7 @@ function applyGuildSnapshot(account, value) {
     }
   }
   function paint() {
+    if (!$('guildRefresh')) return;
     const account = activeAccount;
     const session = ACCOUNTS[account];
     const st = state(account);
@@ -306,16 +317,16 @@ function applyGuildSnapshot(account, value) {
     const refresh = $('guildRefresh');
     refresh.classList.toggle('hidden', noGuild);
     refresh.disabled = !session || !connected || loading || claiming || donating || aiding || Boolean(guild?.weekly?.running)
-      || st.scoreJob?.running || noGuild || guild?.waiting === '等待每日重登';
+      || st.scoreJob?.running || noGuild;
     refresh.classList.toggle('loading', loading);
     refresh.setAttribute('aria-busy', String(loading));
     const toggle = $('guildAutoSignin');
     toggle.checked = Boolean(session?.toggles?.guild_auto_signin);
     toggle.disabled = !joined || st.savePending || claiming;
     toggle.closest('.auto-item').classList.toggle('on', toggle.checked);
-    $('guildSigninState').classList.toggle('ready', joined && !guild.waiting && guild.canClaim && !guild.claimError);
-    $('guildSigninState').classList.toggle('error', joined && !guild.waiting && Boolean(guild.claimError));
-    $('guildSigninState').textContent = guild?.waiting ? guild.waiting : noGuild ? '未加入佣兵团，暂不执行'
+    $('guildSigninState').classList.toggle('ready', joined && guild.canClaim && !guild.claimError);
+    $('guildSigninState').classList.toggle('error', joined && Boolean(guild.claimError));
+    $('guildSigninState').textContent = noGuild ? '未加入佣兵团，暂不执行'
       : !joined ? '每日首次进入佣兵团会自动报到'
       : guild.claimError ? '领取未确认，等待下次登录或手动刷新'
       : claiming ? '正在领取日奖励…'
@@ -334,8 +345,7 @@ function applyGuildSnapshot(account, value) {
     });
     const reserves = donationReserves(session);
     $('guildDonateChoices').querySelectorAll('.guild-donate-reserve').forEach(input => {
-      const value = st.donationReserveDrafts[input.dataset.key] ?? String(reserves[input.dataset.key] ?? 0);
-      if (input.value !== value) input.value = value;
+      input.value = String(reserves[input.dataset.key] ?? 0);
       input.disabled = !joined || st.savePending || donating;
     });
     const selected = Object.keys(donationLabels).filter(key => options[key]);
@@ -346,8 +356,8 @@ function applyGuildSnapshot(account, value) {
     });
     const blocked = selected.some(key => guild?.donationErrors?.[key]);
     const status = $('guildDonateState');
-    status.classList.toggle('error', joined && !guild.waiting && blocked);
-    status.textContent = guild?.waiting ? guild.waiting : noGuild ? '未加入佣兵团，暂不执行'
+    status.classList.toggle('error', joined && blocked);
+    status.textContent = noGuild ? '未加入佣兵团，暂不执行'
       : !joined ? '等待同步捐赠状态'
       : donating ? `正在捐赠${donationLabels[guild.donating] || ''}…`
       : !selected.length ? '请在选项中勾选捐赠资源'
@@ -374,12 +384,12 @@ function applyGuildSnapshot(account, value) {
     });
     paintAidItem(session, aidDisabled);
     const aidState = $('guildAidState');
-    aidState.classList.toggle('error', joined && !guild.waiting && Boolean(aid.error));
+    aidState.classList.toggle('error', joined && Boolean(aid.error));
     const requestState = !aidConfig.item ? ''
       : !aid.requestKnown ? '等待同步求助状态' : aid.requested ? '今日已求助' : '今日尚未求助';
     const supportState = aidConfig.hunt || aidConfig.element || aidConfig.catalyst
       ? `援助奖励 ${aid.reward ?? '—'}/${aid.limit || 200}` : '';
-    aidState.textContent = guild?.waiting ? guild.waiting : noGuild ? '未加入佣兵团，暂不执行'
+    aidState.textContent = noGuild ? '未加入佣兵团，暂不执行'
       : !joined ? '等待同步援助状态'
       : aid.running ? ({ query: '正在检查团员求助…', request: '正在发布求助…', support: '正在援助团员…' }[aid.running] || '正在援助…')
       : aid.error ? '操作未确认，5 分钟后查询确认'
@@ -417,22 +427,41 @@ function applyGuildSnapshot(account, value) {
     const before = Boolean(session.toggles[key]);
     const previousOptions = session.params?.[key];
     st.savePending = true;
-    if (key === 'guild_auto_donate' && options) st.donationReserveDrafts = {};
     session.toggles[key] = enabled;
     if (options) session.params = { ...session.params, [key]: options };
-    paint();
     try {
-      await api('/api/toggles', { account, toggles: { ...session.toggles },
+      paint();
+      await settingsRequest('/api/toggles', { account, toggles: { ...session.toggles },
         ...(options ? { params: { [key]: options } } : {}) });
     } catch (error) {
       if (ACCOUNTS[account] === session) {
-        session.toggles[key] = before;
-        if (options) {
-          if (previousOptions === undefined) delete session.params[key];
-          else session.params[key] = previousOptions;
+        let confirmed = false;
+        if (error.name === 'AbortError') {
+          try {
+            // A lost HTTP acknowledgement may have saved successfully. Read
+            // the local session cache instead of resending a game operation.
+            const actual = await settingsRequest(`/api/toggles?account=${encodeURIComponent(account)}`, null, 3000);
+            if (ACCOUNTS[account] === session && actual.toggles && actual.params) {
+              session.toggles[key] = Boolean(actual.toggles[key]);
+              if (options) {
+                if (actual.params[key] === undefined) delete session.params[key];
+                else session.params[key] = actual.params[key];
+              }
+              confirmed = true;
+            }
+          } catch { /* Always release the controls, even if status sync fails. */ }
+        }
+        if (ACCOUNTS[account] !== session) return;
+        if (!confirmed) {
+          session.toggles[key] = before;
+          if (options) {
+            if (previousOptions === undefined) delete session.params[key];
+            else session.params[key] = previousOptions;
+          }
         }
         const name = { guild_auto_donate: '自动捐赠', guild_auto_aid: '自动援助', guild_auto_weekly: '周任务' }[key] || '自动签到';
-        logTo(account, `[佣兵团] ${name}设置保存失败：${error.message}`, 'err');
+        logTo(account, `[佣兵团] ${name}${confirmed ? '设置响应超时，已同步当前开关状态'
+          : error.name === 'AbortError' ? '设置保存超时，结果未确认，请重新设置' : `设置保存失败：${error.message}`}`, confirmed ? 'ok' : 'err');
       }
     } finally {
       st.savePending = false;
@@ -440,53 +469,60 @@ function applyGuildSnapshot(account, value) {
     }
   }
   function init() {
-    if (!$('section-guild')) return;
-    $('guildRefresh').addEventListener('click', refresh);
-    $('guildScoreStart').addEventListener('click', runScore);
-    $('guildAutoSignin').addEventListener('change', () => saveSettings('guild_auto_signin', $('guildAutoSignin').checked));
-    $('guildAutoDonate').addEventListener('change', () => saveSettings('guild_auto_donate', $('guildAutoDonate').checked));
-    $('guildAutoAid').addEventListener('change', () => saveSettings('guild_auto_aid', $('guildAutoAid').checked));
-    $('guildAutoWeekly').addEventListener('change', () => saveSettings('guild_auto_weekly', $('guildAutoWeekly').checked));
-    // 佣兵团内所有 aria-controls 折叠区统一自动接入；新增同结构控件无需登记。
-    const restorePanels = bindControlledAccountPanels($('section-guild'), 'guild');
-    bindAccountPanel($('guildAidOptions'), $('guildAidBody'), 'guild:guildAidBody', { onOpen: async () => {
-        const account = activeAccount;
+    if (!$('guildRefresh') || $('guildRefresh').dataset.bound) return;
+    $('guildRefresh').dataset.bound = '1';
+    $('guildRefresh').addEventListener('click', LucimaActionWait.wrap(refresh));
+    $('guildScoreStart').addEventListener('click', LucimaActionWait.wrap(runScore));
+    $('guildAutoSignin').addEventListener('change', LucimaActionWait.wrap(() => saveSettings('guild_auto_signin', $('guildAutoSignin').checked)));
+    $('guildAutoDonate').addEventListener('change', LucimaActionWait.wrap(() => saveSettings('guild_auto_donate', $('guildAutoDonate').checked)));
+    $('guildAutoAid').addEventListener('change', LucimaActionWait.wrap(() => saveSettings('guild_auto_aid', $('guildAutoAid').checked)));
+    $('guildAutoWeekly').addEventListener('change', LucimaActionWait.wrap(() => saveSettings('guild_auto_weekly', $('guildAutoWeekly').checked)));
+    $('guildWeeklyDetails').addEventListener('click', LucimaActionWait.wrap(() => {
+      const expanded = $('guildWeeklyBody').classList.contains('hidden');
+      $('guildWeeklyBody').classList.toggle('hidden', !expanded);
+      $('guildWeeklyDetails').setAttribute('aria-expanded', String(expanded));
+      $('guildWeeklyDetails').textContent = expanded ? '任务 ▾' : '任务 ▸';
+    }));
+    $('guildAidOptions').addEventListener('click', LucimaActionWait.wrap(async () => {
+      const expanded = $('guildAidBody').classList.contains('hidden');
+      $('guildAidBody').classList.toggle('hidden', !expanded);
+      $('guildAidOptions').setAttribute('aria-expanded', String(expanded));
+      $('guildAidOptions').textContent = expanded ? '选项 ▾' : '选项 ▸';
+      if (expanded) {
         try { await loadAidCatalog(); paint(); }
         catch (error) {
-          if (activeAccount !== account) return;
           const holder = $('guildAidItem');
           delete holder.dataset.selection;
           holder.textContent = '材料加载失败，请重新打开选项重试';
-          logTo(account, `[佣兵团] ${error.message}`, 'err');
+          logTo(activeAccount, `[佣兵团] ${error.message}`, 'err');
         }
-    }});
+      }
+    }));
     $('guildAidChoices').innerHTML = Object.entries(aidLabels).map(([key, label]) =>
       `<label class="bt-opt"><input type="checkbox" value="${key}">${checkboxUIHTML()}<span>${label}</span></label>`).join('');
-    $('guildAidChoices').addEventListener('change', () =>
-      saveSettings('guild_auto_aid', $('guildAutoAid').checked, aidSettings()));
+    $('guildAidChoices').addEventListener('change', LucimaActionWait.wrap(() =>
+      saveSettings('guild_auto_aid', $('guildAutoAid').checked, aidSettings())));
+    $('guildDonateOptions').addEventListener('click', LucimaActionWait.wrap(() => {
+      const expanded = $('guildDonateBody').classList.contains('hidden');
+      $('guildDonateBody').classList.toggle('hidden', !expanded);
+      $('guildDonateOptions').setAttribute('aria-expanded', String(expanded));
+      $('guildDonateOptions').textContent = expanded ? '选项 ▾' : '选项 ▸';
+    }));
     $('guildDonateChoices').innerHTML = Object.entries(donationLabels).map(([key, label]) =>
       `<div class="guild-donate-choice">
         <label class="bt-opt guild-donate-check"><input type="checkbox" value="${key}">${checkboxUIHTML()}<span class="guild-donate-label">${label}</span></label>
         <span class="guild-donate-reserve-label">保留</span>
         <input class="guild-donate-reserve" data-key="${key}" type="number" min="0" step="1" inputmode="numeric" aria-label="保留${label}数量" value="0">
       </div>`).join('');
-    $('guildDonateChoices').addEventListener('input', event => {
-      if (event.target.matches('.guild-donate-reserve') && ACCOUNTS[activeAccount]) {
-        state(activeAccount).donationReserveDrafts[event.target.dataset.key] = event.target.value;
-      }
-    });
-    $('guildDonateChoices').addEventListener('change', () => {
-      saveSettings('guild_auto_donate', $('guildAutoDonate').checked, donationSettings());
-    });
+    $('guildDonateChoices').addEventListener('change', LucimaActionWait.wrap(() => {
+      return saveSettings('guild_auto_donate', $('guildAutoDonate').checked, donationSettings());
+    }));
     ['guildIcon', 'guildFrame'].forEach(id => {
       $(id).addEventListener('load', paint);
       $(id).addEventListener('error', paint);
     });
-    window.addEventListener('lucima:account-change', () => {
-      restorePanels.forEach((restore) => restore?.());
-      paint();
-      scheduleScorePoll();
-    });
+    if (!globalBound) {
+    window.addEventListener('lucima:account-change', () => { paint(); scheduleScorePoll(); });
     window.addEventListener('lucima:section-change', () => scheduleScorePoll());
     document.addEventListener('visibilitychange', () => scheduleScorePoll());
     window.addEventListener('lucima:guild-change', event => {
@@ -495,8 +531,12 @@ function applyGuildSnapshot(account, value) {
       const st = state(activeAccount);
       if (!st.scoreChecked && !st.scorePolling && !st.scoreError) scheduleScorePoll();
     });
+    globalBound = true;
+    }
     paint();
   }
+  window.addEventListener('lucima:section-mount', event => { if(event.detail.section === 'guild') init(); });
+  window.addEventListener('lucima:section-unmount', event => { if(event.detail.section === 'guild') { clearTimeout(scorePollTimer); scorePollTimer = null; } });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
 })();

@@ -14,8 +14,8 @@ import threading
 import uuid
 
 from . import accounts, config
-from .game_client import GameError, GameMessage, TaskDeferred
-from .guild import GuildService, _nonnegative_int, describe_error, guild_id, has_guild, is_auth_error, object_id, positive_int, quest_response_summary
+from .game_client import GameError, GameMessage
+from .guild import GuildService, _nonnegative_int, describe_error, has_guild, is_auth_error, object_id, positive_int, quest_response_summary
 from .guild_quests import GuildWeeklyService, weekly_catalog
 
 
@@ -105,8 +105,6 @@ class GuildJobManager:
             job = {"id": job_id, "kind": kind, "state": "running", "running": True,
                    "account": email, "message": "", "logs": [], **fields}
             event = threading.Event()
-            from .maintenance import service as maintenance_service
-            maintenance_service.track_event(event)
             self._jobs[(email, job_id)] = job
             self._latest[(email, kind)] = job_id
             self._active[email] = job_id
@@ -158,7 +156,6 @@ class GuildJobManager:
     def _check(self, acc, event):
         if event.is_set():
             raise _Cancelled()
-        acc.require_current_day()
         if self._account_lookup(acc.email) is not acc:
             raise GameError("当前账号已退出或重新登录，任务已停止；请查询游戏中的实际结果")
         if not acc.client.is_connected():
@@ -181,10 +178,7 @@ class GuildJobManager:
                 break
         try:
             self._check(acc, event)
-            if acc.guild_runtime.get("enteredRevision") != acc.state_revision:
-                acc.refresh_guild_locked(log_success=False)
-            with acc._request_scope():
-                return method(*args)
+            return method(*args)
         finally:
             acc.lock.release()
 
@@ -217,7 +211,7 @@ class GuildJobManager:
 
         def snapshot():
             check_session()
-            current_gid = guild_id(acc.client.account_state)
+            current_gid = object_id(acc.client.account_state["PlayerGuildInfo"].get("GID"))
             status = weekly.snapshot()
             if gid is not None and (gid != current_gid or week != status["week"]):
                 raise GameError("佣兵团或周任务周期已变化，任务已停止")
@@ -240,7 +234,7 @@ class GuildJobManager:
             runtime["weeklyScoreJob"] = job["id"]
             service.query()
             status = snapshot()
-            gid = guild_id(acc.client.account_state)
+            gid = object_id(acc.client.account_state["PlayerGuildInfo"].get("GID"))
             week = status["week"]
             return status
 
@@ -252,24 +246,13 @@ class GuildJobManager:
             if identifier not in completed_tasks(before):
                 raise GameError("已完成周任务的资料已变化，请刷新后再试")
             pending = runtime.setdefault("weeklyUncertain", [])
-            added_pending = False
             # An ordinary first claim must remain blocked if its reply is lost.
-            if (identifier not in pending and any(
-                    row["id"] == identifier and row["state"] == "ready" for row in before["personal"])):
+            if any(row["id"] == identifier and row["state"] == "ready" for row in before["personal"]):
                 pending.append(identifier)
-                added_pending = True
             with self._lock:
                 job["attempted"] += 1
             pending_claim = identifier
-            try:
-                response = service.claim_quest(identifier)
-            except TaskDeferred:
-                if added_pending and identifier in pending:
-                    pending.remove(identifier)
-                pending_claim = None
-                with self._lock:
-                    job["attempted"] -= 1
-                raise
+            response = service.claim_quest(identifier)
             parts = [response] + [part for part in response.get("Results") or [] if isinstance(part, dict)]
             if any(row.get("Week") != week or object_id(row.get("GID")) != gid
                    for part in parts for row in part.get("GuildQuestDataList") or []):
@@ -339,8 +322,6 @@ class GuildJobManager:
             self._invoke(acc, event, finish)
         except _Cancelled:
             self._message(job, "已停止，不再发送后续领取请求", state="cancelled")
-        except TaskDeferred as error:
-            self._message(job, str(error), state="cancelled")
         except Exception as error:
             prefix = f"任务 {pending_claim} 的领取结果未确认；" if pending_claim else ""
             self._message(job, prefix + self._safe_error(acc, error), state="failed")
@@ -364,13 +345,7 @@ class GuildJobManager:
                 self._check(acc, event)
                 job["attempted"] += 1
             pending_claim = (job["round"], quest_id)
-            try:
-                return service.claim_quest(quest_id)
-            except TaskDeferred:
-                pending_claim = None
-                with self._lock:
-                    job["attempted"] -= 1
-                raise
+            return service.claim_quest(quest_id)
 
         try:
             self._check(acc, event)
@@ -441,8 +416,6 @@ class GuildJobManager:
         except _Cancelled:
             self._message(job, f"已停止：返回数据 {job['succeeded']} 项，业务拒绝 {job['failed']} 项，无明细 {job['noDetails']} 项；未再发送后续请求",
                           state="cancelled")
-        except TaskDeferred as error:
-            self._message(job, str(error), state="cancelled")
         except Exception as error:
             message = self._safe_error(acc, error)
             if pending_claim is not None:

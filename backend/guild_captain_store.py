@@ -1,9 +1,8 @@
 """Captain-shop automatic purchases backed by account and guild snapshots."""
 from __future__ import annotations
 
-from . import runtime_data as resources
-
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 import json
 from pathlib import Path
 import time
@@ -24,12 +23,12 @@ CAPTAIN_GOODS = {
 }
 
 
-@resources.cached
+@lru_cache(maxsize=1)
 def _catalog():
     # The catalog is packaged with the backend Python module.  On Android,
     # ARK_ASSET_ROOT points at web/ and therefore does not contain backend/.
     path = Path(__file__).resolve().with_name("commodity_catalog.json")
-    data = resources.read_json("backend/commodity_catalog.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("schema") != 1 or not isinstance(data.get("commodities"), dict):
         raise GameError("团长商店清单无效，请更新应用资源")
     goods = {}
@@ -37,8 +36,7 @@ def _catalog():
         row = data["commodities"].get(identifier)
         if not isinstance(row, dict) or row.get("store") != "CaptainShop":
             raise GameError("团长商店商品清单不完整，请更新应用资源")
-        goods[identifier] = {**display, **{key: row[key] for key in ("name", "price", "currency") if row.get(key) is not None},
-                             "limit": row.get("limit"), "reset": row.get("resetType")}
+        goods[identifier] = {**display, "limit": row.get("limit"), "reset": row.get("resetType")}
     return goods
 
 

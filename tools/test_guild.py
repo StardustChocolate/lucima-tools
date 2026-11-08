@@ -1,7 +1,6 @@
 """Offline guild protocol, job and account lifecycle regression checks."""
 import threading
 import time
-from contextlib import nullcontext
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -45,8 +44,7 @@ def captain_store_guild(records, authority=1, *, include_member=True):
 def captain_store_client(responses):
     c = client(responses)
     c.account_state = {
-        "Info": {"_id": {"$oid": "player-id"}, "CUID": 101,
-                 "GuildSubInfo": {"_id": {"$oid": "guild-id"}}},
+        "Info": {"_id": {"$oid": "player-id"}, "CUID": 101},
         "PlayerGuildInfo": {"GID": "guild-id", "Authority": 1},
     }
     return c
@@ -75,9 +73,8 @@ class GuildProtocolTests(unittest.TestCase):
     def test_checkin_order_and_attendance_route(self):
         c = client([{}, {"GuildData": {"Info": {"Name": "Test guild", "GuildLV": 18}}}, {}, {}, {},
                     {"Utc": "1792072766", "PlayerGuildData": {"PlayerGuildInfo": {
-                        "GID": "guild-id", "LastCheckInTime": {"$date": 1792072765765}}}}, {}])
-        c.account_state = {"Info": {"GuildSubInfo": {"_id": "guild-id"}},
-                           "PlayerGuildInfo": {"GID": "guild-id", "LastCheckInTime": {"$date": 0}},
+                        "GID": "guild-id", "LastCheckInTime": {"$date": 1792072765765}}}}, {}, {}, {}])
+        c.account_state = {"PlayerGuildInfo": {"GID": "guild-id", "LastCheckInTime": {"$date": 0}},
                            "ActivityDBSettingContainer": {"SettingList": [
                                {"ActivityID": "Version_GVG", "IsIgnoreTime": True}]}}
         service = GuildService(c)
@@ -86,7 +83,7 @@ class GuildProtocolTests(unittest.TestCase):
         from backend.guild import GUILD_ENTRY_ROUTES
         self.assertEqual([call.args[0] for call in c.call.call_args_list],
                          [route for _, route, _ in GUILD_ENTRY_ROUTES] +
-                         ["GuildHandler.GuildMemberCheckIn", "GuildHandler.GuildMemberDayCheckReward"])
+                         ["GuildHandler.GuildMemberCheckIn", "GuildHandler.QueryGuildDataForSync", "GuildHandler.QueryFullGuildData", "GuildHandler.GuildMemberDayCheckReward"])
         self.assertEqual(c.account_state["PlayerGuildInfo"]["LastCheckInTime"], {"$date": 1792072765765})
 
     def test_quest_ids_require_live_guild_and_validate_and_deduplicate(self):
@@ -338,10 +335,6 @@ class GuildProtocolTests(unittest.TestCase):
 class GuildJobTests(unittest.TestCase):
     def setUp(self):
         self.acc = SimpleNamespace(email="test@example.invalid", client=client([]), lock=threading.Lock())
-        self.acc.require_current_day = Mock()
-        self.acc._request_scope = lambda **kwargs: nullcontext()
-        self.acc.state_revision = 1
-        self.acc.guild_runtime = {"enteredRevision": 1}
         self.registry = {self.acc.email: self.acc}
         self.service = Mock()
         self.service.quest_ids.return_value = {"guildName": "Test", "questIds": ["one", "two"]}
@@ -509,10 +502,6 @@ class GuildJobTests(unittest.TestCase):
 class GuildIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.acc = SimpleNamespace(email="test@example.invalid", client=client([]), lock=threading.Lock())
-        self.acc.require_current_day = Mock()
-        self.acc._request_scope = lambda **kwargs: nullcontext()
-        self.acc.state_revision = 1
-        self.acc.guild_runtime = {"enteredRevision": 1}
         self.lookup = patch.object(accounts, "get", return_value=self.acc)
         self.acc.guild_snapshot = Mock(return_value={"joined": True})
         self.lookup.start()

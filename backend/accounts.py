@@ -10,20 +10,19 @@
 """
 from __future__ import annotations
 
-from . import runtime_data as resources
-
 import random
+from copy import deepcopy
 import threading
 import time
-from contextlib import contextmanager
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from typing import Any, Callable
 
 from . import config
-from .maintenance import service as maintenance_service
+from . import arena_reward
+from . import guild_war_reward
 from .logutil import log as _log
 from . import redeem_codes
-from .game_client import GameClient, GameError, GameMessage, TaskDeferred
+from .game_client import GameClient, GameError, GameMessage
 from .guild import (CAPTAIN_BUFF_STATUS_SYNC_MS, CaptainBuffStatusPending,
                     CaptainShopInsufficientCurrency, GuildService, has_guild,
                     describe_error, donation_options,
@@ -32,10 +31,9 @@ from .guild_aid import GuildAidService, aid_catalog, aid_options
 from .guild_quests import GuildWeeklyService
 from .guild_store import GuildStoreService, store_options
 from .guild_captain_store import GuildCaptainStoreService, captain_store_options
-from .voting import catalog as voting_catalog
 from .tasks import (
     TASKS, run_auto_tasks, run_toggle_tasks, next_claim_times, arena_next_times,
-    achievement_options, TASK_RETRY_MS, SHOP_FREE_COOLDOWN_MS,
+    achievement_options, TASK_RETRY_MS, SHOP_FREE_COOLDOWN_MS, secret_shop_next_free,
 )
 
 # 调度参数。
@@ -44,7 +42,7 @@ from .tasks import (
 #  shop_free=LastResetTime+1h1s / 竞技场=各 NPC 的 nextMs|retryMs），
 # 所以调度线程改成"睡到最早那个到点时刻"，并在用户改开关/改勾选时**立刻唤醒**。
 # 只有 abyss_sweep / free_summon 拿不到服务器下发的下次时刻。它们依赖每日重置后的
-# 登录快照，因此在东八区每天 08:05~08:15 为每个账号随机安排一次重登。
+# 登录快照，因此在东八区每天 08:10~08:30 为每个账号随机安排一次重登。
 SCAN_MIN_GAP = 60               # 秒：已到期或缺少档期时防止空转；未来档期按时唤醒
 # 上限=兜底复查，避免档期遗漏后一直休眠。只读取本地缓存检查任务条件，
 # 复查本身不刷新服务器快照，未到期的任务不会发请求。
@@ -53,10 +51,8 @@ SHOP_FREE_MIN_GAP = SHOP_FREE_COOLDOWN_MS // 1000  # 秒：缺时间戳时同样
 LOG_BUFFER_MAX = 400            # 每账号自动任务日志环形缓冲上限
 GAME_TIMEZONE = timezone(timedelta(hours=8))
 STATE_REFRESH_BOUNDARY = datetime_time(8, 0)
-STATE_REFRESH_WINDOW_START = datetime_time(8, 5)
-STATE_REFRESH_WINDOW_SECONDS = 10 * 60
-DAY_MS = 86_400_000
-LOGIN_TASK_IDS = frozenset({"month_signin", "send_meal"})
+STATE_REFRESH_WINDOW_START = datetime_time(8, 10)
+STATE_REFRESH_WINDOW_SECONDS = 20 * 60
 
 
 def _scheduler_time(value: float) -> str:
@@ -103,6 +99,7 @@ class Account:
     def __init__(self, email: str, client: GameClient, portal: dict | None):
         self.email = email
         self.client = client
+        self.client._asset_recovery_key = email
         self.portal = portal
         self.shop_shelf: list | None = None
         self.support_cache: dict = {}         # 活动关卡助战列表原始条目 cuid->entry
@@ -112,6 +109,21 @@ class Account:
         rec = config.load_accounts().get(email, {})
         self.toggles: dict[str, bool] = dict(rec.get("toggles") or {})
         self.params: dict[str, dict] = dict(rec.get("params") or {})
+        # Migrate the earlier manual-page switch and obsolete configurable time.
+        if arena_reward.TASK_ID not in self.toggles and (self.params.get(arena_reward.TASK_ID)or{}).get('enabled'):
+            self.toggles[arena_reward.TASK_ID]=True
+        arena_previous = self.params.get(arena_reward.TASK_ID)
+        if arena_previous is not None or arena_reward.TASK_ID in self.toggles:
+            try:
+                arena_cfg = arena_reward.configure(arena_previous, {
+                    **arena_reward.options(arena_previous),
+                    'enabled': bool(self.toggles.get(arena_reward.TASK_ID))}, int(time.time() * 1000))
+            except ValueError:
+                pass  # Invalid reward choices remain blocked without breaking login.
+            else:
+                self.params[arena_reward.TASK_ID] = arena_cfg
+                if arena_cfg != arena_previous:
+                    config.save_account(email, toggles=self.toggles, params=self.params)
 
         # 自动任务日志缓冲（后台线程写、前端轮询读）
         self._log: list[dict] = []
@@ -121,15 +133,26 @@ class Account:
         # toggle 任务的跨轮次运行时状态：失败退避、竞技场冷却、体力邮件确认等。
         # 不持久化；新会话由服务器快照还原档期。
         self.task_runtime: dict[str, dict] = {}
+        self.client._auto_chip_crafting_enabled=bool(self.toggles.get('chip_crafting'))
+        self.client._chip_crafting_context=lambda:self.task_runtime.setdefault('chip_crafting',{})
+        self.client._chip_crafting_on_result=lambda result:self.push_log({'id':'chip_crafting','name':'自动强化芯片',**result},'自动·')
 
         # 调度线程
         self._shop_free_last = 0.0
+        # Only a stale/missing server refresh timestamp needs a fallback.
+        # Normal inspections preserve the actual LastResetTime deadline.
+        self._shop_free_next_inspect_at = 0.0
+        self._shop_free_enabled = bool(self.toggles.get('shop_free'))
+        self._shop_free_pending = self._shop_free_enabled
+        self._guild_war_reward_enabled = bool(self.toggles.get(guild_war_reward.TASK_ID))
+        # Every successful login gets one settlement query, even outside the
+        # scheduled Tue/Thu/Sat window.  The flag is cleared only after the
+        # server query completes (or confirms that no receipt is available).
+        self._guild_war_force_pending = True
         self._state_refresh_at = _next_daily_state_refresh()
         self.state_revision = 1
+        self.login_revision = 1
         self.state_synced_at = int(time.time() * 1000)
-        self._request_context = threading.local()
-        self._login_server_ms = self._snapshot_time_ms()
-        self._login_game_day = self._snapshot_game_day()
         self.guild_runtime: dict = {"stateSyncedAtMs": self.state_synced_at}
         self.guild_runtime["weeklyPersonalWeek"] = ((self.client.account_state or {}).get("PlayerGuildInfo") or {}).get("NowGuildQuestWeek")
         self._guild_revision = 0
@@ -151,134 +174,13 @@ class Account:
         self._thread: threading.Thread | None = None
         self._scheduler_lock = threading.Lock()
         self._startup_done = False
+        self._post_login_recovery_pending = True
         self._auto_relogin_transition_ms: int | None = None
         self._auto_relogin_at: float | None = None
         self._auto_relogin_delay_seconds: int | None = None
         self.client.connection_changed_callback = self._wake.set
         self.client.inventory_increase_callback = self._on_inventory_increase
         self.client.guild_currency_increase_callback = self._on_guild_currency_increase
-        self.client.before_game_request = self._before_game_request
-        self.client.vote_enabled = lambda: bool(self.toggles.get('activity_vote')) and not self._stop.is_set()
-        self.client.vote_params = lambda: self.params.get('activity_vote')
-        self._maintenance_pending = False
-        self._maintenance_epoch = 0
-        self._maintenance_attempted = 0
-        maintenance_service.watch(self)
-
-    def maintenance_changed(self, active, epoch):
-        """Called under the maintenance lock; never wait on a running task's lock."""
-        if self._stop.is_set():
-            return
-        if active:
-            self._maintenance_pending = True
-            self._maintenance_epoch = epoch
-            self.client._mark_disconnected("maintenance")
-            self.push_log({"id": "maintenance", "name": "服务器维护", "ok": False,
-                           "detail": "游戏维护中，所有任务已停止，等待维护结束后自动重登"}, "自动·")
-        elif self._maintenance_pending:
-            # An account can have logged in just before maintenance, before
-            # the UI had a chance to start its scheduler.
-            self.start_scheduler()
-        self._wake.set()
-
-    def _maintenance_relogin_if_due(self):
-        from .updater import service as update_service
-        if (maintenance_service.active or not self._maintenance_pending
-                or self._maintenance_attempted == self._maintenance_epoch
-                or self._stop.is_set() or update_service.is_installing()):
-            return False
-        with self.lock, resources.pin():
-            with maintenance_service.lock:
-                if (maintenance_service.active or not self._maintenance_pending
-                        or self._maintenance_attempted == self._maintenance_epoch
-                        or self._stop.is_set() or update_service.is_installing()):
-                    return False
-                epoch = self._maintenance_epoch
-                self._maintenance_attempted = epoch
-            try:
-                self.client.bootstrap()
-                with maintenance_service.lock:
-                    maintenance_service.require_open()
-                    if epoch != self._maintenance_epoch or self._stop.is_set():
-                        self.client._mark_disconnected("maintenance")
-                        return False
-                    self.reset_task_runtime()
-                    self.note_state_refreshed()
-                self.push_log({"id": "maintenance_relogin", "name": "维护后重登", "ok": True,
-                               "detail": "维护结束，重新登录成功"}, "自动·")
-                return True
-            except Exception as error:
-                if self._maintenance_pending:
-                    self.client._mark_disconnected("maintenance")
-                self.state_sync_error = str(error)
-                self.push_log({"id": "maintenance_relogin", "name": "维护后重登", "ok": False,
-                               "detail": f"维护后重登失败：{error}；任务保持停止，请手动重登"}, "自动·")
-                return False
-
-    def _snapshot_time_ms(self):
-        try:
-            return int(float((self.client.account_state or {})["Utc"]) * 1000)
-        except (KeyError, TypeError, ValueError, OverflowError):
-            return self.state_synced_at
-
-    def _snapshot_game_day(self):
-        return self._snapshot_time_ms() // DAY_MS
-
-    def daily_state_current(self, now_ms=None):
-        # UTC midnight is the game's 08:00 boundary. A failed login never
-        # changes this marker; ordinary guild queries cannot release it.
-        if now_ms is None:
-            # A response processed before 08:00 may arrive after 08:00. Its Utc
-            # must not rewind the login clock and release the next request.
-            elapsed = int(time.time() * 1000) - self.state_synced_at
-            now_ms = max(GuildService(self.client, self.guild_runtime).now_ms(),
-                         self._login_server_ms + elapsed)
-        return int(now_ms) // DAY_MS == self._login_game_day
-
-    def automation_wait_reason(self, *, login_task=False):
-        if maintenance_service.active:
-            return "等待维护结束"
-        if self._maintenance_pending:
-            return "等待维护后重登"
-        if not self.daily_state_current():
-            return "等待每日重登"
-        if (not login_task and has_guild(self.client.account_state)
-                and self.guild_runtime.get("enteredRevision") != self.state_revision):
-            return "等待佣兵团同步"
-        return None
-
-    def require_current_day(self):
-        if not self.daily_state_current():
-            raise TaskDeferred("等待每日重登")
-
-    @contextmanager
-    def _request_scope(self, *, login_task=False, guild_entry=False):
-        previous = getattr(self._request_context, "scope", None)
-        self._request_context.scope = (login_task, guild_entry)
-        try:
-            with resources.pin():
-                yield
-        finally:
-            self._request_context.scope = previous
-
-    def _before_game_request(self, route=""):
-        maintenance_service.require_open()
-        if self._maintenance_pending:
-            raise TaskDeferred("等待维护后重登")
-        scope = getattr(self._request_context, "scope", None)
-        guild_route = route.startswith(("Guild", "GuildItem")) or route == "ServerStatusHandler.QueryGuildStatus"
-        if scope is None and not guild_route:
-            return
-        self.require_current_day()
-        if scope is not None and not scope[0] and not scope[1]:
-            reason = self.automation_wait_reason()
-            if reason:
-                raise TaskDeferred(reason)
-        if (guild_route and (scope is None or not scope[1])
-                and not route.split(".")[-1].startswith("Query")
-                and has_guild(self.client.account_state)
-                and self.guild_runtime.get("enteredRevision") != self.state_revision):
-            raise TaskDeferred("等待佣兵团同步")
 
     # ---- 日志缓冲 ----
     def push_log(self, result: dict, prefix: str):
@@ -327,23 +229,45 @@ class Account:
         from .updater import service as update_service
 
         def should_stop():
-            return (self._stop.is_set() or update_service.is_installing()
-                    or self.automation_wait_reason() is not None)
+            return self._stop.is_set() or update_service.is_installing()
 
         if should_stop():
             return
-        with self.lock, resources.pin():
-            with self._request_scope():
-                run_auto_tasks(self.client,
-                               on_result=lambda result: self.push_log(result, "自动·"),
-                               should_stop=should_stop)
+        with self.lock:
+            run_auto_tasks(self.client,
+                           on_result=lambda result: self.push_log(result, "自动·"),
+                           should_stop=should_stop)
         if not should_stop():
             redeem_codes.refresh_if_due(initial=True)
 
+    def _restore_pending_assets_locked(self):
+        """Best-effort post-login recovery, clearing each completed attempt."""
+        from . import intimacy
+        try:
+            if not intimacy.recovery_pending(self.client, self.email):
+                return
+            result = intimacy.restore_all(self.client, account_key=self.email,
+                                          retry_deferred=True)
+        except Exception as error:
+            self.push_log({"id": "asset_recovery", "name": "借装归还", "ok": False,
+                           "detail": f"登录后自动归还失败：{error}，将在下次登录重试"}, "自动·")
+            return
+        if result.get("restored"):
+            self.note_inventory_changed()
+            detail = "登录后已逐件处理未完成借装"
+            if result.get("fallbacks"):
+                detail += "；失败或不存在的物品已清除待归还记录"
+            self.push_log({"id": "asset_recovery", "name": "借装归还", "ok": True,
+                           "detail": detail}, "自动·")
+        else:
+            self.push_log({"id": "asset_recovery", "name": "借装归还", "ok": False,
+                           "detail": f"{result.get('error') or '部分装备尚未确认归还'}，将在下次登录重试"}, "自动·")
+
     def _enabled_ids(self) -> list[str]:
         # Guild rewards belong to the guild page and its entry flow.
-        return [tid for tid, on in self.toggles.items()
-                if on and tid not in {"guild_auto_signin", "guild_auto_donate", "guild_auto_aid", "guild_auto_weekly", "guild_auto_store", "guild_auto_captain_store"}]
+        ids = [tid for tid, on in self.toggles.items()
+                if on and tid not in {"guild_auto_signin", "guild_auto_donate", "guild_auto_aid", "guild_auto_weekly", "guild_auto_store", "guild_auto_captain_store", guild_war_reward.TASK_ID}]
+        return ids
 
     def guild_snapshot(self) -> dict:
         service = GuildService(self.client, self.guild_runtime,
@@ -352,16 +276,17 @@ class Account:
                 "weekly": GuildWeeklyService(service).snapshot(),
                 "store": GuildStoreService(service).snapshot(),
                 "captainStore": GuildCaptainStoreService(service).snapshot(),
-                "waiting": self.automation_wait_reason(),
-                "loginRevision": self.state_revision, "revision": self._guild_revision}
+                "loginRevision": self.login_revision, "revision": self._guild_revision}
 
     def _guild_due_delay(self) -> float | None:
         if not has_guild(self.client.account_state):
             return None
-        if not self.daily_state_current():
-            return max(0.0, self._state_refresh_at - time.time())
         runtime = self.guild_runtime
-        pending = runtime.get("enteredRevision") != self.state_revision
+        pending = runtime.get("enteredRevision") != self.login_revision
+        # Attendance itself is automatic and must also run after a day rolls
+        # over while a long-lived farming session prevents the daily relogin.
+        if not pending and not self.guild_snapshot()["checkedIn"]:
+            pending = True
         if not pending and self.toggles.get("guild_auto_signin") and not runtime.get("claimBlocked"):
             state = self.guild_snapshot()
             pending = state["checkedIn"] and state["canClaim"]
@@ -403,11 +328,6 @@ class Account:
 
     def refresh_guild_locked(self, *, log_success=True):
         """Call under the account lock; manual refresh and login share all gates."""
-        self.require_current_day()
-        with self._request_scope(guild_entry=True):
-            return self._refresh_guild_locked(log_success=log_success)
-
-    def _refresh_guild_locked(self, *, log_success):
         runtime = self.guild_runtime
         service = GuildService(self.client, runtime,
                                donation_reserves(self.params.get("guild_auto_donate")))
@@ -415,10 +335,10 @@ class Account:
         self._guild_revision += 1
         try:
             if not has_guild(self.client.account_state):
-                runtime["enteredRevision"] = self.state_revision
+                runtime["enteredRevision"] = self.login_revision
                 return
             checked = service.enter().get("checkedIn", False)
-            runtime["enteredRevision"] = self.state_revision
+            runtime["enteredRevision"] = self.login_revision
             runtime.pop("claimBlocked", None)
             runtime.pop("claimError", None)
             runtime.pop("donationErrors", None)
@@ -432,9 +352,6 @@ class Account:
             GuildAidService(service).note_synced()
             GuildWeeklyService(service).note_synced()
             runtime.pop("guildTaskQueryRetryAtMs", None)
-        except TaskDeferred:
-            runtime.pop("enteredRevision", None)
-            return
         except Exception as error:
             # Re-query before retrying an unconfirmed mutation. The live own
             # member record tells us whether the previous request committed.
@@ -450,7 +367,6 @@ class Account:
         self._aid_guild_locked()
         self._weekly_guild_locked()
         self._store_guild_locked()
-        self._store_captain_guild_locked()
 
     def _claim_guild_locked(self):
         """Claim from cached eligibility only; never turn a toggle into a query."""
@@ -468,8 +384,6 @@ class Account:
             if service.claim_daily_if_due():
                 self.push_log({"id": "guild_auto_signin", "name": "佣兵团自动签到", "ok": True,
                                "detail": "已领取佣兵团日奖励"}, "自动·")
-        except TaskDeferred:
-            return
         except Exception as error:
             # A timeout can mean the reward was already committed. Keep the
             # cached state, and wait for the next normal sync before reusing it.
@@ -481,22 +395,19 @@ class Account:
             self._guild_revision += 1
 
     def _run_guild_if_due(self):
-        if not self.daily_state_current():
-            return
         from .updater import service as update_service
         delay = self._guild_due_delay()
         if (delay is None or delay > 0 or self._stop.is_set()
                 or update_service.is_installing() or not self.client.is_connected()):
             return
-        with self.lock, self._request_scope(guild_entry=True):
-            if not self.daily_state_current():
-                return
+        with self.lock:
             delay = self._guild_due_delay()
             if (delay is None or delay > 0 or self._stop.is_set()
                     or update_service.is_installing() or not self.client.is_connected()):
                 return
             try:
-                if self.guild_runtime.get("enteredRevision") != self.state_revision:
+                if (self.guild_runtime.get("enteredRevision") != self.login_revision
+                        or not self.guild_snapshot()["checkedIn"]):
                     self.refresh_guild_locked(log_success=False)
                 else:
                     self._claim_guild_locked()
@@ -505,8 +416,6 @@ class Account:
                     self._weekly_guild_locked()
                     self._store_guild_locked()
                     self._store_captain_guild_locked()
-            except TaskDeferred:
-                return
             except Exception as error:
                 self.push_log({"id": "guild_info", "name": "佣兵团", "ok": False,
                                "detail": f"{describe_error(error)}，5 分钟后重新查询"}, "自动·")
@@ -519,7 +428,7 @@ class Account:
                                donation_reserves(self.params.get("guild_auto_donate")))
         for key, rule in GUILD_DONATIONS.items():
             # Re-read settings between requests so disabling takes effect immediately.
-            if (not self.daily_state_current() or self._stop.is_set() or update_service.is_installing() or not self.client.is_connected()
+            if (self._stop.is_set() or update_service.is_installing() or not self.client.is_connected()
                     or not self.toggles.get("guild_auto_donate")):
                 return
             if (not donation_options(self.params.get("guild_auto_donate"))[key]
@@ -533,8 +442,6 @@ class Account:
                 if count:
                     self.push_log({"id": "guild_auto_donate", "name": "佣兵团自动捐赠", "ok": True,
                                    "detail": f"已捐赠{rule['name']} ×{count * rule['cost']:,}（{count} 次）"}, "自动·")
-            except TaskDeferred:
-                return
             except Exception as error:
                 # Do not repeat an uncertain spend from stale counters. A normal
                 # login / manual refresh will confirm it and unblock this resource.
@@ -558,7 +465,7 @@ class Account:
             return aid_options(self.params.get("guild_auto_aid"))
 
         def stopped():
-            return (not self.daily_state_current() or not self.toggles.get("guild_auto_aid") or self._stop.is_set()
+            return (not self.toggles.get("guild_auto_aid") or self._stop.is_set()
                     or update_service.is_installing() or not self.client.is_connected()
                     or not has_guild(self.client.account_state))
 
@@ -619,8 +526,6 @@ class Account:
                 count += 1
                 reward += gained
                 sent = True
-        except TaskDeferred:
-            return
         except Exception as error:
             runtime["aidError"] = describe_error(error)
             runtime["aidRetryAtMs"] = int(time.time() * 1000) + TASK_RETRY_MS
@@ -636,7 +541,6 @@ class Account:
 
     def _sync_guild_tasks_locked(self, service):
         """One hourly query refreshes both aid and weekly rewards."""
-        self.require_current_day()
         try:
             response = service.query()
             if not isinstance(response.get("GuildData"), dict):
@@ -645,8 +549,6 @@ class Account:
             GuildAidService(service).note_synced()
             GuildWeeklyService(service).note_synced()
             self.guild_runtime.pop("guildTaskQueryRetryAtMs", None)
-        except TaskDeferred:
-            raise
         except Exception:
             self.guild_runtime["guildTaskQueryRetryAtMs"] = int(time.time() * 1000) + TASK_RETRY_MS
             raise
@@ -660,7 +562,7 @@ class Account:
         weekly = GuildWeeklyService(service)
 
         def stopped():
-            return (not self.daily_state_current() or not self.toggles.get("guild_auto_weekly") or self._stop.is_set()
+            return (not self.toggles.get("guild_auto_weekly") or self._stop.is_set()
                     or update_service.is_installing() or not self.client.is_connected()
                     or not has_guild(self.client.account_state))
 
@@ -709,8 +611,6 @@ class Account:
                 if count:
                     self.push_log({"id": "guild_auto_weekly", "name": "佣兵团周任务", "ok": True,
                                    "detail": f"已领取全团积分奖励：{count} 档"}, "自动·")
-        except TaskDeferred:
-            return
         except Exception as error:
             runtime.update(weeklyError=describe_error(error), weeklySynced=False,
                            weeklyRetryAtMs=int(time.time() * 1000) + TASK_RETRY_MS)
@@ -721,8 +621,7 @@ class Account:
             self._guild_revision += 1
 
     def _on_inventory_increase(self, identifiers):
-        if (self.toggles.get('activity_vote')
-                and set(identifiers) & {row['ticket'] for row in voting_catalog().values()}):
+        if '1' in set(identifiers) and (self.toggles.get('chip_crafting') or self.toggles.get('vip_supplies')):
             self._wake.set()
         if self.toggles.get('guild_auto_store') and set(identifiers) & self.guild_runtime.get('shopWatchCurrencies', set()):
             self._wake.set()
@@ -739,7 +638,7 @@ class Account:
         store = GuildStoreService(GuildService(self.client, runtime))
 
         def stopped():
-            return (not self.daily_state_current() or self._stop.is_set() or update_service.is_installing()
+            return (self._stop.is_set() or update_service.is_installing()
                     or not self.client.is_connected() or not self.toggles.get('guild_auto_store'))
 
         def pause():
@@ -769,8 +668,6 @@ class Account:
                 count = store.buy(row['id'], row['buyable'], automatic=True)
                 self.push_log({'id': 'guild_auto_store', 'name': '团员商店', 'ok': True,
                                'detail': f"已购买{row['name']} ×{count * row['amount']}"}, '自动·')
-            except TaskDeferred:
-                return
             except Exception as error:
                 runtime.setdefault('shopUncertain', {}).setdefault(row['id'], True)
                 self.push_log({'id': 'guild_auto_store', 'name': '团员商店', 'ok': False,
@@ -792,7 +689,7 @@ class Account:
         store = GuildCaptainStoreService(GuildService(self.client, runtime))
 
         def stopped():
-            return (not self.daily_state_current() or self._stop.is_set() or update_service.is_installing()
+            return (self._stop.is_set() or update_service.is_installing()
                     or not self.client.is_connected() or not self.toggles.get('guild_auto_captain_store'))
 
         def pause():
@@ -814,8 +711,6 @@ class Account:
         for identifier in due_status:
             try:
                 store.guild._call('ServerStatusHandler.QueryGuildStatus')
-            except TaskDeferred:
-                return
             except Exception:
                 runtime.setdefault('captainShopStatusSyncRetryAtMs', {})[identifier] = (
                     int(time.time() * 1000) + CAPTAIN_BUFF_STATUS_SYNC_MS)
@@ -844,8 +739,6 @@ class Account:
                 retry.pop(row['id'], None)
                 self.push_log({'id': 'guild_auto_captain_store', 'name': '团长商店', 'ok': True,
                                'detail': f"已购买{row['name']}"}, '自动·')
-            except TaskDeferred:
-                return
             except CaptainShopInsufficientCurrency as error:
                 retry.pop(row['id'], None)
                 runtime.setdefault('captainShopWatchCurrencies', set()).add(error.currency)
@@ -885,8 +778,6 @@ class Account:
         self.guild_runtime.clear()
         self.guild_runtime["stateSyncedAtMs"] = self.state_synced_at
         self.guild_runtime["weeklyPersonalWeek"] = ((self.client.account_state or {}).get("PlayerGuildInfo") or {}).get("NowGuildQuestWeek")
-        self._login_server_ms = self._snapshot_time_ms()
-        self._login_game_day = self._snapshot_game_day()
         self._guild_revision += 1
 
     def _claim_runtime(self) -> dict:
@@ -895,7 +786,7 @@ class Account:
                 "checkAfterMs": max(self.state_synced_at, self._meal_check_after_ms),
                 "stateRefreshAtMs": int(self._state_refresh_at * 1000)}
         signin = {**(self.task_runtime.get("month_signin") or {}),
-                  "loginRevision": self.state_revision,
+                  "loginRevision": self.login_revision,
                   "stateSyncedAtMs": self.state_synced_at,
                   "stateRefreshAtMs": int(self._state_refresh_at * 1000)}
         return {**self.task_runtime, "send_meal": meal, "month_signin": signin}
@@ -913,12 +804,17 @@ class Account:
         claims = next_claim_times(self.client.account_state or {}, self.params,
                                  runtime=self._claim_runtime(), now_ms=now_ms)
         shop = claims.get("shop_free") or {}
-        if (shop.get("nextMs") is None and self._shop_free_last
-                and not self._retry_at_ms("shop_free")):
-            shop["nextMs"] = int((self._shop_free_last + SHOP_FREE_MIN_GAP) * 1000)
+        if self._shop_free_next_inspect_at:
+            shop["nextMs"] = max(shop.get("nextMs") or 0, int(self._shop_free_next_inspect_at * 1000))
             shop["ready"] = now_ms >= shop["nextMs"]
         for task_id, entry in claims.items():
             retry_at = self._retry_at_ms(task_id)
+            if task_id == arena_reward.TASK_ID:
+                # A five-minute retry must never extend the Monday window or
+                # carry an old failure deadline into a later reward period.
+                claims[task_id] = arena_reward.status(self.params.get(task_id), now_ms,
+                                                      retry_at_ms=retry_at)
+                continue
             if not retry_at or entry.get("blocked"):
                 continue
             # 免费额度已用尽时不能把一次失败变成下一次付费招募。
@@ -931,19 +827,6 @@ class Account:
             charge = entry.get("charge")
             if charge and charge.get("nextMs") is not None:
                 charge.update(ready=False, retrying=True)
-        for task_id, meta in TASKS.items():
-            if meta.get("kind") != "toggle":
-                continue
-            reason = self.automation_wait_reason(login_task=task_id in LOGIN_TASK_IDS)
-            if reason:
-                entry = claims.setdefault(task_id, {})
-                deadline = (self._state_refresh_at if not self.daily_state_current()
-                            else self.guild_runtime.get("retryAtMs", now_ms) / 1000)
-                entry.update(ready=False, waiting=reason, nextMs=max(now_ms, int(deadline * 1000)),
-                             note=reason, noteParts=[reason])
-                entry.pop("retrying", None)
-                if entry.get("charge"):
-                    entry["charge"] = {**entry["charge"], "ready": False, "note": reason}
         return claims
 
     def _retry_at_ms(self, task_id: str) -> int:
@@ -952,8 +835,6 @@ class Account:
     def _on_quest_updates(self):
         self._quest_update_revision += 1
         self._guild_revision += 1
-        if self.toggles.get('activity_vote'):
-            self._wake.set()
         if self.toggles.get("guild_auto_weekly"):
             self._wake.set()
         if (self.toggles.get('daily_achievement')
@@ -972,11 +853,12 @@ class Account:
         claims = self.next_claims(now_ms)
         ids = []
         for tid in self._enabled_ids():
-            if self.automation_wait_reason(login_task=tid in LOGIN_TASK_IDS):
-                continue
             if now_ms < self._retry_at_ms(tid):
                 continue
-            if tid in {"send_meal", "month_signin"}:
+            if tid in {"send_meal", "month_signin", "claim_mail", 'chip_crafting', 'vip_supplies', arena_reward.TASK_ID,guild_war_reward.TASK_ID}:
+                if tid == guild_war_reward.TASK_ID and self._guild_war_force_pending:
+                    ids.append(tid)
+                    continue
                 if (claims.get(tid) or {}).get("ready"):
                     ids.append(tid)
                 continue
@@ -992,12 +874,8 @@ class Account:
                     continue
                 ids.append(tid)
                 continue
-            if tid == 'activity_vote':
-                if (claims.get(tid) or {}).get('ready'):
-                    ids.append(tid)
-                continue
             if tid == "shop_free":
-                if not (claims.get(tid) or {}).get("ready"):
+                if not self._shop_free_pending and not (claims.get(tid) or {}).get("ready"):
                     continue
             if tid == "sf_tesseract":
                 entry = claims.get(tid) or {}
@@ -1011,40 +889,47 @@ class Account:
 
         必要性：`account_state` 只在 bootstrap（登录）时产生，后台巡检一直复用同一份。
         除虚拟幻境、免费招募外，静态商店的 BuyCount 也只能由新登录快照权威刷新。
-        游戏在 08:00 换日，每个在线账号在东八区每天 08:05~08:15 随机
+        游戏在 08:00 前完成重置，因此每个在线账号在东八区每天 08:10~08:30 随机
         成功重登一次。失败时保留旧快照，5 分钟后重试，不在本地擅自清零任何计数。
         """
         from .updater import service as update_service
-        if (maintenance_service.active or self._maintenance_pending or self._stop.is_set()
-                or update_service.is_installing() or time.time() < self._state_refresh_at):
+        if self._stop.is_set() or update_service.is_installing() or time.time() < self._state_refresh_at:
             return False
-        with self.lock, resources.pin():
+        with self.lock:
             # 手动刷新可能刚在等待锁期间完成；拿到锁后必须重新检查计划。
             now = time.time()
-            if (maintenance_service.active or self._maintenance_pending
-                    or self._stop.is_set() or now < self._state_refresh_at):
+            if self._stop.is_set() or now < self._state_refresh_at:
                 return False
             if self._auto_relogin_delay(now) is not None:
                 return False
             try:
                 self.client.bootstrap()
             except Exception as e:
-                # 保留昨天的成功登录标记，跨日任务继续等待，不能因失败而放行。
+                # 首次失败仍允许旧会话检查日间体力；连续补登失败不清除体力的退避。
+                if self.state_sync_error is None:
+                    self._queue_meal_check()
                 self.state_sync_error = str(e)
                 self._state_refresh_at = time.time() + TASK_RETRY_MS / 1000
                 _log.warning("账号 %s 刷新快照失败（沿用旧快照）: %s；下次重试=%s",
                              self.email, e, _scheduler_time(self._state_refresh_at))
                 self.push_log({"id": "state_refresh", "name": "每日重登", "ok": False,
                                "detail": f"重登失败：{e}，沿用旧快照，"
-                                          f"自动任务等待重登，{TASK_RETRY_MS // 60_000} 分钟后重试"}, "自动·")
+                                         f"{TASK_RETRY_MS // 60_000} 分钟后重试"}, "自动·")
                 return False
             # 成功取得当日快照后才排到下一个重置日；手动重登也会重排同一档期。
             self._sync_arena_after_login()
+            self._activity_friend_roster = None
+            self.support_cache.clear()
             self._state_refresh_at = _next_daily_state_refresh()
             self.state_revision += 1
+            self.login_revision += 1
+            self._post_login_recovery_pending = True
             self.state_synced_at = int(time.time() * 1000)
             self._note_guild_login()
             self._queue_meal_check()
+            self._shop_free_next_inspect_at = 0.0
+            if self.toggles.get('shop_free'):
+                self._shop_free_pending = True
             # 新登录立即处理每日签到；上一会话的失败退避不延迟这次触发。
             (self.task_runtime.get("month_signin") or {}).pop("retryAtMs", None)
             self.state_sync_error = None
@@ -1056,8 +941,6 @@ class Account:
     def _auto_relogin_delay(self, now: float | None = None) -> float | None:
         """Return time until recovery; None means no disconnected-session recovery."""
         now = time.time() if now is None else now
-        if maintenance_service.active or self._maintenance_pending:
-            return None
         cfg = config.get_auto_relogin_config()
         if not cfg["enabled"]:
             self._auto_relogin_transition_ms = None
@@ -1087,7 +970,7 @@ class Account:
         delay = self._auto_relogin_delay()
         if delay is None or delay > 0 or self._stop.is_set() or update_service.is_installing():
             return False
-        with self.lock, resources.pin():
+        with self.lock:
             # A manual login, logout, or setting change may have happened while waiting.
             delay = self._auto_relogin_delay()
             if delay is None or delay > 0 or self._stop.is_set() or update_service.is_installing():
@@ -1127,17 +1010,23 @@ class Account:
             return []
         # 分步任务每完成一步就写入缓冲，前端不必等整批请求结束才看到日志。
         on_partial = lambda result: self.push_log(result, prefix)
-        with self.lock, resources.pin():
-            if self._stop.is_set() or not self.daily_state_current():
+        with self.lock:
+            if self._stop.is_set():
                 return []
             ids = [task_id for task_id in ids
-                   if task_id not in {"daily_achievement", "redeem_code", "send_meal", "month_signin", "activity_vote"}
+                   if task_id not in {"daily_achievement", "redeem_code", "send_meal", "month_signin", "shop_free",guild_war_reward.TASK_ID}
                    or self.toggles.get(task_id)]
+            ids = [task_id for task_id in ids if task_id != arena_reward.TASK_ID
+                   or (self.params.get(task_id) or {}).get("enabled")]
             # 排队等锁期间可能已有另一轮失败；拿到锁后再次检查退避。
             now_ms = int(time.time() * 1000)
             ids = [task_id for task_id in ids if now_ms >= self._retry_at_ms(task_id)]
-            ids = [task_id for task_id in ids
-                   if not self.automation_wait_reason(login_task=task_id in LOGIN_TASK_IDS)]
+            if not ids:
+                return []
+            if 'shop_free' in ids:
+                ready=(self.next_claims(now_ms).get('shop_free')or{}).get('ready')
+                if not self._shop_free_pending and not ready:
+                    ids.remove('shop_free')
             if not ids:
                 return []
             # 每次拿到账号锁后合并当前登录版本，任务内再检查，避免开关与后台重复执行。
@@ -1147,17 +1036,22 @@ class Account:
                     self.task_runtime.setdefault(task_id, {}).update(claim_runtime[task_id])
             if "redeem_code" in ids:
                 self.params.setdefault("redeem_code", {})
-            results = []
-            for task_id in ids:
-                if self.automation_wait_reason(login_task=task_id in LOGIN_TASK_IDS):
-                    break
-                with self._request_scope(login_task=task_id in LOGIN_TASK_IDS):
-                    results.extend(run_toggle_tasks(
-                        self.client, [task_id], self.params, self.task_runtime, on_partial=on_partial))
+            if guild_war_reward.TASK_ID in ids:
+                self.params.setdefault(guild_war_reward.TASK_ID,{})
+                if self._guild_war_force_pending:
+                    self.params[guild_war_reward.TASK_ID] = {
+                        **self.params[guild_war_reward.TASK_ID],
+                        "_forceCheck": True,
+                    }
+            shop_scheme = deepcopy((self.params.get('shop_free') or {}).get('equipmentScheme'))
+            results = run_toggle_tasks(
+                self.client, ids, self.params, self.task_runtime, on_partial=on_partial)
             for result in results:
                 task_id = result.get("id")
-                if result.get("deferred"):
-                    continue
+                if task_id in {arena_reward.TASK_ID,guild_war_reward.TASK_ID} and result.get("ok"):
+                    config.save_account(self.email, params=self.params)
+                if task_id == guild_war_reward.TASK_ID and result.get("ok"):
+                    self._guild_war_force_pending = False
                 if task_id == "send_meal":
                     # 投递/邮件确认有各自餐次闸门，沿用任务内部的 5 分钟退避。
                     continue
@@ -1166,13 +1060,20 @@ class Account:
                     failed = (not result.get("skipped")
                               and (result.get("retryable") or not result.get("ok")))
                     if failed and not result.get("retryManaged"):
-                        runtime_state["retryAtMs"] = int(time.time() * 1000) + TASK_RETRY_MS
+                        retry_at = int(time.time() * 1000) + TASK_RETRY_MS
+                        if task_id == arena_reward.TASK_ID and not arena_reward.in_window(retry_at):
+                            retry_at = arena_reward.next_slot({}, retry_at)
+                        runtime_state["retryAtMs"] = retry_at
                         if task_id == "daily_achievement":
                             self._quest_check_pending = True
                     else:
                         runtime_state.pop("retryAtMs", None)
                     if task_id == "shop_free" and not failed:
                         self._shop_free_last = time.time()
+                        deadline = secret_shop_next_free(self.client.account_state or {})
+                        self._shop_free_next_inspect_at = (self._shop_free_last + SHOP_FREE_MIN_GAP
+                            if not deadline or deadline <= int(self._shop_free_last * 1000) else 0.0)
+                        self._shop_free_pending = False
                     continue
                 runtime_state = self.task_runtime.setdefault("redeem_code", {})
                 if not result.get("skipped"):
@@ -1192,6 +1093,8 @@ class Account:
         for result in results:
             if result.get("id") != "shop_free":
                 continue
+            from .equipment_notifications import publish_result
+            publish_result(self.email, 'shop_free', result, shop_scheme)
             shelf = result.pop("records", None)
             if isinstance(shelf, list):
                 self.shop_shelf = shelf
@@ -1204,15 +1107,13 @@ class Account:
                 self.push_log(r, prefix)
         return results
 
-    def run_due(self, prefix: str = "巡检·", *, login_only=None) -> list[dict]:
+    def run_due(self, prefix: str = "巡检·") -> list[dict]:
         """跑本轮到点该跑的开关（结果进日志缓冲）。"""
         ids = self._due_ids()
-        if login_only is not None:
-            ids = [tid for tid in ids if (tid in LOGIN_TASK_IDS) == login_only]
         quest_revision = self._quest_update_revision
         results = self.run_toggles(ids, prefix)
         achievement = next((r for r in results if r.get("id") == "daily_achievement"), None)
-        if (achievement is not None and achievement.get("ok") and not achievement.get("deferred")
+        if (achievement is not None and achievement.get("ok")
                 and not achievement.get("retryable")
                 and self._quest_update_revision == quest_revision):
             self._quest_checked_revision = quest_revision
@@ -1225,6 +1126,7 @@ class Account:
         用户拨开竞技场开关后再勾 NPC，勾选本身不触发执行；没有这个唤醒，就要等
         下一轮巡检才动，看起来像"隔了几分钟才有日志"。
         """
+        self.client._auto_chip_crafting_enabled=bool(self.toggles.get('chip_crafting'))
         redeem_enabled = bool(self.toggles.get("redeem_code"))
         if redeem_enabled and not self._redeem_pending:
             self._redeem_pending = True
@@ -1240,26 +1142,49 @@ class Account:
         if meal_enabled and not self._send_meal_enabled:
             self._queue_meal_check()
         self._send_meal_enabled = meal_enabled
+        shop_enabled=bool(self.toggles.get('shop_free'))
+        if shop_enabled and not self._shop_free_enabled:
+            self._shop_free_pending=True
+        self._shop_free_enabled=shop_enabled
+        war_enabled = bool(self.toggles.get(guild_war_reward.TASK_ID))
+        if war_enabled and not self._guild_war_reward_enabled:
+            # An explicit enable should query the previous battle immediately,
+            # regardless of the calendar day or the normal retry cooldown.
+            self._guild_war_force_pending = True
+            (self.task_runtime.get(guild_war_reward.TASK_ID) or {}).pop('retryAtMs', None)
+        self._guild_war_reward_enabled = war_enabled
+        self._wake.set()
+
+    def note_inventory_changed(self):
+        """Publish changed roles/items without scheduling a fresh login patrol."""
+        self.state_revision += 1
+        self._on_quest_updates()
         self._wake.set()
 
     def note_state_refreshed(self):
         """手动重登成功后重排每日任务，避免当天再次自动重登。"""
-        with maintenance_service.lock:
-            maintenance_service.require_open()
         self._sync_arena_after_login()
+        self._activity_friend_roster = None
+        self.support_cache.clear()
         self._auto_relogin_at = None
         self._auto_relogin_transition_ms = None
         self.state_revision += 1
+        self.login_revision += 1
+        self._post_login_recovery_pending = True
         self.state_synced_at = int(time.time() * 1000)
         self._note_guild_login()
+        self._guild_war_force_pending = True
         self._queue_meal_check()
+        # A fresh login is an explicit one-time shelf inspection opportunity;
+        # subsequent wakeups still obey the one-hour guard.
+        self._shop_free_next_inspect_at = 0.0
+        if self.toggles.get('shop_free'):
+            self._shop_free_pending=True
         (self.task_runtime.get("month_signin") or {}).pop("retryAtMs", None)
+        (self.task_runtime.get(guild_war_reward.TASK_ID) or {}).pop('retryAtMs', None)
         self.state_sync_error = None
         self._state_refresh_at = _next_daily_state_refresh()
         self._on_quest_updates()
-        with maintenance_service.lock:
-            maintenance_service.require_open()
-            self._maintenance_pending = False
         self._wake.set()
 
     def _sync_arena_after_login(self):
@@ -1283,10 +1208,6 @@ class Account:
         """
         ids = self._enabled_ids()
         now = time.time()
-        if maintenance_service.active:
-            return SCAN_MAX_GAP  # Official bulletin observations wake this scheduler.
-        if self._maintenance_pending:
-            return SCAN_MIN_GAP if self._maintenance_attempted != self._maintenance_epoch else SCAN_MAX_GAP
         auto_delay = self._auto_relogin_delay(now)
         if auto_delay is not None:
             from .updater import service as update_service
@@ -1294,11 +1215,8 @@ class Account:
                 return SCAN_MIN_GAP
             return min(SCAN_MAX_GAP, auto_delay)
         now_ms = now * 1000
-        if not self.daily_state_current():
-            return min(SCAN_MAX_GAP, max(1.0, self._state_refresh_at - now))
-        if (has_guild(self.client.account_state)
-                and self.guild_runtime.get("enteredRevision") != self.state_revision):
-            return min(SCAN_MAX_GAP, max(1.0, self.guild_runtime.get("retryAtMs", 0) / 1000 - now))
+        if 'shop_free' in ids and self._shop_free_pending and now_ms>=self._retry_at_ms('shop_free'):
+            return 0.0
         try:
             nc = self.next_claims(int(now_ms))
         except Exception:
@@ -1330,13 +1248,6 @@ class Account:
                         (self._quest_check_pending or
                          self._quest_update_revision > self._quest_checked_revision)):
                     cands.append(max(0.0, (self._retry_at_ms(tid) - now_ms) / 1000))
-                continue
-            if tid == 'activity_vote':
-                entry = nc.get(tid) or {}
-                if entry.get('ready'):
-                    cands.append(max(0.0, (self._retry_at_ms(tid) - now_ms) / 1000))
-                elif entry.get('nextMs') is not None:
-                    cands.append(max(0.0, (entry['nextMs'] - now_ms) / 1000))
                 continue
             if tid == "arena_npc":
                 cands.append(max(self._arena_due_delay(now_ms),
@@ -1381,10 +1292,6 @@ class Account:
         enabled = self._enabled_ids()
         if not enabled:
             return None
-        if self.automation_wait_reason():
-            deadline = (self._state_refresh_at * 1000 if not self.daily_state_current()
-                        else self.guild_runtime.get("retryAtMs", now))
-            return max(now, int(deadline))
 
         candidates: list[int] = []
         try:
@@ -1395,7 +1302,7 @@ class Account:
         for task_id in enabled:
             # These tasks are triggered by a state update or an external
             # catalogue change rather than by a clock deadline.
-            if task_id in {"redeem_code", "daily_achievement", "activity_vote"}:
+            if task_id in {"redeem_code", "daily_achievement"}:
                 continue
 
             if task_id == "arena_npc":
@@ -1487,10 +1394,15 @@ class Account:
         """
         # 体力投递与邮件确认是两个请求；刷新不能抹掉中途的确认状态或重试档期。
         meal_runtime = self.task_runtime.get("send_meal")
+        signin_runtime = self.task_runtime.get("month_signin")
+        supplies_runtime={key:self.task_runtime[key] for key in ('chip_crafting','vip_supplies') if key in self.task_runtime}
         arena_waiting = (self.task_runtime.get("arena_npc") or {}).get("waitingForLogin")
         self.task_runtime.clear()
+        self.task_runtime.update(supplies_runtime)
         if meal_runtime is not None:
             self.task_runtime["send_meal"] = meal_runtime
+        if signin_runtime is not None:
+            self.task_runtime["month_signin"] = signin_runtime
         if arena_waiting:
             self.task_runtime["arena_npc"] = {"waitingForLogin": dict(arena_waiting)}
 
@@ -1502,12 +1414,11 @@ class Account:
         while not self._stop.is_set():
             self._wake.clear()
             try:
+                if not self._startup_done:
+                    self._startup_done = True
+                    self._run_startup_tasks()
                 if self._stop.is_set():
                     break
-                self._maintenance_relogin_if_due()
-                if maintenance_service.active or self._maintenance_pending:
-                    self._wake.wait(SCAN_MAX_GAP)
-                    continue
                 self._auto_relogin_if_due()
                 self._refresh_state_if_due()
                 redeem_codes.refresh_if_due()
@@ -1515,24 +1426,35 @@ class Account:
                     break
                 if redeem_codes.revision() > self._redeem_checked_revision:
                     self._redeem_pending = bool(self.toggles.get("redeem_code"))
-                # 登录任务 → 佣兵团查询/报到/自动任务 → 其余自动任务。
-                prefix = "登录·" if first_pass else "巡检·"
-                self.run_due(prefix, login_only=True)
+                # 登录后的每日签到、每日体力等自动任务先执行；佣兵团进入流程放在
+                # 本轮任务之后，避免它抢在这些登录任务之前发送请求。
+                self.run_due("登录·" if first_pass else "巡检·")
                 self._run_guild_if_due()
-                if not self._startup_done and not self.automation_wait_reason():
-                    self._startup_done = True
-                    self._run_startup_tasks()
-                self.run_due(prefix, login_only=False)
             except Exception as e:
                 _log.exception("账号 %s 后台巡检异常: %s", self.email, e)
                 self.push_log({"id": "automation", "name": "自动任务", "ok": False,
                                "detail": str(e)}, "自动·")
+            finally:
+                # Finish ordinary login tasks first. Never compete with a live
+                # borrower; its worker owns final cleanup until it exits.
+                if (self._post_login_recovery_pending and not self._stop.is_set()
+                        and not getattr(self.client, '_intimacy_asset_owner', None)
+                        and not getattr(self.client, '_automation_asset_owner', None)):
+                    with self.lock:
+                        if (not getattr(self.client, '_intimacy_asset_owner', None)
+                                and not getattr(self.client, '_automation_asset_owner', None)):
+                            self._restore_pending_assets_locked()
+                            self._post_login_recovery_pending = False
             first_pass = False
             if self._stop.is_set():
                 break
             # 睡到"最早一个到点时刻"，而不是固定 5 分钟盲扫。
             # 期间用户改开关/改勾选会置位 _wake 提前唤醒（notify_config_changed）。
-            delay = self._next_wake_delay()
+            try:
+                delay = self._next_wake_delay()
+            except Exception as error:
+                _log.exception('账号 %s 计算下次唤醒失败，%s秒后复查：%s', self.email, SCAN_MIN_GAP, error)
+                delay = SCAN_MIN_GAP
             wait_started = time.time()
             planned_at = wait_started + delay
             _log.info(
@@ -1555,9 +1477,24 @@ class Account:
 
     def close(self):
         self.stop_scheduler()
-        maintenance_service.unwatch(self)
+        cancel = getattr(self, 'activity_cancel_event', None)
+        if cancel is not None:
+            cancel.set()
+        pending = [event for event in (getattr(self,'intimacy_done_event',None),getattr(self,'activity_done_event',None))
+                   if event is not None and not event.is_set()]
+        if pending:
+            # Cancellation returns loans using this same authenticated client.
+            # Closing its HTTP transport while the websocket exits would make
+            # those returns fail now that battles release the account lock.
+            def after_cleanup():
+                for cleanup in pending:cleanup.wait()
+                try:
+                    with self.lock:self.client.close()
+                except Exception:pass
+            threading.Thread(target=after_cleanup, name='account-close-after-loans', daemon=True).start()
+            return
         try:
-            with self.lock, resources.pin():
+            with self.lock:
                 self.client.close()
         except Exception:
             pass

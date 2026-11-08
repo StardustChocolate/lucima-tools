@@ -2,35 +2,59 @@ package com.openrubi.lucimatools
 
 import android.content.Context
 import java.io.File
+import java.io.InputStream
+import java.security.MessageDigest
 
 /**
  * 把 APK assets/web 下的 frontend/ 与 assets/ 释放到私有目录（真实文件系统），
  * 供 Python 的标准库服务器 open() 读取。做一次性释放，戳记未变则跳过
  * （避免每次启动都重复复制静态图片）。
  *
- * 戳记 = `versionCode:lastUpdateTime`。**不能只用 versionCode**：versionCode 现在
- * 由 backend/version.py 的 APP_VERSION 派生（见 build.gradle.kts），同一版本内改了
- * frontend/ 重新构建安装时 versionCode 不变 → 旧逻辑会跳过释放，设备上继续跑旧前端，
- * 看起来像"改了没生效"。`lastUpdateTime` 每次安装/覆盖安装都会变，正好补上这一档，
- * 顺带干掉了过去"同步 Android 必须手工 bump versionCode"的坑。
+ * 同版本覆盖安装也必须刷新界面：安装戳记加上 APK 内的核心前端文件指纹，
+ * 再核对实际释放文件。即使模拟器安装时间未变或旧文件残留，也不能跳过同步。
  */
 object AssetSync {
 
+    private val frontendFiles = listOf("frontend/index.html", "frontend/app.js", "frontend/style.css")
+
     fun syncWeb(ctx: Context, target: File) {
-        val token = try {
+        val installation = try {
             val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-            "${pi.longVersionCode}:${pi.lastUpdateTime}"
+            "${pi.versionCode}:${pi.lastUpdateTime}"
         } catch (e: Exception) {
             "1:0"
         }
+        val expected = frontendFiles.associateWith { path ->
+            ctx.assets.open("web/$path").use { sha256(it) }
+        }
+        val token = installation + ":" + expected.values.joinToString(":")
         val stamp = File(target, ".version")
-        if (target.exists() && stamp.exists() && stamp.readText().trim() == token) {
+        if (target.exists() && runCatching { stamp.readText().trim() }.getOrNull() == token &&
+            frontendMatches(target, expected)
+        ) {
             return // 与当前安装的包一致，跳过
         }
         target.deleteRecursively()
         target.mkdirs()
         copyAssetDir(ctx, "web", target)
+        check(frontendMatches(target, expected)) { "前端资源同步不完整" }
         stamp.writeText(token)
+    }
+
+    private fun frontendMatches(target: File, expected: Map<String, String>): Boolean =
+        expected.all { (path, digest) ->
+            runCatching { File(target, path).inputStream().use { sha256(it) } == digest }.getOrDefault(false)
+        }
+
+    private fun sha256(input: InputStream): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(8192)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     private fun copyAssetDir(ctx: Context, assetPath: String, outDir: File) {
@@ -47,13 +71,10 @@ object AssetSync {
             if (sub != null && sub.isNotEmpty()) {
                 copyAssetDir(ctx, childAsset, File(outDir, name))
             } else {
-                // 叶子：尝试当文件复制；失败则说明是空目录
-                try {
-                    am.open(childAsset).use { input ->
-                        File(outDir, name).outputStream().use { input.copyTo(it) }
-                    }
-                } catch (e: Exception) {
-                    File(outDir, name).mkdirs()
+                // An I/O error must fail startup and leave the stamp absent.
+                // Treating it as an empty directory permanently hid bad files.
+                am.open(childAsset).use { input ->
+                    File(outDir, name).outputStream().use { input.copyTo(it) }
                 }
             }
         }

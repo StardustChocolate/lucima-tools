@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from backend.version import APP_VERSION  # noqa: E402
+from backend.branding import WINDOWS_APPLICATION_ID  # noqa: E402
 
 
 SAFE_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]*$")
@@ -30,12 +31,13 @@ def file_sha256(path: Path) -> str:
 
 def package_windows(source: Path, destination: Path) -> None:
     source = source.resolve()
-    expected = {"LucimaTools.exe", "_internal"}
+    executable = WINDOWS_APPLICATION_ID + ".exe"
+    expected = {executable, "_internal"}
     if not source.is_dir() or {entry.name for entry in source.iterdir()} != expected \
-            or not (source / "LucimaTools.exe").is_file() \
+            or not (source / executable).is_file() \
             or not (source / "_internal").is_dir():
         raise SystemExit(
-            "Windows bundle must contain only LucimaTools.exe and _internal"
+            f"Windows bundle must contain only {executable} and _internal"
         )
 
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")

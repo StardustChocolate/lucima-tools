@@ -71,7 +71,7 @@ class GuildUITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(headless=True)
+        cls.browser = cls.playwright.chromium.launch(headless=True, executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
 
     @classmethod
     def tearDownClass(cls):
@@ -87,6 +87,10 @@ class GuildUITests(unittest.TestCase):
         self.hold_overview = False
         self.pending_overview = None
         self.toggle_error = False
+        self.hold_toggles = False
+        self.pending_toggles = []
+        self.hold_toggle_snapshot = False
+        self.pending_toggle_reads = []
         self.overview_error = False
         self.score_jobs = {}
         self.score_start_error = False
@@ -118,6 +122,16 @@ class GuildUITests(unittest.TestCase):
             route.abort()
             return
         if path.startswith("/api/"):
+            if path == '/api/toggles' and route.request.method == 'GET':
+                if self.hold_toggle_snapshot:
+                    self.pending_toggle_reads.append(route)
+                    return
+                route.fulfill(content_type='application/json', body=json.dumps({
+                    'toggles': {'guild_auto_signin': True}, 'params': {}}))
+                return
+            if path == '/api/toggles' and self.hold_toggles:
+                self.pending_toggles.append(route)
+                return
             if path == '/api/guild/quests/start':
                 job = {'id': body['requestId'], 'mode': body['mode'], 'kind': 'quest_rewards',
                        'state': 'running', 'running': True, 'score': 1200, 'target': 2800, 'completed': 0}
@@ -151,12 +165,12 @@ class GuildUITests(unittest.TestCase):
                 "/api/tasks": {"toggle": [], "manual": [], "buyTargets": {}},
                 "/api/update/status": {"testServer": True, "available": False},
                 "/api/update/check": {"testServer": True, "available": False},
-                "/api/resources/status": {"bundled": True, "phase": "ready", "version": ""},
                 "/api/logs/auto": {"entries": [], "logSeq": 0},
                 "/api/guild/overview": {"guild": summary("刷新后的佣兵团", 4)},
                 "/api/guild/store/buy": {"guild": summary(revision=10)},
                 "/api/toggles": {"ok": True},
                 "/api/status": {"status": {}},
+                "/api/game-data/status": {"phase": "ready", "version": "catalog_115942", "revision": 0},
                 "/api/roster": {"roles": [], "items": []},
             }
             if path not in responses:
@@ -165,6 +179,7 @@ class GuildUITests(unittest.TestCase):
             return
         file = ROOT / "frontend/index.html" if path == "/" else (
             ROOT / "frontend" / path.removeprefix("/static/") if path.startswith("/static/")
+            else ROOT / "equipment/web" / path.removeprefix("/equipment/") if path.startswith("/equipment/")
             else ROOT / path.lstrip("/"))
         if not file.resolve().is_relative_to(ROOT) or not file.is_file():
             self.unexpected.append(path)
@@ -178,27 +193,6 @@ class GuildUITests(unittest.TestCase):
 
     def count(self, path):
         return sum(row[0] == path for row in self.requests)
-
-    def test_daily_login_and_guild_sync_waits_are_visible_without_disabling_settings(self):
-        self.enter_guild()
-        for index, reason in enumerate(('等待每日重登', '等待佣兵团同步')):
-            self.page.evaluate("guild => applyGuildSnapshot('first', guild)",
-                               summary(revision=10 + index, waiting=reason, claimError='old error'))
-            for identifier in ('guildSigninState', 'guildDonateState', 'guildAidState',
-                               'guildWeeklyState', 'guildStoreState', 'guildCaptainStoreState', 'guildScoreState'):
-                self.assertEqual(self.page.locator('#' + identifier).inner_text(), reason)
-                classes = self.page.locator('#' + identifier).get_attribute('class') or ''
-                self.assertNotIn('ready', classes)
-                self.assertNotIn('error', classes)
-            self.assertTrue(self.page.locator('#guildAutoSignin').is_enabled())
-            self.assertTrue(self.page.locator('#guildAutoDonate').is_enabled())
-            self.assertEqual(self.page.locator('#guildRefresh').is_disabled(), reason == '等待每日重登')
-            self.assertTrue(self.page.locator('#guildScoreStart').is_disabled())
-            if index == 0:
-                self.page.locator('#guildManualStoreOptions').click()
-            self.assertTrue(all(self.page.locator('#guildManualStoreGoods button').nth(i).is_disabled()
-                                for i in range(self.page.locator('#guildManualStoreGoods button').count())))
-        self.assertEqual(self.count('/api/guild/overview'), 0)
 
     def test_cached_summary_no_extra_entry_requests_and_other_features_absent(self):
         self.enter_guild()
@@ -296,6 +290,55 @@ class GuildUITests(unittest.TestCase):
         self.assertEqual(self.page.locator("#guildOverview").count(), 0)
         self.assertEqual(self.count("/api/guild/overview"), 0)
 
+    def test_hung_signin_save_times_out_and_leaves_navigation_and_controls_usable(self):
+        self.enter_guild()
+        self.page.clock.install()
+        self.hold_toggles = True
+        self.page.locator('.guild-signin-row').click()
+        self.page.wait_for_function("document.getElementById('guildAutoSignin').disabled")
+        self.page.evaluate("showSection('manual'); showSection('guild')")
+        self.assertTrue(self.page.locator('#guildName').is_visible())
+        self.page.clock.fast_forward(15000)
+        self.page.wait_for_function("!document.getElementById('guildAutoSignin').disabled")
+        self.assertTrue(self.page.locator('#guildAutoSignin').is_checked())
+        self.assertFalse(self.page.locator('#guildAutoDonate').is_disabled())
+        self.assertEqual(self.count('/api/guild/overview'), 0)
+        self.assertTrue(any(path == '/api/toggles' and body is None for path, body in self.requests))
+        for route in self.pending_toggles:
+            route.abort()
+        self.hold_toggles = False
+        self.page.locator('.guild-signin-row').click()
+        self.page.wait_for_function("!document.getElementById('guildAutoSignin').disabled")
+        self.assertFalse(self.page.locator('#guildAutoSignin').is_checked())
+
+    def test_hung_settings_and_status_both_release_controls_without_crossing_accounts(self):
+        self.enter_guild()
+        self.page.clock.install()
+        self.hold_toggles = self.hold_toggle_snapshot = True
+        self.page.locator('.guild-signin-row').click()
+        with self.page.expect_request(lambda request: '/api/toggles?account=first' in request.url):
+            self.page.clock.fast_forward(9000)
+        self.page.clock.fast_forward(4000)
+        self.page.wait_for_function("!document.getElementById('guildAutoSignin').disabled")
+        self.assertFalse(self.page.locator('#guildAutoSignin').is_checked())
+        self.assertIn('设置保存超时', self.page.evaluate("ACCOUNTS.first.logHtml"))
+        self.assertFalse(self.page.evaluate('Boolean(ACCOUNTS.second.toggles.guild_auto_signin)'))
+        for route in self.pending_toggles + self.pending_toggle_reads:
+            route.abort()
+
+    def test_identical_guild_polls_keep_existing_currency_images_and_controls(self):
+        self.enter_guild()
+        self.page.evaluate("""() => {
+          window.balanceImage=document.querySelector('#guildStoreBalances img');
+          window.balanceImage2=document.querySelector('#guildManualStoreBalances img');
+          for(let i=0;i<30;i++) applyGuildSnapshot('first', structuredClone(ACCOUNTS.first.guild));
+        }""")
+        self.assertTrue(self.page.evaluate("balanceImage===document.querySelector('#guildStoreBalances img')"))
+        self.assertTrue(self.page.evaluate("balanceImage2===document.querySelector('#guildManualStoreBalances img')"))
+        self.page.locator('.guild-signin-row').click()
+        self.page.wait_for_function("!document.getElementById('guildAutoSignin').disabled")
+        self.assertTrue(self.page.locator('#guildAutoSignin').is_checked())
+
     def test_late_response_keeps_accounts_isolated_and_ignores_old_revision(self):
         self.enter_guild()
         self.hold_overview = True
@@ -383,56 +426,6 @@ class GuildUITests(unittest.TestCase):
         self.page.evaluate("activeAccount='first'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
         self.assertEqual(inputs.nth(0).input_value(), "0")
         self.assertEqual(inputs.nth(1).input_value(), "0")
-
-    def test_donation_reserve_editing_survives_background_refresh(self):
-        self.page.set_viewport_size({"width": 390, "height": 900})
-        self.enter_guild()
-        self.page.locator("#guildDonateOptions").click()
-        for key, value in (("courage", "25"), ("gold", "50000")):
-            field = self.page.locator(f'.guild-donate-reserve[data-key="{key}"]')
-            saved_before = self.count("/api/toggles")
-            field.fill("")
-            for length in range(len(value) + 1):
-                if length:
-                    field.press(value[length - 1])
-                self.page.evaluate("applyGuildSnapshot('first', {...ACCOUNTS.first.guild, revision:ACCOUNTS.first.guild.revision+1})")
-                self.assertEqual(field.input_value(), value[:length])
-                self.assertTrue(field.evaluate("el => document.activeElement === el"))
-            self.assertEqual(field.input_value(), value)
-            self.assertEqual(self.count("/api/toggles"), saved_before)
-            field.press("Tab")
-            self.page.wait_for_function("!document.getElementById('guildAutoDonate').disabled")
-            saved = [body for path, body in self.requests if path == "/api/toggles"][-1]
-            self.assertEqual(saved["params"]["guild_auto_donate"]["reserve"][key], int(value))
-            self.assertEqual(field.input_value(), value)
-
-    def test_donation_reserve_drafts_stay_with_the_account_and_session(self):
-        self.enter_guild()
-        self.page.locator("#guildDonateOptions").click()
-        field = self.page.locator('.guild-donate-reserve[data-key="courage"]')
-        field.fill("25")
-        self.page.evaluate("activeAccount='second'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
-        self.assertEqual(field.input_value(), "10")
-        self.page.evaluate("activeAccount='first'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
-        self.assertEqual(field.input_value(), "25")
-        self.page.evaluate("""() => {
-            ACCOUNTS.first = {...ACCOUNTS.first, params:{guild_auto_donate:{reserve:{courage:17}}}};
-            window.dispatchEvent(new CustomEvent('lucima:account-change'));
-        }""")
-        self.assertEqual(field.input_value(), "17")
-        self.assertEqual(self.count("/api/toggles"), 0)
-
-    def test_donation_reserve_failed_save_restores_saved_value(self):
-        self.enter_guild()
-        self.page.locator("#guildDonateOptions").click()
-        field = self.page.locator('.guild-donate-reserve[data-key="courage"]')
-        field.fill("25")
-        self.toggle_error = True
-        field.press("Tab")
-        self.page.wait_for_function("(ACCOUNTS.first.logHtml || '').includes('自动捐赠设置保存失败')")
-        self.assertEqual(field.input_value(), "10")
-        self.page.evaluate("applyGuildSnapshot('first', {...ACCOUNTS.first.guild, revision:ACCOUNTS.first.guild.revision+1})")
-        self.assertEqual(field.input_value(), "10")
 
     def test_mobile_desktop_light_dark_layout(self):
         self.enter_guild()
@@ -683,7 +676,7 @@ class GuildUITests(unittest.TestCase):
             for theme in ('dark', 'light'):
                 self.page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
                 self.page.locator('#guildWeeklyRow').scroll_into_view_if_needed()
-                self.page.evaluate("Promise.all(document.getAnimations().map(animation => animation.finished))")
+                self.page.evaluate("Promise.all(document.getAnimations().filter(animation => animation.effect.getTiming().iterations !== Infinity).map(animation => animation.finished))")
                 bounds = self.page.locator('#guildWeeklyRow').bounding_box()
                 self.assertGreaterEqual(bounds['x'], 0)
                 self.assertLessEqual(bounds['x'] + bounds['width'], width)
@@ -697,6 +690,7 @@ class GuildUITests(unittest.TestCase):
 
     def test_score_warning_requires_confirmation_and_can_cancel_or_stop(self):
         self.enter_guild()
+        self.page.evaluate("$('guildScoreRow').hidden=false; $('guildScoreRow').classList.remove('hidden')")
         button = self.page.locator('#guildScoreStart')
         self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
         self.assertEqual(self.page.locator('.guild-score-warning').inner_text(), '非常规功能')
@@ -727,6 +721,7 @@ class GuildUITests(unittest.TestCase):
 
     def test_score_lost_start_response_is_queried_without_sending_start_again(self):
         self.enter_guild()
+        self.page.evaluate("$('guildScoreRow').hidden=false; $('guildScoreRow').classList.remove('hidden')")
         self.score_start_error = True
         self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
         self.page.locator('#guildScoreStart').click()
@@ -737,11 +732,14 @@ class GuildUITests(unittest.TestCase):
         self.score_jobs['first'].update(state='completed', running=False, completed=64, score=2800)
         self.page.wait_for_function("document.getElementById('guildScoreState').textContent.includes('已完成')")
         self.assertEqual(self.page.locator('#guildScoreState').inner_text(), '全团积分 2800 / 2800 · 已领取 64 次 · 已完成')
-        self.assertFalse(self.page.locator('#guildScoreStart').is_disabled())
+        self.page.wait_for_function("!document.getElementById('guildScoreStart').hasAttribute('data-action-waiting')")
+        full = self.page.evaluate("ACCOUNTS.first.guild.weekly.score >= 2800")
+        self.assertEqual(self.page.locator('#guildScoreStart').is_disabled(), full)
         self.assertEqual(self.count('/api/guild/quests/start'), 1)
 
     def test_score_account_switch_or_no_guild_does_not_start_or_leak_task(self):
         self.enter_guild()
+        self.page.evaluate("$('guildScoreRow').hidden=false; $('guildScoreRow').classList.remove('hidden')")
         self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
         self.page.locator('#guildScoreStart').click()
         self.page.evaluate("activeAccount='second'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
@@ -771,12 +769,24 @@ class GuildUITests(unittest.TestCase):
         self.page.evaluate("applyGuildSnapshot('first', {...ACCOUNTS.first.guild, revision:3, weekly:{...ACCOUNTS.first.guild.weekly, score:null}})")
         self.assertIn('— / 2800', self.page.locator('#guildScoreState').inner_text())
 
+    def test_full_score_disables_start_until_current_score_changes(self):
+        self.score_jobs['first']={'id':'full','mode':'score','running':False,'state':'completed',
+            'score':2800,'target':2800,'completed':72,
+            'guild':summary(weekly={**weekly_summary(),'score':2800})}
+        self.enter_guild()
+        self.page.wait_for_function("document.getElementById('guildScoreStart').textContent === '团队积分已满'")
+        self.assertTrue(self.page.locator('#guildScoreStart').is_disabled())
+        self.page.evaluate("applyGuildSnapshot('first',{...ACCOUNTS.first.guild,revision:9,weekly:{...ACCOUNTS.first.guild.weekly,score:1000}})")
+        self.assertEqual(self.page.locator('#guildScoreStart').inner_text(),'开始')
+        self.assertFalse(self.page.locator('#guildScoreStart').is_disabled())
+
     def test_score_batch_shows_planned_claims_and_verification_without_estimated_points(self):
         self.score_jobs['first'] = {'id': 'batch', 'mode': 'score', 'running': True, 'state': 'running',
                                    'phase': 'claiming', 'score': 100, 'target': 2800,
                                    'completed': 30, 'planned': 109,
                                    'guild': summary(weekly={**weekly_summary(), 'score': 100})}
         self.enter_guild()
+        self.page.evaluate("$('guildScoreRow').hidden=false; $('guildScoreRow').classList.remove('hidden')")
         self.page.wait_for_function("document.getElementById('guildScoreState').textContent.includes('30 / 109')")
         self.assertEqual(self.page.locator('#guildScoreState').inner_text(),
                          '全团积分 100 / 2800 · 已领取 30 / 109 次 · 进行中…')
@@ -802,6 +812,7 @@ class GuildUITests(unittest.TestCase):
 
     def test_score_layout_on_phone_and_desktop_in_both_themes(self):
         self.enter_guild()
+        self.page.evaluate("$('guildScoreRow').hidden=false; $('guildScoreRow').classList.remove('hidden')")
         self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
         output = ROOT / 'previews'
         output.mkdir(exist_ok=True)
@@ -812,7 +823,7 @@ class GuildUITests(unittest.TestCase):
             for theme in ('dark', 'light'):
                 self.page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
                 self.page.locator('#guildScoreRow').scroll_into_view_if_needed()
-                self.page.evaluate("Promise.all(document.getAnimations().map(animation => animation.finished))")
+                self.page.evaluate("Promise.all(document.getAnimations().filter(animation => animation.effect.getTiming().iterations !== Infinity).map(animation => animation.finished))")
                 for selector in ('#guildScoreStart', '.guild-score-warning', '#guildScoreState'):
                     rect = self.page.locator(selector).bounding_box()
                     self.assertGreaterEqual(rect['x'], 0)

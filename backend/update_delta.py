@@ -31,7 +31,7 @@ def windows_path(name: str) -> str:
         not part or part in {".", ".."} or part.endswith((".", " "))
         or any(ord(c) < 32 or c in '\\:<>"|?*' for c in part)
         or _RESERVED.match(part) for part in parts
-    ) or not (name == "LucimaTools.exe" or name.startswith("_internal/"))):
+    ) or not (name == "LucimaTools.debug.exe" or name.startswith("_internal/"))):
         raise DeltaError("Invalid Windows delta path")
     return name
 
@@ -115,7 +115,7 @@ def apply_windows(patch: Path, base: Path, stage: Path, version: str) -> None:
                 raise DeltaError("Invalid delta file source")
             if digest.hexdigest() != expected:
                 raise DeltaError("Reconstructed file hash mismatch")
-        if not (stage / "LucimaTools.exe").is_file() or not (stage / "_internal").is_dir():
+        if not (stage / "LucimaTools.debug.exe").is_file() or not (stage / "_internal").is_dir():
             raise DeltaError("Invalid reconstructed Windows bundle")
 
 

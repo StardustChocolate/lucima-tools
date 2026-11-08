@@ -27,7 +27,7 @@ class ReleaseDistributionTests(unittest.TestCase):
         archive_path = release / f"LucimaTools-windows-x64-{version}.zip"
         endpoint = "https://download.example/releases/stable.json"
         with zipfile.ZipFile(archive_path, "w") as archive:
-            archive.writestr("LucimaTools.exe", b"release executable")
+            archive.writestr("LucimaTools.debug.exe", b"release executable")
             archive.writestr("_internal/update-endpoint.json", json.dumps({"manifestUrl": endpoint}))
         original = archive_path.read_bytes()
         (self.root / "CHANGELOG.md").write_text(
@@ -82,7 +82,7 @@ class ReleaseDistributionTests(unittest.TestCase):
     def test_packaging_requires_independent_service_endpoints(self):
         source = self.root / "bundle"
         (source / "_internal").mkdir(parents=True)
-        (source / "LucimaTools.exe").write_bytes(b"release")
+        (source / "LucimaTools.debug.exe").write_bytes(b"release")
         endpoint = "https://download.example/releases/stable.json"
         (source / "_internal/update-endpoint.json").write_text(json.dumps({"manifestUrl": endpoint}))
         service = self.root / "redeem-codes-endpoint.json"

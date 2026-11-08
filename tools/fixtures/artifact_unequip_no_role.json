@@ -1,0 +1,7 @@
+{
+  "evidence": "User developer log 2026-10-30 00:22:01-00:22:02; asset identifiers anonymized",
+  "route": "ArtifactHandler.UnEquip",
+  "data": {"RoleID": "6ac400000000000000000001", "ArtifactID": "6ac400000000000000000002"},
+  "httpStatus": 200,
+  "responseText": "No Role"
+}

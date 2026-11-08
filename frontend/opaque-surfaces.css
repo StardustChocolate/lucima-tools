@@ -1,0 +1,350 @@
+/* Opaque UI fills, precomposited in sRGB. No per-node painting or layer promotion. */
+html[data-theme="dark"] {
+  --surface: #0d1424;
+  --surface-subtle: #111b2d;
+  --surface-warning: #2c292a;
+  --surface-0-0-0-500: #070a12;
+  --surface-0-0-0-550: #060910;
+  --surface-0-0-0-580: #05080f;
+  --surface-0-0-0-660: #04070c;
+  --surface-0-0-0-80: #0c1221;
+  --surface-0-0-0-820: #020406;
+  --surface-120-140-185-300: #2d3851;
+  --surface-122-138-168-180: #21293c;
+  --surface-122-138-168-240: #273044;
+  --surface-122-138-168-300: #2e374c;
+  --surface-122-138-168-80: #161d2f;
+  --surface-128-144-168-160: #1f2839;
+  --surface-16-24-40-720: #0f1727;
+  --surface-240-177-81-90: #212228;
+  --surface-255-180-84-140: #2f2a2b;
+  --surface-255-180-84-260: #4c3e30;
+  --surface-255-180-84-80: #202128;
+  --surface-255-255-255-700: #b6b9bd;
+  --surface-255-255-255-820: #d3d5d8;
+  --surface-255-92-124-100: #251b2d;
+  --surface-255-92-124-120: #2a1d2f;
+  --surface-255-92-124-140: #2f1e30;
+  --surface-255-92-124-160: #342032;
+  --surface-255-92-124-180: #392134;
+  --surface-255-92-124-55: #1a1829;
+  --surface-255-92-124-60: #1c1829;
+  --surface-255-92-124-80: #201a2b;
+  --surface-3-7-16-550: #080d19;
+  --surface-46-230-160-120: #112d33;
+  --surface-46-230-160-60: #0f212b;
+  --surface-46-230-160-70: #0f232d;
+  --surface-46-230-160-80: #10252e;
+  --surface-5-8-16-660: #080c17;
+  --surface-5-8-16-680: #080c16;
+  --surface-5-8-16-720: #070b16;
+  --surface-72-211-141-120: #142b31;
+  --surface-72-211-141-140: #152f33;
+  --surface-accent-25: #131727;
+  --surface-accent-30: #141728;
+  --surface-accent-45: #18192a;
+  --surface-accent-50: #19192b;
+  --surface-accent-60: #1c1a2c;
+  --surface-accent-70: #1e1b2e;
+  --surface-accent-80: #201d2f;
+  --surface-accent-90: #231e30;
+  --surface-accent-100: #251f32;
+  --surface-accent-110: #282033;
+  --surface-accent-120: #2a2134;
+  --surface-accent-130: #2c2236;
+  --surface-accent-140: #2f2337;
+  --surface-accent-150: #312438;
+  --surface-accent-160: #34253a;
+  --surface-accent-180: #39273c;
+  --surface-accent-220: #422c42;
+  --surface-accent-230: #452d43;
+  --surface-accent-260: #4c3047;
+  --surface-accent-300: #56344d;
+  --surface-accent-350: #623954;
+  --surface-accent-600: #9e5476;
+  --surface-accent-950: #f37aa5;
+  --surface-accent2-120: #1f1e3e;
+  --surface-accent2-140: #222043;
+  --surface-accent2-500: #574092;
+  --surface-accent2-920: #9464ed;
+}
+html[data-theme="light"] {
+  --surface: #ffffff;
+  --surface-subtle: #f3f5fa;
+  --surface-warning: #fff5e9;
+  --surface-0-0-0-500: #808080;
+  --surface-0-0-0-550: #737373;
+  --surface-0-0-0-580: #6b6b6b;
+  --surface-0-0-0-660: #575757;
+  --surface-0-0-0-80: #ebebeb;
+  --surface-0-0-0-820: #2e2e2e;
+  --surface-120-140-185-300: #d7ddea;
+  --surface-122-138-168-180: #e7eaef;
+  --surface-122-138-168-240: #dfe3ea;
+  --surface-122-138-168-300: #d7dce5;
+  --surface-122-138-168-80: #f4f6f8;
+  --surface-128-144-168-160: #ebedf1;
+  --surface-16-24-40-720: #535964;
+  --surface-240-177-81-90: #fef8ef;
+  --surface-255-180-84-140: #fff5e7;
+  --surface-255-180-84-260: #ffecd3;
+  --surface-255-180-84-80: #fff9f1;
+  --surface-255-255-255-700: #ffffff;
+  --surface-255-255-255-820: #ffffff;
+  --surface-255-92-124-100: #ffeff2;
+  --surface-255-92-124-120: #ffebef;
+  --surface-255-92-124-140: #ffe8ed;
+  --surface-255-92-124-160: #ffe5ea;
+  --surface-255-92-124-180: #ffe2e7;
+  --surface-255-92-124-55: #fff6f8;
+  --surface-255-92-124-60: #fff5f7;
+  --surface-255-92-124-80: #fff2f5;
+  --surface-3-7-16-550: #74777c;
+  --surface-46-230-160-120: #e6fcf4;
+  --surface-46-230-160-60: #f2fef9;
+  --surface-46-230-160-70: #f0fdf8;
+  --surface-46-230-160-80: #eefdf7;
+  --surface-5-8-16-660: #5a5c61;
+  --surface-5-8-16-680: #55575c;
+  --surface-5-8-16-720: #4b4d53;
+  --surface-72-211-141-120: #e9faf1;
+  --surface-72-211-141-140: #e5f9ef;
+  --surface-accent-25: #fffcfd;
+  --surface-accent-30: #fffbfd;
+  --surface-accent-45: #fff9fb;
+  --surface-accent-50: #fff9fb;
+  --surface-accent-60: #fff7fa;
+  --surface-accent-70: #fff6f9;
+  --surface-accent-80: #fff5f8;
+  --surface-accent-90: #fff3f8;
+  --surface-accent-100: #fff2f7;
+  --surface-accent-110: #fff1f6;
+  --surface-accent-120: #fff0f5;
+  --surface-accent-130: #ffeef4;
+  --surface-accent-140: #ffedf3;
+  --surface-accent-150: #ffecf3;
+  --surface-accent-160: #ffebf2;
+  --surface-accent-180: #ffe8f0;
+  --surface-accent-220: #ffe3ed;
+  --surface-accent-230: #ffe2ec;
+  --surface-accent-260: #ffdee9;
+  --surface-accent-300: #ffd9e6;
+  --surface-accent-350: #ffd2e2;
+  --surface-accent-600: #ffb2cd;
+  --surface-accent-950: #ff85b0;
+  --surface-accent2-120: #f4edff;
+  --surface-accent2-140: #f2eaff;
+  --surface-accent2-500: #d0b5ff;
+  --surface-accent2-920: #a877ff;
+}
+
+/* Preserve native scrolling and the existing controls; paint disabled states
+   directly instead of compositing a faded rectangular widget. */
+body::before, body::after { display: none; }
+[data-rendering="stable"] { --shadow: none; }
+[data-rendering="stable"] *, [data-rendering="stable"] *::before, [data-rendering="stable"] *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+  /* A transition from an unpainted node to a solid color still creates an
+     intermediate alpha layer. Apply the final state directly on mobile. */
+  transition: none !important;
+  animation: none !important;
+}
+/* Explicit fills for the inner shop surfaces which used to inherit an empty
+   background. These stay ordinary paint records, without promoted layers. */
+.shop-widget :is(.shop-head, .shop-body, .shop-grid, .shop-left, .shop-right),
+.card-area, .card-empty { background-color: var(--elev); }
+.shop-head, .auto-item .auto-head { border-radius: inherit; }
+.shop-widget .shop-body { border-radius: 0 0 11px 11px; }
+.auto-item .auto-head { background-color: inherit; }
+.card-empty { contain: layout paint; }
+[data-rendering="stable"] :is(button, input, select, textarea):disabled {
+  opacity: 1 !important; color: var(--text-dim); background-color: var(--surface-subtle);
+}
+[data-rendering="stable"] :is(.mini.spinning, .confirm-dialog, .scheme-import-dialog,
+  .desktop-close-dialog, .update-dialog, .bottom-log-dock) { animation: none; }
+[data-rendering="stable"] :is(.mini.spinning, .abyss-auto-row, .auto-item.blocked,
+  .dev-loop-number, .tool-tile-muted, .coverage-item, .guild-weekly-reward,
+  .abyss-editor-slot.dragging, .abyss-drag-preview) { opacity: 1; }
+[data-rendering="stable"] button { transition-property: color, background-color, border-color; }
+[data-rendering="stable"] :is(.menu-btn, .pill, .ra-tabs, .ra-empty, .bottom-log-dock,
+  .bottom-log-head, .bottom-log-body) { background-color: var(--panel-solid); }
+
+/* Reduce nested rounded clipping on old Android GPU drivers while scrolling.
+   Bound small paint records and remove the long ancestor clip;
+   containment does not force compositing layers or software scrolling. */
+[data-rendering="stable"] #recruitmentRoot * {
+  border-color: var(--surface-accent-180);
+  box-shadow: none;
+}
+[data-rendering="stable"] .ra-pool.card { overflow: visible; }
+[data-rendering="stable"] :is(.ra-metric, .ra-result, .ra-ticket, .ra-shop-day) {
+  contain: layout paint;
+}
+
+
+/* Opaque border/outline palette, precomposed from the original colors. */
+html[data-theme="dark"] {
+  --solid-0-0-0-180: #0b101e;
+  --solid-0-0-0-280: #090e1a;
+  --solid-0-0-0-340: #090d18;
+  --solid-0-0-0-350: #080d17;
+  --solid-0-0-0-380: #080c16;
+  --solid-0-0-0-400: #080c16;
+  --solid-0-0-0-450: #070b14;
+  --solid-0-0-0-900: #010204;
+  --solid-17-21-28-720: #10151e;
+  --solid-176-190-224-150: #252e40;
+  --solid-190-120-20-450: #5d411d;
+  --solid-232-187-97-580: #8c7547;
+  --solid-240-177-81-180: #36302c;
+  --solid-244-201-120-780: #c1a166;
+  --solid-245-158-11-320: #57401c;
+  --solid-255-180-84-320: #5a4733;
+  --solid-255-255-255-100: #252c3a;
+  --solid-255-255-255-150: #313745;
+  --solid-255-255-255-170: #363c49;
+  --solid-255-255-255-700: #b6b9bd;
+  --solid-255-92-124-250: #4a263a;
+  --solid-255-92-124-300: #562a3e;
+  --solid-255-92-124-350: #622d43;
+  --solid-255-92-124-400: #6e3147;
+  --solid-255-92-124-420: #733249;
+  --solid-255-92-124-480: #81374e;
+  --solid-255-92-124-500: #863850;
+  --solid-255-92-124-550: #923c54;
+  --solid-30-50-90-120: #0f182a;
+  --solid-30-60-110-50: #0e1628;
+  --solid-34-43-57-110: #0f1726;
+  --solid-34-43-57-190: #111828;
+  --solid-46-230-160-300: #175349;
+  --solid-46-230-160-400: #1a6856;
+  --solid-46-230-160-420: #1b6c58;
+  --solid-46-230-160-450: #1c735c;
+  --solid-61-79-117-150: #141d30;
+  --solid-72-211-141-550: #2d7d5e;
+  --solid-confirm-320: #5a2b40;
+  --solid-confirm-560: #953c55;
+  --solid-eq-quality-200: #2b3343;
+  --solid-eq-quality-520: #5c6474;
+  --solid-eq-quality-560: #626a7a;
+  --solid-gvg-warning: #655440;
+  --solid-rule-500: #864a68;
+  --surface-accent-40: #171829;
+  --surface-accent-180: #39273c;
+  --surface-accent-220: #422c42;
+  --surface-accent-240: #472e45;
+  --surface-accent-250: #4a2f46;
+  --surface-accent-280: #51324a;
+  --surface-accent-300: #56344d;
+  --surface-accent-320: #5a3650;
+  --surface-accent-350: #623954;
+  --surface-accent-380: #693d58;
+  --surface-accent-400: #6e3f5a;
+  --surface-accent-420: #73415d;
+  --surface-accent-440: #774360;
+  --surface-accent-450: #7a4461;
+  --surface-accent-480: #814765;
+  --surface-accent-500: #864a68;
+  --surface-accent-520: #8b4c6b;
+  --surface-accent-550: #924f6f;
+  --surface-accent-580: #995273;
+  --surface-accent-600: #9e5476;
+  --surface-accent-620: #a35678;
+  --surface-accent-800: #cf6a91;
+  --surface-accent2-450: #4f3b87;
+  --surface-accent2-500: #574092;
+}
+html[data-theme="dark"] .eq-card {--solid-eq-quality-200:#2b3343;--solid-eq-quality-520:#5c6474;--solid-eq-quality-560:#626a7a}
+html[data-theme="dark"] .eq-card[data-tier="1"] {--solid-eq-quality-200:#1f393a;--solid-eq-quality-520:#3b755d;--solid-eq-quality-560:#3f7d61}
+html[data-theme="dark"] .eq-card[data-tier="2"] {--solid-eq-quality-200:#1c3250;--solid-eq-quality-520:#346196;--solid-eq-quality-560:#37679f}
+html[data-theme="dark"] .eq-card[data-tier="3"] {--solid-eq-quality-200:#2e2950;--solid-eq-quality-520:#644a96;--solid-eq-quality-560:#6b4e9f}
+html[data-theme="dark"] .eq-card[data-tier="4"] {--solid-eq-quality-200:#393530;--solid-eq-quality-520:#7f6b44;--solid-eq-quality-560:#887246}
+html[data-theme="dark"] .confirm-modal[data-tone="danger"] {--solid-confirm-320:#5a2b40;--solid-confirm-560:#953c55}
+html[data-theme="dark"] .confirm-modal[data-tone="warning"] {--solid-confirm-320:#5a4733;--solid-confirm-560:#956e3f}
+html[data-theme="dark"] [style*="--rule-rgb"] {--solid-rule-500:var(--solid-rule-500-dark)}
+
+/* Opaque border/outline palette, precomposed from the original colors. */
+html[data-theme="light"] {
+  --solid-0-0-0-180: #d1d1d1;
+  --solid-0-0-0-280: #b8b8b8;
+  --solid-0-0-0-340: #a8a8a8;
+  --solid-0-0-0-350: #a6a6a6;
+  --solid-0-0-0-380: #9e9e9e;
+  --solid-0-0-0-400: #999999;
+  --solid-0-0-0-450: #8c8c8c;
+  --solid-0-0-0-900: #191919;
+  --solid-17-21-28-720: #54575c;
+  --solid-176-190-224-150: #f3f5fa;
+  --solid-190-120-20-450: #e2c295;
+  --solid-232-187-97-580: #f2d8a3;
+  --solid-240-177-81-180: #fcf1e0;
+  --solid-244-201-120-780: #f6d596;
+  --solid-245-158-11-320: #fce0b1;
+  --solid-255-180-84-320: #ffe7c8;
+  --solid-255-255-255-100: #ffffff;
+  --solid-255-255-255-150: #ffffff;
+  --solid-255-255-255-170: #ffffff;
+  --solid-255-255-255-700: #ffffff;
+  --solid-255-92-124-250: #ffd6de;
+  --solid-255-92-124-300: #ffced8;
+  --solid-255-92-124-350: #ffc6d1;
+  --solid-255-92-124-400: #ffbecb;
+  --solid-255-92-124-420: #ffbbc8;
+  --solid-255-92-124-480: #ffb1c0;
+  --solid-255-92-124-500: #ffaebe;
+  --solid-255-92-124-550: #ffa5b7;
+  --solid-30-50-90-120: #e4e6eb;
+  --solid-30-60-110-50: #f4f5f8;
+  --solid-34-43-57-110: #e7e8e9;
+  --solid-34-43-57-190: #d5d7d9;
+  --solid-46-230-160-300: #c0f8e3;
+  --solid-46-230-160-400: #abf5d9;
+  --solid-46-230-160-420: #a7f5d7;
+  --solid-46-230-160-450: #a1f4d4;
+  --solid-61-79-117-150: #e2e5ea;
+  --solid-72-211-141-550: #9ae7c0;
+  --solid-confirm-320: #ffcbd5;
+  --solid-confirm-560: #ffa4b6;
+  --solid-eq-quality-200: #edeff2;
+  --solid-eq-quality-520: #d0d5dd;
+  --solid-eq-quality-560: #ccd2db;
+  --solid-gvg-warning: #f6e1c3;
+  --solid-rule-500: #ffbfd6;
+  --surface-accent-40: #fffafc;
+  --surface-accent-180: #ffe8f0;
+  --surface-accent-220: #ffe3ed;
+  --surface-accent-240: #ffe0eb;
+  --surface-accent-250: #ffdfea;
+  --surface-accent-280: #ffdbe8;
+  --surface-accent-300: #ffd9e6;
+  --surface-accent-320: #ffd6e4;
+  --surface-accent-350: #ffd2e2;
+  --surface-accent-380: #ffcedf;
+  --surface-accent-400: #ffccde;
+  --surface-accent-420: #ffc9dc;
+  --surface-accent-440: #ffc7da;
+  --surface-accent-450: #ffc5da;
+  --surface-accent-480: #ffc2d7;
+  --surface-accent-500: #ffbfd6;
+  --surface-accent-520: #ffbcd4;
+  --surface-accent-550: #ffb9d1;
+  --surface-accent-580: #ffb5cf;
+  --surface-accent-600: #ffb2cd;
+  --surface-accent-620: #ffb0cc;
+  --surface-accent-800: #ff99bd;
+  --surface-accent2-450: #d4bcff;
+  --surface-accent2-500: #d0b5ff;
+}
+html[data-theme="light"] .eq-card {--solid-eq-quality-200:#edeff2;--solid-eq-quality-520:#d0d5dd;--solid-eq-quality-560:#ccd2db}
+html[data-theme="light"] .eq-card[data-tier="1"] {--solid-eq-quality-200:#e0f5e9;--solid-eq-quality-520:#afe6c6;--solid-eq-quality-560:#a9e4c1}
+html[data-theme="light"] .eq-card[data-tier="2"] {--solid-eq-quality-200:#deeeff;--solid-eq-quality-520:#a8d2ff;--solid-eq-quality-560:#a1cfff}
+html[data-theme="light"] .eq-card[data-tier="3"] {--solid-eq-quality-200:#f0e5ff;--solid-eq-quality-520:#d8bbff;--solid-eq-quality-560:#d5b6ff}
+html[data-theme="light"] .eq-card[data-tier="4"] {--solid-eq-quality-200:#faf1df;--solid-eq-quality-520:#f3dcad;--solid-eq-quality-560:#f2d9a7}
+html[data-theme="light"] .confirm-modal[data-tone="danger"] {--solid-confirm-320:#ffcbd5;--solid-confirm-560:#ffa4b6}
+html[data-theme="light"] .confirm-modal[data-tone="warning"] {--solid-confirm-320:#e1cbad;--solid-confirm-560:#caa470}
+html[data-theme="light"] [style*="--rule-rgb"] {--solid-rule-500:var(--solid-rule-500-light)}
+
+html[data-theme="dark"] {--solid-79-163-255-333:#23446d;--solid-139-107-255-400:#3f377c;--solid-215-107-255-467:#6b3d8a;--solid-255-176-69-533:#8e6736;--solid-255-92-122-600:#9e3f58}
+
+html[data-theme="light"] {--solid-79-163-255-333:#c4e0ff;--solid-139-107-255-400:#d1c4ff;--solid-215-107-255-467:#ecbaff;--solid-255-176-69-533:#ffd59c;--solid-255-92-122-600:#ff9daf}

@@ -1,26 +1,25 @@
 """Guild aid decisions from confirmed guild records and the extracted item catalog."""
 from __future__ import annotations
 
-from . import runtime_data as resources
-
 from copy import deepcopy
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
 import time
 
-from .game_client import GameError, TaskDeferred
-from .guild import checked_in_today, guild_id, has_guild, object_id, _nonnegative_int, _timestamp
+from .game_client import GameError
+from .guild import checked_in_today, has_guild, object_id, _nonnegative_int, _timestamp
 
 AID_REWARD_LIMIT = 200  # GuildAidItemInfoUI.SupportGuildAid, client RVA 0x2770b68.
 AID_POLL_MS = 60 * 60 * 1000
 DAY_MS = 86_400_000
 
 
-@resources.cached
+@lru_cache(maxsize=1)
 def aid_catalog():
     root = Path(os.environ.get("ARK_ASSET_ROOT") or Path(__file__).resolve().parents[1])
-    data = resources.read_json("assets/guild_aid.json")
+    data = json.loads((root / "assets/guild_aid.json").read_text(encoding="utf-8"))
     if data.get("schema") != 1 or not data.get("rules") or not data.get("items"):
         raise GameError("佣兵团援助清单无效")
     return data
@@ -95,7 +94,7 @@ class GuildAidService:
             if pending.get("reserve"):
                 item = pending["item"]
                 balances[item] = max(0, balances.get(item, 0) - pending["cost"])
-        gid = guild_id(state)
+        gid = object_id((state.get("PlayerGuildInfo") or {}).get("GID"))
         result = []
         for record in (state.get("GuildData") or {}).get("GuildAidItemInfoList") or []:
             if not isinstance(record, dict):
@@ -164,7 +163,7 @@ class GuildAidService:
         if (not isinstance(record, dict) or not object_id(record.get("_id"))
                 or record.get("ItemID") != options["item"]
                 or (record.get("Requester") or {}).get("CUID") != state["Info"].get("CUID")
-                or object_id(record.get("GID")) != guild_id(state)):
+                or object_id(record.get("GID")) != object_id(state["PlayerGuildInfo"].get("GID"))):
             raise GameError("求助响应未确认，等待同步后检查")
         self._replace(record)
         # The official success callback records NowTime locally; the reply only
@@ -199,8 +198,6 @@ class GuildAidService:
             self._replace(updated)
             self.client.account_state["PlayerGuildInfo"]["DaySupportGuildAidRewardCount"] = reward_before + rule["reward"]
             return rule["reward"]
-        except TaskDeferred:
-            raise
         except Exception:
             self.runtime.setdefault("aidUncertain", {})[identifier] = {
                 "item": item, "cost": rule["cost"], "reserve": not merged_cost}

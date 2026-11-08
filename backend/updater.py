@@ -57,25 +57,22 @@ CHECK_JITTER = 15 * 60
 RETRY_INTERVAL = 30 * 60
 MAX_ARTIFACT_SIZE = 1024 * 1024 * 1024
 MAX_EXTRACTED_SIZE = 2 * 1024 * 1024 * 1024
-_VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
+_VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?(?:-([0-9A-Za-z.-]+))?$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def routine_check_delay():
-    return CHECK_INTERVAL + random.uniform(-CHECK_JITTER, CHECK_JITTER)
 
 
 class UpdateError(RuntimeError):
     pass
 
 
-def _version_key(value: str) -> tuple[int, int, int, int, str]:
+def _version_key(value: str) -> tuple[int, int, int, int, int, str]:
     match = _VERSION_RE.fullmatch(str(value or ""))
     if not match:
         raise UpdateError(f"无效的版本号：{value}")
-    prerelease = match.group(4)
+    prerelease = match.group(5)
     return (
         int(match.group(1)), int(match.group(2)), int(match.group(3)),
+        int(match.group(4) or 0),
         1 if prerelease is None else 0, prerelease or "",
     )
 
@@ -242,12 +239,10 @@ class UpdateService:
             if self._wake.wait(delay):
                 self._wake.clear()
             ok = self.check_now()
-            delay = routine_check_delay() if ok else RETRY_INTERVAL
-            try:
-                from .resource_update import service as resource_service
-                resource_service.on_software_check(delay)
-            except Exception:
-                log.exception("未能唤醒游戏数据检查")
+            delay = (
+                CHECK_INTERVAL + random.uniform(-CHECK_JITTER, CHECK_JITTER)
+                if ok else RETRY_INTERVAL
+            )
 
     def _validated_payload(self, payload: dict) -> dict:
         if payload.get("schema") != 1 or payload.get("channel") != self._channel:
@@ -375,9 +370,10 @@ class UpdateService:
         available = bool(latest and _newer(latest, current))
         forced = bool(minimum and _newer(minimum, current))
         ignored_version = config.get_ignored_update_version()
-        platform = "android" if config.PLATFORM == "android" else "windows"
+        platform = 'macos' if config.PLATFORM=='macos' else "android" if config.PLATFORM == "android" else "windows"
         artifact = (payload.get("platforms") or {}).get(platform)
-        install_supported = config.PLATFORM == "android" or bool(getattr(sys, "frozen", False))
+        install_supported = config.PLATFORM == "android" or (config.PLATFORM=='windows' and bool(getattr(sys, "frozen", False)))
+        if config.PLATFORM=='macos':available=forced=False
         return {
             "checked": self._payload is not None,
             # Source-based start.bat runs without a published update manifest.
@@ -480,8 +476,8 @@ class UpdateService:
                     with archive.open(entry) as source, target.open("wb") as destination:
                         shutil.copyfileobj(source, destination)
             actual = {entry.name for entry in stage_root.iterdir()}
-            if actual != {"LucimaTools.exe", "_internal"} \
-                    or not (stage_root / "LucimaTools.exe").is_file() \
+            if actual != {"LucimaTools.debug.exe", "_internal"} \
+                    or not (stage_root / "LucimaTools.debug.exe").is_file() \
                     or not (stage_root / "_internal").is_dir():
                 raise UpdateError("Windows 更新包结构无效")
             return stage_root
@@ -654,13 +650,13 @@ if (Get-Process -Id $OldPid -ErrorAction SilentlyContinue) {
 try {
   New-Item -ItemType Directory -Path $rollback -Force | Out-Null
   Write-UpdateLog "moving old executable"
-  Move-Item -LiteralPath (Join-Path $AppRoot "LucimaTools.exe") -Destination (Join-Path $rollback "LucimaTools.exe")
+  Move-Item -LiteralPath (Join-Path $AppRoot "LucimaTools.debug.exe") -Destination (Join-Path $rollback "LucimaTools.debug.exe")
   $oldExeMoved = $true
   Write-UpdateLog "moving old internal directory"
   Move-Item -LiteralPath (Join-Path $AppRoot "_internal") -Destination (Join-Path $rollback "_internal")
   $oldInternalMoved = $true
   Write-UpdateLog "installing new executable"
-  Move-Item -LiteralPath (Join-Path $StageRoot "LucimaTools.exe") -Destination (Join-Path $AppRoot "LucimaTools.exe")
+  Move-Item -LiteralPath (Join-Path $StageRoot "LucimaTools.debug.exe") -Destination (Join-Path $AppRoot "LucimaTools.debug.exe")
   $newExeMoved = $true
   Write-UpdateLog "installing new internal directory"
   $internalSource = Join-Path $StageRoot "_internal"
@@ -673,7 +669,7 @@ try {
   if ($robocopyExit -gt 7) { throw ("Copying new internal directory failed with robocopy exit " + $robocopyExit) }
   Write-UpdateLog ("new internal directory copied; robocopy exit=" + $robocopyExit)
   Write-UpdateLog "starting updated application"
-  $newProcess = Start-Process -FilePath (Join-Path $AppRoot "LucimaTools.exe") -WorkingDirectory $AppRoot -PassThru
+  $newProcess = Start-Process -FilePath (Join-Path $AppRoot "LucimaTools.debug.exe") -WorkingDirectory $AppRoot -PassThru
   for ($i = 0; $i -lt 120; $i++) {
     if (Test-Path -LiteralPath $success) { break }
     if ($newProcess.HasExited) { throw "Updated application exited during startup" }
@@ -690,13 +686,13 @@ try {
   Write-UpdateLog ("update failed: " + $_.Exception.Message)
   if ($newProcess -and -not $newProcess.HasExited) { Stop-Process -Id $newProcess.Id -Force -ErrorAction SilentlyContinue }
   if ($newExeMoved) {
-    Remove-Item -LiteralPath (Join-Path $AppRoot "LucimaTools.exe") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $AppRoot "LucimaTools.debug.exe") -Force -ErrorAction SilentlyContinue
   }
   if ($newInternalMoved) {
     Remove-Item -LiteralPath (Join-Path $AppRoot "_internal") -Recurse -Force -ErrorAction SilentlyContinue
   }
-  if ($oldExeMoved -and (Test-Path -LiteralPath (Join-Path $rollback "LucimaTools.exe"))) {
-    Move-Item -LiteralPath (Join-Path $rollback "LucimaTools.exe") -Destination $AppRoot
+  if ($oldExeMoved -and (Test-Path -LiteralPath (Join-Path $rollback "LucimaTools.debug.exe"))) {
+    Move-Item -LiteralPath (Join-Path $rollback "LucimaTools.debug.exe") -Destination $AppRoot
   }
   if ($oldInternalMoved -and (Test-Path -LiteralPath (Join-Path $rollback "_internal"))) {
     Move-Item -LiteralPath (Join-Path $rollback "_internal") -Destination $AppRoot
@@ -704,7 +700,7 @@ try {
   Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $rollback -Recurse -Force -ErrorAction SilentlyContinue
   Write-UpdateLog "rollback completed; restarting previous version"
-  Start-Process -FilePath (Join-Path $AppRoot "LucimaTools.exe") -WorkingDirectory $AppRoot
+  Start-Process -FilePath (Join-Path $AppRoot "LucimaTools.debug.exe") -WorkingDirectory $AppRoot
   exit 30
 }
 '''

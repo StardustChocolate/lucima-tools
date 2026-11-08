@@ -1,0 +1,352 @@
+{
+  "source": "2026-10-22 user screenshots: H121 plans 1 and 2; equipment attributes from anonymized cached overview. Rounded display attributes reproduced every screenshot panel value. Artifact A0007 LV15 is a representative of the shared 142 Attack / 217 HP growth row, not an identification of the actual artifact.",
+  "state": {
+    "RoleDataContainer": {
+      "Roles": [
+        {
+          "_id": "role",
+          "StaticID": "H121",
+          "LV": 60,
+          "Star": 6,
+          "AwakenLV": 6,
+          "ImprintLV": 0,
+          "IsSelfImprint": false
+        }
+      ]
+    },
+    "EquipmentContainer": {
+      "Datas": [
+        {
+          "_id": "plan2-helmet",
+          "StaticID": "E0430",
+          "LV": 15,
+          "Set": "Critical",
+          "EquipRole": "role",
+          "MainProp": {
+            "PropertyType": "HPValue",
+            "Value": 2565.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.19
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.11
+              },
+              {
+                "PropertyType": "EffectHitRate",
+                "Value": 0.07
+              }
+            ]
+          }
+        },
+        {
+          "_id": "plan2-necklace",
+          "StaticID": "E0104",
+          "LV": 15,
+          "Set": "Speed",
+          "EquipRole": "role",
+          "MainProp": {
+            "PropertyType": "CriticalDamageRate",
+            "Value": 0.65
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.06
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.06
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 11.0
+              },
+              {
+                "PropertyType": "EffectHitRate",
+                "Value": 0.08
+              }
+            ]
+          }
+        },
+        {
+          "_id": "shared-boots",
+          "StaticID": "E3006",
+          "LV": 15,
+          "Set": "Speed",
+          "EquipRole": "role",
+          "MainProp": {
+            "PropertyType": "SpeedValue",
+            "Value": 40.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.07
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.11
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.11
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.16
+              }
+            ]
+          }
+        },
+        {
+          "_id": "plan1-weapon",
+          "StaticID": "E0101",
+          "LV": 15,
+          "Set": "Speed",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 500.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              },
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.05
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.16
+              }
+            ]
+          }
+        },
+        {
+          "_id": "plan2-weapon",
+          "StaticID": "E0101",
+          "LV": 15,
+          "Set": "Speed",
+          "EquipRole": "role",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 500.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.19
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 6.0
+              },
+              {
+                "PropertyType": "EffectHitRate",
+                "Value": 0.07
+              }
+            ]
+          }
+        },
+        {
+          "_id": "shared-ring",
+          "StaticID": "E0504",
+          "LV": 15,
+          "Set": "Speed",
+          "EquipRole": "role",
+          "MainProp": {
+            "PropertyType": "AttackRate",
+            "Value": 0.6
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.08
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 4.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.12
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.23
+              }
+            ]
+          }
+        },
+        {
+          "_id": "plan1-necklace",
+          "StaticID": "E0505",
+          "LV": 15,
+          "Set": "Speed",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "CriticalDamageRate",
+            "Value": 0.65
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.15
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.13
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.09
+              }
+            ]
+          }
+        },
+        {
+          "_id": "shared-armor",
+          "StaticID": "E0103",
+          "LV": 15,
+          "Set": "Critical",
+          "EquipRole": "role",
+          "MainProp": {
+            "PropertyType": "DefenceValue",
+            "Value": 300.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.19
+              },
+              {
+                "PropertyType": "ResistanceRate",
+                "Value": 0.06
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.08
+              }
+            ]
+          }
+        },
+        {
+          "_id": "plan1-helmet",
+          "StaticID": "E0464",
+          "LV": 15,
+          "Set": "Critical",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "HPValue",
+            "Value": 2565.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.07
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 9.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.08
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.17
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Artifacts": {
+      "Datas": [
+        {
+          "StaticID": "A0007",
+          "LV": 15,
+          "EquipRole": "role"
+        }
+      ]
+    }
+  },
+  "plans": {
+    "1": [
+      "plan1-weapon",
+      "plan1-helmet",
+      "shared-armor",
+      "plan1-necklace",
+      "shared-ring",
+      "shared-boots"
+    ],
+    "2": [
+      "plan2-weapon",
+      "plan2-helmet",
+      "shared-armor",
+      "plan2-necklace",
+      "shared-ring",
+      "shared-boots"
+    ]
+  },
+  "expected": {
+    "1": {
+      "HP": 9353,
+      "Attack": 2800,
+      "Defence": 836,
+      "Speed": 220,
+      "CriticalRate": 85,
+      "CriticalDamageRate": 306,
+      "EffectHitRate": 0,
+      "ResistanceRate": 6,
+      "PinchRate": 3
+    },
+    "2": {
+      "HP": 8441,
+      "Attack": 3031,
+      "Defence": 836,
+      "Speed": 220,
+      "CriticalRate": 85,
+      "CriticalDamageRate": 273,
+      "EffectHitRate": 22,
+      "ResistanceRate": 6,
+      "PinchRate": 3
+    }
+  }
+}

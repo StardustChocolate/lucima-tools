@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "maxLevel": 10,
+  "expToNextLevel": {
+    "1": 5,
+    "2": 45,
+    "3": 50,
+    "4": 100,
+    "5": 150,
+    "6": 200,
+    "7": 250,
+    "8": 300,
+    "9": 400
+  },
+  "source": {
+    "type": "Game.LineRoleInfo",
+    "cctorRva": "0x21ed050",
+    "getterRva": "0x21ecc74",
+    "libil2cppSha256": "f58079209a17453d3074223fb07af464dab3fafd42809a39093510f846c90fa2",
+    "metadataSha256": "5e93914ef23178097eb311f162844124f2fe2e59cd4a5533cb0d2a9219c8a1ae"
+  }
+}

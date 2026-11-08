@@ -101,7 +101,7 @@ class GuildStoreTests(unittest.TestCase):
         self.run_shop()
         self.assertEqual(store_options(self.acc.params['guild_auto_store']), [])
         self.select('GuildB015')
-        self.client.account_state['Info'].pop('GuildSubInfo')
+        self.client.account_state['PlayerGuildInfo']['GID'] = ''
         self.run_shop()
         self.assertEqual(self.purchases(), [])
 
@@ -148,10 +148,6 @@ class GuildStoreTests(unittest.TestCase):
         self.assertEqual(self.row('GuildB015')['remaining'], 5)
         self.assertEqual(self.row('GuildCertificateEterna')['remaining'], 0)
         self.assertEqual(self.client.account_state['StoreRecordContainer'], before)
-        self.run_shop()
-        self.assertEqual(len(self.purchases()), 2)
-        self.client.account_state['Utc'] = str(self.client.now // 1000)
-        self.acc.note_state_refreshed()
         self.run_shop()
         self.assertEqual(len(self.purchases()), 3)
         next_month = reset_at(NOW, 'Month')

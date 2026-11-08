@@ -28,7 +28,8 @@ class ActivityProgressUITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(headless=True)
+        chrome=Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
+        cls.browser = cls.playwright.chromium.launch(headless=True, **({'executable_path':str(chrome)} if chrome.is_file() else {}))
 
     @classmethod
     def tearDownClass(cls):
@@ -48,34 +49,14 @@ class ActivityProgressUITests(unittest.TestCase):
         self.page.set_content('<base href="https://activity-progress.invalid"><main id="widgets" style="padding:16px"></main>')
         self.page.add_style_tag(path=str(ROOT / "frontend/style.css"))
         activity = SOURCE[SOURCE.index('const ACT_LS ='):SOURCE.index('// ---------- 商店购买自定义控件')]
+        sales = SOURCE[SOURCE.index('const sweepSaleStates ='):SOURCE.index('// ---------- 扫荡自定义控件')]
         shared = "\n".join(function_source(name) for name in (
-            "filterEscape", "dropdownHTML", "bindDropdown", "heroPortraitHTML", "abyssBattleHTML"))
+            "filterEscape", "dropdownHTML", "bindDropdown", "heroPortraitHTML", "abyssBattleHTML", "renderBattleProgress"))
+        self.page.add_script_tag(path=str(ROOT / 'frontend/action-wait.js'))
         self.page.add_script_tag(content="""
           let activeAccount = 'alpha';
           const $ = id => document.getElementById(id);
           const values = {}, calls = [], logs = [];
-          const uiState = {};
-          const accountUi = () => uiState[activeAccount] ||= {panels:{}, optionCache:{}};
-          const accountPanelExpanded = key => accountUi().panels[key] === true;
-          const setAccountPanelExpanded = (key, expanded) => { accountUi().panels[key] = !!expanded; };
-          const accountOptionCache = key => accountUi().optionCache[key] ?? null;
-          const setAccountOptionCache = (key, value) => { accountUi().optionCache[key] = value; };
-          const bindAccountPanel = (button, body, key, {label='选项', onOpen, onRestore}={}) => {
-            const restore = () => {
-              const expanded = accountPanelExpanded(key);
-              body.classList.toggle('hidden', !expanded);
-              button.textContent = `${label} ${expanded ? '▾' : '▸'}`;
-              return expanded;
-            };
-            if (restore() && onRestore) void onRestore();
-            button.addEventListener('click', event => {
-              event.preventDefault(); event.stopPropagation();
-              const expanded = body.classList.contains('hidden');
-              setAccountPanelExpanded(key, expanded); restore();
-              if (expanded && onOpen) void onOpen();
-            });
-            return restore;
-          };
           const frontendStorageGet = key => values[key];
           const frontendStorageSet = (key, value) => {values[key] = value;};
           const taskIconHTML = () => '';
@@ -91,7 +72,8 @@ class ActivityProgressUITests(unittest.TestCase):
             teams:[{id:'T', name:'我的队伍'}], supports:[], favorites:[],
             activities:[{id:'BH610',name:'活动测试',completed:2,total:13}]};
           let finishRun, finishOptions, holdOptions = false, failOptions = false;
-          const api = async (path, body) => {
+          const api = async (rawPath, body) => {
+            const path = rawPath.split('?')[0];
             calls.push({path, body, account: activeAccount});
             if (path === '/api/activity/options') {
               if (failOptions) throw new Error('offline');
@@ -101,7 +83,7 @@ class ActivityProgressUITests(unittest.TestCase):
             if (path === '/api/activity/progress/run') return new Promise(resolve => {finishRun = resolve;});
             return {ok:true};
           };
-        """ + shared + activity + """
+        """ + shared + sales + activity + """
           function mount() {
             $('widgets').innerHTML = renderActivityWidget(TASKS[0]);
             bindActivityWidget('activity_scene');
@@ -117,6 +99,20 @@ class ActivityProgressUITests(unittest.TestCase):
     def select_progress(self):
         self.page.click('[data-act-mode="progress"]')
 
+    def test_family_count_updates_in_place_each_clear_and_after_remount(self):
+        self.select_progress()
+        self.page.evaluate("window.familyPicker = document.querySelector('.act-family')")
+        for completed in (3, 4, 12, 13):
+            self.page.evaluate("completed => applyActivityProgress('alpha', {running:completed<13,progress:{family:'BH610',completed,total:13,detail:'已通关'}})", completed)
+            self.assertIn(f'已通关 {completed}/13', self.page.locator('.act-family .dd-cur').inner_text())
+            self.assertIn(f'已通关 {completed}/13', self.page.locator('.act-family .dd-opt').inner_text())
+            self.assertTrue(self.page.evaluate("familyPicker === document.querySelector('.act-family')"))
+        self.page.evaluate("applyActivityProgress('beta', {running:true,progress:{family:'BH610',completed:1,total:13}})")
+        self.assertIn('已通关 13/13', self.page.locator('.act-family .dd-cur').inner_text())
+        self.page.evaluate('mount(); loadActivityOptions("activity_scene")')
+        self.assertIn('已通关 13/13', self.page.locator('.act-family .dd-cur').inner_text())
+        self.assertEqual(self.page.evaluate("calls.filter(call => call.path === '/api/activity/options').length"), 2)
+
     def publish_battle(self, battle=None, *, running=True):
         self.page.evaluate("snapshot => applyActivityProgress('alpha', snapshot)", {
             "running": running, "progress": {"completed": 12, "total": 13,
@@ -130,57 +126,131 @@ class ActivityProgressUITests(unittest.TestCase):
         self.assertFalse(self.page.locator('.act-count').is_visible())
         self.assertFalse(self.page.locator('.act-quick-row').is_visible())
         self.assertFalse(self.page.locator('.act-urgent-control').is_visible())
-        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推关')
+        self.assertTrue(self.page.locator('.sweep-auto-sell').is_visible())
+        self.assertTrue(self.page.locator('.sweep-sell-epic85').is_visible())
+        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推图')
         self.page.click('[data-act-mode="sweep"]')
         self.assertTrue(self.page.locator('.act-count').is_visible())
         self.assertTrue(self.page.locator('.act-scene-slot').is_visible())
         self.assertEqual(self.errors, [])
+
+    def test_progress_sends_both_sale_options_and_keeps_confirmed_sale_totals(self):
+        self.select_progress()
+        self.page.locator('.sweep-auto-sell').locator('..').click()
+        self.page.locator('.sweep-sell-epic85').locator('..').click()
+        self.page.click('.act-start')
+        self.assertTrue(self.page.evaluate('calls.at(-1).body.autoSell'))
+        self.assertTrue(self.page.evaluate('calls.at(-1).body.includeEpic85'))
+        self.assertTrue(self.page.locator('.sweep-auto-sell').is_disabled())
+        self.page.evaluate("""applyActivityProgress('alpha',{running:true,progress:{completed:10,total:13,
+          equipmentSales:{enabled:true,sold:12,busy:false,error:'',rewardSummary:[{kind:'Item',id:'1',name:'金币',count:1200}]}}})""")
+        self.assertIn('本轮贩卖 12 件', self.page.locator('.sweep-sale-totals').inner_text())
+        self.assertIn('+1,200', self.page.locator('.sweep-sale-totals').inner_text())
+        self.page.evaluate("""finishRun({ok:false,detail:'推图已停止',progress:{completed:10,total:13,
+          equipmentSales:{enabled:false,sold:12,busy:false,error:'自动贩卖已暂停：连接断开',
+          rewardSummary:[{kind:'Item',id:'1',name:'金币',count:1200}]}}})""")
+        self.page.wait_for_function('!actProgressRunning.alpha')
+        self.assertFalse(self.page.locator('.sweep-auto-sell').is_checked())
+        self.assertIn('连接断开', self.page.locator('.sweep-sale-error').inner_text())
+        self.assertFalse(self.page.evaluate('getActCfg().autoSell'))
+
+    def test_health_refresh_keeps_portraits_and_only_changes_the_health_nodes(self):
+        self.select_progress()
+        battle = battle_snapshot()
+        self.publish_battle(battle)
+        self.page.evaluate("window.beforePortrait = document.querySelector('.act-battle-progress .allies img')")
+        for percent in (75, 43, 0):
+            battle['allies'][1]['hpPercent'] = percent
+            battle['allies'][1]['dead'] = percent == 0
+            self.publish_battle(battle)
+            self.assertTrue(self.page.evaluate("beforePortrait === document.querySelector('.act-battle-progress .allies img')"))
+            self.assertEqual(self.page.locator('.act-battle-progress .allies .abyss-hp-percent').nth(1).inner_text(), f'{percent}%')
 
     def test_run_cancel_progress_and_completion_stay_scoped_to_the_originating_account(self):
         self.select_progress()
         self.page.click('.act-start')
         call = self.page.evaluate('calls.at(-1)')
         self.assertEqual(call['path'], '/api/activity/progress/run')
-        self.assertEqual(call['body'], {'account': 'alpha', 'family': 'BH610', 'teamId': 'T', 'supportCuid': None})
+        self.assertEqual(call['body'], {'account': 'alpha', 'family': 'BH610', 'teamId': 'T', 'supportCuid': None,
+                                       'autoSell': False, 'includeEpic85': False})
         self.page.evaluate("applyActivityProgress('alpha', {running:true,progress:{completed:3,total:13,stageName:'关卡4',detail:'挑战中',battle:{wave:2}}})")
         self.assertIn('第 3 波', self.page.locator('.act-progress-status').inner_text())
         self.assertTrue(self.page.locator('.act-battle-progress').is_visible())
         self.page.evaluate("activeAccount = 'beta'; mount();")
         self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始扫荡')
         self.page.evaluate("activeAccount = 'alpha'; mount();")
-        self.assertEqual(self.page.locator('.act-start').inner_text(), '停止推关')
+        self.assertEqual(self.page.locator('.act-start').inner_text(), '停止推图')
         self.page.click('.act-start')
         self.assertEqual(self.page.evaluate('calls.at(-1).body.account'), 'alpha')
         self.assertEqual(self.page.evaluate('calls.at(-1).path'), '/api/activity/progress/cancel')
         self.assertEqual(self.page.locator('.act-start').inner_text(), '停止中…')
-        self.page.evaluate("finishRun({ok:false,detail:'自动推关已停止',activityProgress:{running:false,progress:{completed:3,total:13,detail:'自动推关已停止'}}})")
+        self.page.evaluate("finishRun({ok:false,detail:'自动推图已停止',activityProgress:{running:false,progress:{completed:3,total:13,detail:'自动推图已停止'}}})")
         self.page.wait_for_function("!actProgressRunning.alpha")
         self.assertIn('已停止', self.page.locator('.act-progress-status').inner_text())
-        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推关')
+        self.assertEqual(self.page.locator('.act-start').inner_text(), '▶ 开始推图')
         self.assertFalse(self.page.locator('.act-battle-progress').is_visible())
         self.assertEqual(self.errors, [])
 
-    def test_returning_to_an_open_running_panel_uses_its_account_cache_without_new_work(self):
-        self.page.wait_for_function("document.querySelector('.act-family .dd-cur')")
-        # The fixture starts with the body visible. Close then reopen it through
-        # the real control so alpha records its expanded panel state.
-        self.page.click('.act-toggle')
-        self.page.click('.act-toggle')
+    def test_completed_elite_switches_to_sweep_and_keeps_thirteen_of_thirteen_when_returning(self):
         self.select_progress()
         self.page.click('.act-start')
-        self.assertEqual(self.page.evaluate('calls.at(-1).path'), '/api/activity/progress/run')
-        option_calls = self.page.evaluate("calls.filter(call => call.path === '/api/activity/options').length")
-        progress_calls = self.page.evaluate("calls.filter(call => call.path === '/api/activity/progress/run').length")
+        self.page.evaluate("applyActivityProgress('alpha',{running:true,progress:{family:'BH610',completed:12,total:13,sceneId:'BH610_1_13'}})")
+        self.assertIn('12/13',self.page.locator('.act-family .dd-cur').inner_text())
+        self.page.evaluate("""() => {
+          DATA.scenes.push({id:'BH610_1_13',name:'活动测试 · 关卡13（精英）'});
+          finishRun({ok:true,detail:'全部通关',lastSceneId:'BH610_1_13',
+            progress:{family:'BH610',sceneId:'BH610_1_13',completed:13,total:13,detail:'全部通关'},
+            activityProgress:{running:false,progress:{family:'BH610',completed:12,total:13}}});
+        }""")
+        self.page.wait_for_function("getActCfg().mode==='sweep' && document.querySelector('.act-scene .dd-cur')?.textContent.includes('关卡13')")
+        self.assertEqual(self.page.locator('.act-start').inner_text(),'▶ 开始扫荡')
+        self.assertEqual(self.page.evaluate('getActCfg().sceneId'),'BH610_1_13')
+        self.assertEqual(self.page.evaluate('calls.filter(call=>call.path==="/api/activity/run").length'),0)
+        self.page.click('[data-act-mode="progress"]')
+        self.assertIn('13/13',self.page.locator('.act-family .dd-cur').inner_text())
+        self.assertIn('13/13',self.page.locator('.act-progress-status').inner_text())
 
-        self.page.evaluate("activeAccount = 'beta'; mount(); activeAccount = 'alpha'; mount();")
-        self.page.wait_for_timeout(30)
+    def test_activity_epic85_option_persists_and_is_shared_by_both_modes(self):
+        self.page.evaluate("setActCfg({includeEpic85:true});mount()")
+        self.assertEqual(self.page.locator('.sweep-sell-epic85').count(),1)
+        self.assertIn('同时卖出85级史诗',self.page.locator('.sweep-sale-hint').inner_text())
+        self.assertTrue(self.page.evaluate('getActCfg().includeEpic85'))
+        self.select_progress()
+        self.assertTrue(self.page.locator('.sweep-sell-epic85').is_checked())
 
-        self.assertEqual(self.page.evaluate("calls.filter(call => call.path === '/api/activity/options').length"), option_calls)
-        self.assertEqual(self.page.evaluate("calls.filter(call => call.path === '/api/activity/progress/run').length"), progress_calls)
-        self.assertEqual(self.page.locator('.act-start').inner_text(), '停止推关')
-        self.page.evaluate("finishRun({ok:false,detail:'已停止',activityProgress:{running:false,progress:{completed:0,total:13,detail:'已停止'}}})")
-        self.page.wait_for_function("!actProgressRunning.alpha")
-        self.assertEqual(self.errors, [])
+    def test_retry_keeps_twelve_of_thirteen_while_waiting_for_sync(self):
+        self.select_progress()
+        self.page.evaluate("applyActivityProgress('alpha',{running:false,progress:{family:'BH610',completed:12,total:13,detail:'上次挑战已停止'}})")
+        self.page.click('.act-start')
+        self.assertIn('12/13',self.page.locator('.act-progress-status').inner_text())
+        self.assertNotIn('0/—',self.page.locator('.act-progress-status').inner_text())
+        self.page.evaluate("finishRun({ok:false,detail:'稍后重试',progress:{family:'BH610',completed:12,total:13}})")
+        self.page.wait_for_function('!actProgressRunning.alpha')
+
+    def test_friend_confirmation_and_pending_health_are_not_rendered_as_question_and_zero(self):
+        self.select_progress()
+        battle=battle_snapshot()
+        battle['support']={'staticId':'H165','name':'彼岸花茱莉亚','status':'joined'}
+        battle['allies'][0].update(staticId='H165',name='彼岸花茱莉亚',avatar='/assets/avatars/H165.png',
+            hpPercent=None,healthPending=True,support=True,dead=False)
+        self.publish_battle(battle)
+        self.assertIn('好友替补：彼岸花茱莉亚（服务器确认已上场）',self.page.locator('.act-battle-progress').inner_text())
+        member=self.page.locator('.act-battle-progress .allies .abyss-battle-member').first
+        self.assertEqual(member.locator('.abyss-hp-percent').inner_text(),'同步中')
+        self.assertIn('H165.png',member.locator('img').first.get_attribute('src'))
+        battle['allies'][0].update(hpPercent=65,healthPending=False)
+        self.publish_battle(battle)
+        self.assertEqual(member.locator('.abyss-hp-percent').inner_text(),'65%')
+
+    def test_fresh_options_repair_old_completed_count_after_a_failed_run(self):
+        self.select_progress()
+        self.page.evaluate("""() => {
+          applyActivityProgress('alpha',{running:false,progress:{family:'BH610',completed:12,total:13,detail:'旧记录'}});
+          DATA.activities[0].completed=13;
+          return loadActivityOptions('activity_scene',true);
+        }""")
+        self.assertIn('13/13',self.page.locator('.act-family .dd-cur').inner_text())
+        self.assertIn('13/13',self.page.locator('.act-progress-status').inner_text())
 
     def test_battle_window_updates_health_and_waves_and_restores_only_its_account(self):
         self.select_progress()
@@ -258,9 +328,17 @@ class ActivityProgressUITests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('getActCfg().teamId'), '')
         self.assertEqual(self.errors, [])
 
+    def test_elite_automatic_team_notice_is_visible_in_progress_mode(self):
+        self.select_progress()
+        hint=self.page.locator('.act-progress-hint')
+        self.assertTrue(hint.is_visible())
+        self.assertIn('第13关将自动配队，不使用所选队伍',hint.inner_text())
+        self.assertIn('最多尝试5次',hint.inner_text())
+        self.assertIn('归还装备与羁绊',hint.inner_text())
+
     def test_progress_tab_has_its_own_retry_when_options_fail(self):
         self.select_progress()
-        self.page.evaluate("failOptions = true")
+        self.page.evaluate("failOptions = true; delete $('act-activity_scene').dataset.loaded")
         self.page.evaluate("() => loadActivityOptions('activity_scene', true)")
         self.assertTrue(self.page.locator('.act-family-slot .act-options-retry').is_visible())
         self.page.evaluate("failOptions = false")

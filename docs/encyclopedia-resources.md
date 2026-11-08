@@ -1,90 +1,125 @@
-# 图鉴资料与自动更新
+# 图鉴资源与加载
 
-LucimaTools 在本地保留卡片渲染、筛选、缩放、导出、动态播放器及其运行库。角色索引、详情、公共文案映射和图鉴图片从独立云端入口获取；安装包不再包含 `assets/encyclopedia/`。源码中原目录是此前版本的生成快照，当前运行逻辑不读取它，新的生成结果位于 `build/encyclopedia-bundle/`。
+全量角色索引、文字资料、列表头像和公共小图标随应用提供。卡片中的静态立绘、动态立绘和技能图标通过独立资源入口的 `/encyclopedia/` 区域按需下载到浏览器缓存。图鉴资源配置独立于软件版本检查，`start.bat` 测试版也能加载图片，并继续禁用软件更新检查。
 
-## 云端契约
+## 状态筛选
 
-新版通过 `/encyclopedia/latest.json` 获取资料版本，当前版本为 `2026.10.28-data-1`，包含 227 名角色。入口实际为 454 字节，只含 `schema`、`kind`、`renderer`、`version`、`index` 和 `ui`。两个资料引用都采用 `{path, sha256, size}`；`path` 是同目录下的 `objects/<sha256>.json`。
+图鉴列表的“选择状态”按钮打开多选弹窗，上方为 Buff、下方为 Debuff，每项显示本地状态图标、官方名称和勾选框。点击“应用筛选”或弹窗外的遮罩后，角色只要关联任意一种已选状态即可入选，并同时满足属性与职业条件；未选择状态时不限状态。已应用的状态图标排列在按钮后，空间不足时自动换行，悬停可查看状态名称。弹窗的“清空”修改当前选择，应用后恢复不限状态；取消、关闭按钮和 Escape 丢弃尚未应用的选择。弹窗支持键盘焦点切换、手机滚动及明暗主题，滚动条沿用软件全局的主题色和圆角样式。
 
-- 索引保存名字、别名、属性、职业、星级、状态等列表与筛选字段，每名角色分别引用头像和详情。当前未压缩索引为 144,780 字节。
-- 公共资料保存渲染所需的文案与图标映射，以及共用图片的哈希引用；当前为 62,283 字节。映射的原游戏资源键保留，值使用对象相对路径。
-- 单人详情使用 `{schema: 1, character: {...}, media: {...}}`。`character` 保留 Ark2 处理版正式字段及本地渲染器需要的标签；`media` 只列该角色的立绘和技能资源，以逻辑路径映射到对象引用。
-- 图片、骨骼和图集复用现有对象池。新增资料不重复上传已有媒体；新版不从云端加载 JavaScript。
-- 入口 `schema: 1`、`renderer: 1` 标识当前数据与渲染契约。超出客户端能力的版本保留旧缓存并提示需要更新软件。
+`tools/build_encyclopedia.py` 从最终角色资料的全部 `Skill[].Status` 生成角色索引中的 `statuses` 去重 ID 数组，包含隐藏技能及子技能关联状态。状态名称直接取正式 `Status.Name`；公共 `ui.status_filters` 仅保存分组的 `{id,name}`，复用原有 `status_icons` 和 `status_tones`。机制说明卡不作为 Buff/Debuff，已退役的 H168S2_3 重复阶段也不作为独立选项；H168 星链标记通过仍在资料中的 H168S2_1 筛选。当前可选 42 种 Buff、25 种 Debuff。
+
+筛选在轻量索引上完成，打开弹窗或修改条件均无需加载全部角色详情或远程立绘。本次角色索引增加 11,373 字节，公共选项增加 2,742 字节；226 份角色详情和公共小图标保持原文件。定向数据与交互测试：`python -B -m unittest discover -s tools -p test_encyclopedia_catalog.py -v`、`python -B -m unittest discover -s tests -p test_encyclopedia_status_filters.py -v`。来源及文件核验见 [状态筛选数据报告](../build/encyclopedia-status-filter-verification.json)。
+
+## 当前发布范围
+
+`/encyclopedia/manifest.json` 是独立的完整资源入口。当前资源版本为 `2026.10.14-catalog-115657`，覆盖 226 个角色。1,516 个逻辑资源共 848,785,371 字节；按 SHA-256 和扩展名去重后为 1,489 个实际对象、848,717,858 字节（约 809.4 MiB）。清单另计，每份 228,881 字节。来源刷新记录见 [catalog 115657 更新](asset-refresh-115657.md)。
+
+| 类别 | 数量 | 清单中的逻辑路径 |
+| --- | ---: | --- |
+| 静态立绘 | 210 | `portraits/static/Hxxx.png` |
+| 技能图标 | 675 | `skills/<IconSprite>.png` |
+| 动态立绘 | 210 组，共 630 个文件 | `portraits/spine/Hxxx/{Hxxx.skel,Hxxx.atlas,<atlas texture pages>}` |
+| 共用 Spine 运行库 | 1 | `runtime/spine-webgl.js` |
+
+210 个角色各有静态和动态立绘。其余 16 个角色的源资源没有立绘，文字资料照常提供，立绘保持空缺。
+
+资源池清单使用 `schema: 2`。每个逻辑路径只记录原文件的哈希和长度，实际地址由 `objects/<sha256><原扩展名>` 推导，不存逐角色绝对地址：
+
+```json
+{
+  "schema": 2,
+  "version": "2026.10.14-catalog-115657",
+  "baseUrl": "/encyclopedia/",
+  "staticPortraitBaseUrl": "portraits/static/",
+  "dynamicBaseUrl": "portraits/spine/",
+  "skillIconBaseUrl": "skills/",
+  "spineRuntimeUrl": "runtime/spine-webgl.js",
+  "files": {
+    "portraits/static/H001.png": {"sha256": "<64 位小写 SHA-256>", "size": 123456}
+  }
+}
+```
+
+角色立绘按 ID 构造逻辑路径，技能图标按 `Skill[].IconSprite` 构造逻辑路径。加载器查清单后只下载对应哈希对象；动态播放器继续使用 atlas 原始相对纹理名称，由媒体层将虚拟路径映射到资源池，不重写 atlas 或骨骼。缺失映射保持空缺，不回退到未列入清单的网络路径。旧版无 `schema` 或 `schema: 1` 的版本目录清单仍兼容。
+
+### 资源路径契约
 
 ```text
 encyclopedia/
-  latest.json                    # 新版自动更新入口
-  versions/<数据版本>.json         # 不可变入口快照
-  objects/<sha256>.json           # 索引、公共资料、单人详情
-  objects/<sha256>.png            # 头像、公共图标、立绘、技能图
+  manifest.json
+  manifests/<资源版本>.json
+  objects/<sha256>.png
   objects/<sha256>.skel
   objects/<sha256>.atlas
-  manifest.json                  # 旧客户端媒体入口，继续兼容
-  manifests/<媒体版本>.json
-  cards/                         # 对外提供的成品 PNG 及查询表
+  objects/<sha256>.js
 ```
 
-图片、描述变化时按新内容生成哈希对象。版本不可原地改写；发布时先上传并核验对象与快照，最后切换 `latest.json` 并刷新入口缓存。回退时将入口切回已有快照。旧对象保留，供正在查看的旧卡片和旧版软件使用。旧媒体与成品卡片入口独立维护，本次发布没有改变它们。
+当前入口清单和版本快照均引用共享对象路径，未变化的内容可跨资源版本复用。
+客户端依据清单中的逻辑路径、大小和 SHA-256 定位并验证资源，不依赖具体托管平台。
+远程响应应允许应用来源的跨域读取；无效响应与缺失资源不会写入成功缓存。
 
-## 检查与按需下载
+## 独立资源配置
 
-首次使用图鉴时优先显示上次有效缓存，并在后台检查轻量入口；无缓存时先取得入口、索引和公共资料。进入图鉴、恢复前台时按全应用共享的一小时间隔检查；图鉴保持可见时自动安排下一次检查。页面的“同步”按钮支持立即检查，重复请求合并并短暂防抖，不按账号分别检查。
+`GET /api/encyclopedia/resources` 返回本地配置的 `manifestUrl` 和 `baseUrl`。`backend/encyclopedia_resources.py` 只读取本地配置，不请求服务器、不读取软件更新状态。配置优先级如下：
 
-入口使用 `Cache-Control: no-cache`，保存 ETag 并在后续请求发送 `If-None-Match`。版本不变时不重新下载角色资料和媒体；未返回 304 的服务器也只需重传小入口。失败按 2、4、8、16、30 分钟退避，图鉴可见时自动重试，手动检查可提前重试。
+1. 环境变量 `LUCIMA_ENCYCLOPEDIA_URL`，值为图鉴入口清单 URL。
+2. `encyclopedia-endpoint.json`，依次检查 `ARK_ASSET_ROOT`、`backend` 和项目根目录。
+3. 环境变量 `LUCIMA_UPDATE_URL` 或同样位置的 `update-endpoint.json`，从已有更新地址的同 host 推导 `/encyclopedia/manifest.json`。
 
-列表头像沿用浏览器懒加载。筛选只使用索引，不获取全部详情。打开卡片才取得该角色 JSON、静态立绘和技能图标；启用动态模式后才取骨骼、atlas 及其纹理。共用图片也由实际渲染需求触发。所有对象首次下载先校验大小与 SHA-256，校验失败不会覆盖有效缓存。
+没有有效配置时接口返回 `{}`，图鉴继续显示本地文字资料和空图片槽位。测试版使用项目根目录的私有 `encyclopedia-endpoint.json`；该文件已加入 `.gitignore`。以下地址仅为格式示例，不是实际服务器地址：
 
-## 缓存与版本切换
+```json
+{
+  "manifestUrl": "https://media.example/encyclopedia/manifest.json"
+}
+```
 
-`backend/encyclopedia.py` 在应用数据目录的 `encyclopedia-cache/` 中保存对象、入口快照、当前版本和检查状态；不写入安装目录，也不依赖浏览器端口或单个账号。Windows 和 Android 共用该实现，并使用应用的系统代理设置。
+Windows/Android 打包流程会注入私有 `encyclopedia-endpoint.json`，明确设置图鉴资源入口。软件更新域名与图鉴域名可以不同；只有没有独立配置时才从更新入口推导图鉴地址。真实地址不写入可提交代码，图鉴加载不依赖软件更新清单的 `resources` 字段。
 
-索引和公共资料全部下载并校验成功后，才原子替换当前版本入口。前端正在查看卡片、导出图片或打开状态选择框时，保留当前视图的数据版本，关闭后再应用等待中的新版。详情内存缓存使用内容哈希作为键；相同角色 ID 的新资料不会命中旧数据。
+## 卡片、图片与缓存
 
-已有缓存可离线使用。首次安装离线时提示“暂时无法获取图鉴资料”；没有下载过的详情或图片不会伪造占位资料。清单、数据格式、网络或哈希异常继续使用此前有效版本。缺少官方立绘的 16 位角色继续保留空图槽。
+`frontend/encyclopedia-card.js` 和 `frontend/encyclopedia-card.css` 迁移 Ark2 样板的原始卡片结构、渲染函数和样式。`frontend/app.js` 管理页面切换、缩放和平移；`frontend/encyclopedia-media.js` 在文字卡片出现后填入原有媒体槽位，不阻塞文字渲染。
 
-本地 API：
+五属性和三种状态的衍生色由 `frontend/encyclopedia-palette.js` 提供，保留 Ark2 在新版 Chromium 中的 OKLCH 混色结果及透明度，运行时只使用 RGB/RGBA。这避免旧 Android WebView 的近中性色相插值差异；属性徽章圆环同样使用兼容的 RGBA。调整样板配色后运行 `python tools/build_encyclopedia_palette.py` 重生成；也可通过 `--source` 指定 Ark2 的原始样板 CSS。生成器会逐色核对可见颜色，应用端不需要混色库。
 
-- `GET /api/encyclopedia/catalog`：只读取本机已激活版本，不主动联网。
-- `POST /api/encyclopedia/check`：执行按间隔检查，`force: true` 表示手动检查。
-- `GET /api/encyclopedia/detail?version=...&id=Hxxx`：按指定快照下载或读取单人详情。
-- `GET /api/encyclopedia/objects/<hash.ext>`：只允许访问已验证资料引用的对象，命中本机缓存时不联网。
+边框点光使用独立路径，随卡片高度同步原始几何，避免旧 WebView 的 `<use>` 路径样式覆盖高亮颜色和线宽。端点、徽章及点光淡出均使用显式透明度蒙版，保留原渐变范围、模糊与叠加效果；静态导出也使用同一套色板和图层。
 
-## 来源与构建
+静态模式只加载该角色的 PNG 立绘和技能图标，不下载 Spine 运行库、骨骼、atlas 或纹理页，并暂停卡片的星海、圆环与 SVG 点光效果。切换动态模式后，才由随应用发布的 `frontend/encyclopedia-player.js` 下载并播放 `.skel`、`.atlas` 及 atlas 声明的纹理页；`spineRuntimeUrl` 只指向运行库，无需额外的远程播放器文件。
 
-源资料继续来自当前 Ark2 项目的官方表和处理版 `out/assets/团员/资料`。不依赖旧 OpenRubi 项目，也不自行编写或缩写游戏文案。
+静态与动态立绘共用取景算法 `frontend/encyclopedia-framing.js`，它与 Ark2 的 `out/assets/spine/portrait-framing.js` 保持同字节。算法采样完整 `00_Idle` 动画的可见附件边界，在固定 400×520 逻辑画布内计算中心和视口，不加额外边距。静态 PNG 使用该镜头绘制 `LV1 / 00_Idle / t=0`，输出 800×1040 并保留透明画布；动态首次绘制同样从时间 0 开始。图片和画布切换直接显示已完成的帧，避免淡入时叠加。
 
-日常使用统一构建入口，资源版本独立于软件版本。默认从同级 `ark2/` 读取当前提取资料，可用 `--ark2-root` 指定其它位置：
+缺图、下载失败或图片不能解码时，静态立绘区域和原有 68×68 技能图标槽位保持空缺，不显示占位图，也不把列表头像当作卡片立绘。动态立绘加载期间或失败时，可以继续显示已经加载的静态立绘。离开卡片会停止播放器、销毁媒体实例并回收图片的 object URL；稍后完成的旧请求不会填入新卡片。
+
+哈希对象优先读取共享的 `lucima-encyclopedia-objects-v1` Cache Storage，缓存键为完整对象 URL，与整体资源版本无关。清单升级但文件哈希不变时，刷新页面也不会重新下载；只改变某个技能图标时只下载该图标。首次下载校验 SHA-256，成功后才写入缓存，损坏响应与 404 不写入；缓存命中不重复计算哈希。同 URL 的同时下载合并，缓存不可用时仍可使用已校验的下载。旧格式资源继续使用 `lucima-encyclopedia-resources-<version>` 缓存。本地角色 JSON 不放入远程缓存。更换域名属于 URL 变化，首次资源地址迁移不会自动复用旧服务器域名下的缓存。
+
+入口清单单独存入 `lucima-encyclopedia-config` 缓存。正常访问时检查入口清单，网络失败或新清单格式无效时使用此前的有效清单。对象 URL 按内容永久稳定；资源版本更新不更换未变化对象的地址。
+
+公共资料、能力、潜能、阵营、状态和星源小图标仍来自应用 assets。`assets/encyclopedia/ui.json` 的 `small_icons` 将 Ark2 样板的公共图标路径映射为本地 URL；`job_icons`、`faction_icons`、`status_icons` 直接提供本地 URL，不经过远程图片加载。
+
+## 来源与暂存
+
+Ark2 的 `tools/build_character_archive.py` 先从 Unity 解包的 `sd_*.txt` 源表生成 `out/assets/团员/资料_原始/Hxxx.json`，再结合游戏本地化生成处理版 `out/assets/团员/资料/Hxxx.json`。内存恢复的客户端代码用于核对 DSL、倍率和 AI 规则，生成器不直接读取内存镜像；完整证据边界见 Ark2 的 `tools/character_json_pipeline.md`。软件只导入处理版资料。
 
 ```powershell
-.\build-encyclopedia.bat --version <新资源版本> --cards
+python tools/build_encyclopedia.py --ark2-root E:\Project\ark2
 ```
 
-此命令依次整理资料、头像和媒体，生成云端资料，并使用当前前端渲染器生成整套成品 PNG 和查询表。头像直接来自本次 Ark2 提取源，不依赖安装包内的旧头像。构建需要 Pillow；生成卡片还需要 Playwright（Chromium）和 pypinyin。
+构建器和资源暂存器以正式 `资料/character_index.json` 的 `characters` 数组为清单，核对角色 ID 集合、同名字段和资源标志；资料必须为 `schema_version: 2.0-processed`。全部角色文字与机制字段写入应用的 `assets/encyclopedia/characters/Hxxx.json`，本地索引按编号排序。`translation_map.json` 只提供公共图标和文案映射。
 
-- 省略 `--cards`：只更新云端资料与媒体，已有成品卡片入口不参与此次发布。
-- 增加 `--reuse-media`：复用现有媒体清单，适合没有图片变动的资料更新；新资料引用的媒体仍必须完整存在。
-- `--from-existing --cards`：只校验当前已有产物并生成发布计划，不重新提取或渲染，可省略 `--version`。
+前端读取原字段 `NAME`、`Description`、`Description_Markup`、`Skill`、`Mechanics`、`Scaling` 等，不补写翻译字段或 `skills` 副本。技能 `Description` 保存本地化原文，卡片正文使用 Ark2 处理后的 `Description_Markup`；`Description_Final` 不再生成。`HiddenSkillIDs` 控制卡片隐藏技能，完整技能数据仍保留。技能 `IconSprite` 为图片 basename，缺图时可为空串；动态立绘元数据使用规范化 `Base=Hxxx`、`Skin=LV1`、`Animation=00_Idle`。
 
-中间结果写入 `build/encyclopedia/<资源版本>/`，最终文件仍位于 `releases/encyclopedia/`。全部引用文件、角色集合和版本快照校验通过后，才生成该目录的 `.release-plan.json`；它记录此次要发布的文件与入口，不上传云端。构建命令不联网、不上传文件。
-
-发布工具在本机 `deploy/encyclopedia/` 维护，不随软件源码仓库分发。先预演，再执行上传：
+全量暂存命令如下，输出必须是新的空目录：
 
 ```powershell
-.\deploy\encyclopedia\publish.bat --dry-run
-.\deploy\encyclopedia\publish.bat
+python tools/stage_encyclopedia_resources.py --ark2-root E:\Project\ark2 --output build/encyclopedia-resources/2026.10.08-catalog-115309
 ```
 
-预演重新校验本地发布计划及全部文件，不联网、不读取云凭据。实际发布只处理计划引用的文件，先上传并校验不可变对象及其公开下载内容，再切换媒体、可选卡片和新版资料入口；`latest.json` 最后切换。中断状态与入口备份保存在 `deploy/encyclopedia/state/`，重跑命令继续处理缓存刷新。图鉴上传复用本机私有配置，独立于软件发布通道。
+省略 `--character` 时暂存全量角色资源和归集后的全部技能图标；局部发布时可重复指定 `--character Hxxx`，只收集指定角色引用的技能图标。脚本从 Ark2 的 `out/assets/团员/立绘`、`动态立绘`、`技能图标` 及 `out/assets/spine/spine-webgl.js` 读取文件，并检查技能引用、骨骼、atlas 和纹理页是否齐全。它只准备本地目录，上传资源和切换服务器入口清单是独立发布步骤。
 
-底层 `build_encyclopedia.py`、`stage_encyclopedia_cdn.py`、`build_cloud_encyclopedia.py` 和 `build_encyclopedia_cards.py` 继续供单步构建及排查使用。角色数量由生成索引决定，无需为新角色修改发布脚本。不同内容仍须使用新资源版本，不覆盖已发布快照。
+重建立绘使用 Ark2 的 `python tools/spine_webgl/batch.py`，可以通过 `--only H001,H002` 指定角色或 `--output` 先生成到隔离目录。批量、单图和资源刷新入口均调用同一个渲染页面。生成目录的 `_render_profile.json` 记录渲染器、共享取景脚本、运行库、参数和每个角色源资源与 PNG 的哈希；旧图缺少记录或任一指纹改变时自动重新生成，避免仅因游戏 bundle 未变就复用旧镜头。详细规则见 Ark2 的 `tools/portrait_framing.md`。
 
-本地服务地址沿用忽略提交的 `encyclopedia-endpoint.json` 或环境变量 `LUCIMA_ENCYCLOPEDIA_URL`。配置可以指向 `latest.json`；已有 `manifest.json` 配置会解析为同目录下的 `latest.json`。软件更新检查与图鉴检查彼此独立，`start.bat` 也支持图鉴更新。
+## 旧清单兼容
 
-Windows spec 与 Android `copyWebAssets` 均排除 `assets/encyclopedia/**`。其它业务所需的角色头像、属性和职业小索引仍由公共游戏资源提供；基本信息页职业筛选读取独立的 `assets/role_jobs.json`，不再读取图鉴索引或等待图鉴网络请求。
-
-## 验证
-
-`tools/test_encyclopedia_cloud.py` 覆盖轻量检查、ETag、退避、并发、损坏/不兼容资料、原子切换、历史版本及离线重启。`tools/test_encyclopedia_cloud_ui.py` 覆盖详情哈希缓存、失败重试与卡片版本固定；`tools/test_cloud_encyclopedia_build.py` 核对云端资料保真、对象复用及版本不可改写。原有图鉴集合、媒体池和移动视口测试继续适用。
-
-本轮用真实前端、HTTP 服务和本地云镜像检查了 227 人列表、H806 静态/动态立绘、PNG 导出、打开卡片期间更新和重启后离线使用；脚本错误为 0。公开云入口、索引、公共资料、H806 详情及媒体均已再次下载验证。没有构建或发布软件安装包。
+无 `schema` 或 `schema: 1` 的旧清单继续通过 `baseUrl` 解析版本目录中的资源。
+新版 `schema: 2` 通过哈希对象映射读取共享资源池；缺失、损坏或无法解码的资源保持空缺，
+不会回退到未列入清单的网络路径。

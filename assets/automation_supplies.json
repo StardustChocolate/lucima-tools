@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "recipes": [
+    {
+      "id": "RandomEquipment",
+      "name": "随机装备强化芯片",
+      "store": "CraftCharm",
+      "price": 50000,
+      "limit": 2,
+      "maxMaterials": 10,
+      "targetScore": 1500
+    },
+    {
+      "id": "RandomAccessory",
+      "name": "随机饰品强化芯片",
+      "store": "CraftCharm",
+      "price": 80000,
+      "limit": 2,
+      "maxMaterials": 10,
+      "targetScore": 1700
+    }
+  ],
+  "vip": {
+    "id": "VIPGIFT_VIP0",
+    "store": "VIPGift",
+    "price": 10000,
+    "activity": "VIPGIFT_VIP0",
+    "scene": "1_3_6",
+    "limit": 1,
+    "buffs": [
+      "APActivity",
+      "ElementActivity",
+      "HuntActivity",
+      "GoldActivity100"
+    ],
+    "activities": [
+      "Elf",
+      "Hunt",
+      "APActivity",
+      "GoldActivity100"
+    ]
+  },
+  "ingredientMultipliers": [
+    1,
+    1.1,
+    1.15,
+    1.2
+  ],
+  "equipmentQualityMultipliers": {
+    "2": 2,
+    "3": 2.5
+  },
+  "provenance": {
+    "Commodity": "cbd77c4a38005acd33cbf0cba13760a1568bb26dce517073bc67d63fd195d7d6",
+    "Craft": "1645aa4393540dc0a75ef7e7914d1b5824064b4f67ff70288c9900c99458faa9",
+    "Activity": "c0705dbc605c97190d77ffbf69a46675413e1afeee68c6f0e4fa0f3d9070cb93",
+    "Drop": "2951f27ee9020388b301a27e1cdfd263e251a79f0a630bba76ec8bb328c8f071"
+  }
+}

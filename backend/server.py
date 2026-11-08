@@ -11,22 +11,22 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import posixpath
+import shutil
+import httpx
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from equipment import api as equipment_api
 from urllib.parse import unquote, urlparse, parse_qs
 
 from . import appcore
 from . import config
 from . import redeem_codes
 from .encyclopedia_resources import resource_config as encyclopedia_resource_config
-from .encyclopedia import EncyclopediaError, service as encyclopedia_service
 from .updater import UpdateError, service as update_service
-from .resource_update import service as resource_service
-from . import runtime_data as resources
-from . import maintenance
 from .appcore import ApiError
-from .game_client import DuplicateLoginError, MaintenanceError
+from .game_client import DuplicateLoginError
 from .logutil import setup as _setup_log
 
 log = _setup_log()
@@ -38,14 +38,13 @@ mimetypes.add_type("text/css", ".css")
 _STATIC_MOUNTS = {
     "/static/": appcore.FRONTEND_DIR,
     "/assets/": appcore.ASSETS_DIR,
+    "/equipment/": equipment_api.WEB_DIR,
 }
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 27843
 
 
-@resources.pinned
-@maintenance.operation
 def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
     """把 (method, path, body, query) 分派到 appcore，返回结果 dict。
     多账号：account 参数 POST 从 body 取、GET 从 query 取。"""
@@ -54,14 +53,11 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
         "/api/logs", "/api/logs/auto", "/api/logs/save", "/api/config",
         "/api/preferences", "/api/diagnostics/runtime",
         "/api/encyclopedia/resources", "/api/encyclopedia/save-image",
+        "/api/encyclopedia/cache", "/api/encyclopedia/local-config",
     }
-    if update_service.is_installing() and path not in update_routes and not path.startswith("/api/encyclopedia/"):
+    if update_service.is_installing() and path not in update_routes:
         raise ApiError(409, "正在准备软件更新，请等待当前操作完成")
     if method == "POST":
-        if path == "/api/encyclopedia/check":
-            return encyclopedia_service.check(force=body.get("force") is True)
-        if path == "/api/resources/check":
-            return resource_service.request_check()
         if path == "/api/login":
             return appcore.login(body["account"], body["password"])
         if path == "/api/login/saved":
@@ -75,18 +71,36 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
                 body.get("account"), body.get("useGold", True), body.get("autoBuy", []),
                 body.get("equipmentScheme"),
             )
+        if path == '/api/recruitment/refresh':
+            return appcore.recruitment_refresh(body.get('account'))
         if path == "/api/shop/buy":
-            return appcore.shop_buy_ep(body.get("account"), body["index"])
+            return appcore.shop_buy_ep(body.get("account"), body["index"], body.get('expectedEquipmentKey'))
         if path == "/api/star-source/query":
             return appcore.star_source_query_ep(body.get("account"))
         if path == "/api/star-source/refresh":
             return appcore.star_source_refresh_ep(body.get("account"), body.get("scheme"))
         if path == "/api/star-source/buy":
-            return appcore.star_source_buy_ep(body.get("account"), body.get("index"))
+            return appcore.star_source_buy_ep(body.get("account"), body.get("index"), body.get('expectedEquipmentKey'))
+        if path == '/api/equipment-notifications/open':
+            return appcore.open_equipment_notification(body.get('id'))
         if path == "/api/customized-equip/action":
             return appcore.customized_equip_ep(body.get("account"), body.get("action"), body)
+        if path == "/api/equipment/action":
+            return appcore.equipment_ep(body.get("account"), body.get("action"), body)
+        if path == "/api/gvg/action":
+            return appcore.gvg_ep(body.get("account"), body.get("action"), body)
         if path == "/api/store/buy":
             return appcore.store_buy_ep(body.get("account"), body.get("picks", []))
+        if path == '/api/inventory/manage':
+            return appcore.inventory_management_run(body.get('account'), body.get('kind'), body.get('options'))
+        if path == '/api/energy/buy':
+            return appcore.energy_buy(body.get('account'), body.get('commodityId'), body.get('count', 1))
+        if path == '/api/activity/store/config':
+            return appcore.activity_store_config(body.get('account'), body.get('store'), body.get('options'))
+        if path == '/api/activity/store/buy':
+            return appcore.activity_store_buy(body.get('account'), body.get('store'))
+        if path == "/api/sweep/equipment/sell":
+            return appcore.sweep_sell_equipment(body.get("account"), body.get("includeEpic85") is True)
         if path == "/api/sweep/run":
             return appcore.sweep_run(body.get("account"), body["sceneId"], body["teamId"],
                                      body.get("quick", True))
@@ -99,7 +113,8 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
                                         urgent_modes)
         if path == "/api/activity/progress/run":
             return appcore.activity_progress_run(body.get("account"), body.get("family"),
-                                                 body.get("teamId"), body.get("supportCuid"))
+                                                 body.get("teamId"), body.get("supportCuid"), body.get("autoSell", False),
+                                                 body.get("includeEpic85", False))
         if path == "/api/activity/progress/cancel":
             return appcore.activity_progress_cancel(body.get("account"))
         if path == "/api/activity/urgent/clear":
@@ -119,8 +134,14 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
                 body.get("account"), body.get("sceneId"), waves, body.get("autoAdvance", False))
         if path == "/api/abyss/cancel":
             return appcore.abyss_cancel(body.get("account"))
+        if path == "/api/intimacy/start":
+            return appcore.intimacy_start(body.get("account"),body.get('mains'),body.get('autoConfigure',True))
+        if path == "/api/intimacy/cancel":
+            return appcore.intimacy_cancel(body.get("account"))
         if path == "/api/abyss/rewards":
             return appcore.abyss_rewards(body.get("account"))
+        if path == "/api/abyss/restore":
+            return appcore.abyss_restore(body.get("account"))
         if path == "/api/guild/overview":
             return appcore.guild_overview(body.get("account"))
         if path == "/api/guild/action":
@@ -140,6 +161,8 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
         if path == "/api/arena/config":
             return appcore.arena_set(body.get("account"), body.get("picked"),
                                      body.get("teamId"))
+        if path == "/api/arena/reward/config":
+            return appcore.arena_reward_set(body.get("account"), body.get("config"))
         if path == "/api/status/refresh":
             return appcore.refresh_status(body.get("account"))
         if path == "/api/toggles":
@@ -206,14 +229,27 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
                                     body.get("data"), body.get("useAuth", True),
                                     body.get("pass"))
     elif method == "GET":
+        if path == "/api/arena/reward/options":
+            return appcore.arena_reward_options(query.get("account"))
+        if path == '/api/toggles':
+            return appcore.toggle_snapshot(query.get('account'))
         if path == "/api/guild/quests":
             return appcore.guild_quests_status(query.get("account"), query.get("id"))
         if path == "/api/accounts":
             return appcore.list_accounts()
+        if path == "/api/game-data/status":
+            from . import resource_sync
+            if query.get('check') == '1':
+                resource_sync.request_check()
+            return resource_sync.status()
         if path == "/api/status":
             return appcore.status(query.get("account"))
         if path == "/api/roster":
             return appcore.roster(query.get("account"))
+        if path == "/api/intimacy/status":
+            return {'intimacy': appcore.intimacy_snapshot(query.get('account') or '')}
+        if path == "/api/intimacy/options":
+            return appcore.intimacy_options(query.get('account'))
         if path == "/api/inventory":
             try:
                 since = int(query["since"]) if query.get("since") else None
@@ -230,12 +266,19 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             return appcore.store_options(query.get("account"))
         if path == "/api/activity/options":
             return appcore.activity_options(query.get("account"))
+        if path == '/api/activity/store/options':
+            return appcore.activity_store_options(query.get('account'))
+        if path == '/api/activity/support/search':
+            return appcore.activity_support_search(query.get('account'), query.get('q', ''))
+        if path == '/api/energy/options':
+            return appcore.energy_options(query.get('account'))
         if path == "/api/abyss/options":
             return appcore.abyss_options(query.get("account"))
+        if path == "/api/gvg/catalog":
+            from .gvg.catalog import catalog
+            return catalog()
         if path == "/api/arena/options":
             return appcore.arena_options(query.get("account"))
-        if path == '/api/voting/options':
-            return appcore.voting_options(query.get('account'))
         if path == "/api/config":
             return appcore.get_config()
         if path == "/api/preferences":
@@ -255,14 +298,14 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             )
         if path == "/api/update/status":
             return update_service.status()
-        if path == "/api/resources/status":
-            return resource_service.status()
         if path == "/api/encyclopedia/resources":
             return encyclopedia_resource_config()
-        if path == "/api/encyclopedia/catalog":
-            return encyclopedia_service.catalog()
-        if path == "/api/encyclopedia/detail":
-            return encyclopedia_service.detail(query.get("version"), query.get("id"))
+        if path in ("/api/encyclopedia/cache", "/api/encyclopedia/local-config"):
+            from . import resource_cache
+            try:
+                return resource_cache.prepare(query.get('url')) if path.endswith('/cache') else resource_cache.local_config()
+            except (ValueError, OSError, httpx.HTTPError) as error:
+                raise ApiError(502, '资源读取失败：' + str(error)[:200]) from error
         if path == "/api/logs":
             return appcore.get_logs()
     raise ApiError(404, f"未知接口 {method} {path}")
@@ -281,15 +324,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        instance = getattr(self.server, 'lucima_instance_id', '')
+        if instance:
+            self.send_header("X-Lucima-Instance", instance)
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_bytes(self, data: bytes, ctype: str, status: int = 200, immutable: bool = False):
+    def _send_bytes(self, data: bytes, ctype: str, status: int = 200):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        if immutable:
-            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(data)
 
@@ -306,6 +351,14 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 静态文件 ----
     def _serve_static(self, path: str) -> bool:
         """命中静态资源则发送并返回 True；否则 False。"""
+        if path.startswith('/resource-cache/'):
+            from . import resource_cache
+            try:
+                target, info = resource_cache.cached_file(path[len('/resource-cache/'):])
+            except (ValueError, OSError):
+                self._send_json({'detail':'本地资源不存在'},404)
+                return True
+            return self._serve_file(target, content_type=info['type'], immutable=not info.get('manifest'))
         # 根路径 / -> 前端首页
         if path == "/" or path == "":
             return self._serve_file(appcore.FRONTEND_DIR / "index.html")
@@ -320,33 +373,39 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     self._send_json({"detail": "非法路径"}, 403)
                     return True
-                resource_name = "assets/" + safe if prefix == "/assets/" else ""
-                if resource_name in resources.DATA_FILES:
-                    self._send_json(resources.read_json(resource_name))
-                    return True
                 return self._serve_file(target)
         return False
 
-    def _serve_file(self, target: Path) -> bool:
+    def _serve_file(self, target: Path, *, content_type=None, immutable=False) -> bool:
         if not target.is_file():
             self._send_json({"detail": "文件不存在"}, 404)
             return True
-        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        ctype = content_type or mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):
             ctype += "; charset=utf-8"
-        self._send_bytes(target.read_bytes(), ctype)
+        with target.open('rb') as source:
+            stat = os.fstat(source.fileno())
+            etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+            unchanged = self.headers.get('If-None-Match') == etag
+            self.send_response(304 if unchanged else 200)
+            self.send_header('ETag',etag)
+            self.send_header('Cache-Control','public, max-age=31536000, immutable' if immutable else 'public, max-age=0, must-revalidate')
+            if not unchanged:
+                self.send_header('Content-Type',ctype)
+                self.send_header('Content-Length',str(stat.st_size))
+            self.end_headers()
+            if not unchanged:
+                shutil.copyfileobj(source, self.wfile, length=64 * 1024)
         return True
 
     # ---- 请求分派 ----
     def _dispatch(self, method: str):
         parsed = urlparse(self.path)
         path = parsed.path
-        if method == "GET" and path.startswith("/api/encyclopedia/objects/"):
-            try:
-                data, ctype = encyclopedia_service.object(path.removeprefix("/api/encyclopedia/objects/"))
-                self._send_bytes(data, ctype, immutable=True)
-            except EncyclopediaError as error:
-                self._send_json({"detail": str(error)}, 503)
+        if method == "GET" and path == "/api/health":
+            # Readiness belongs to this bound server, not to whichever app may
+            # be listening at the Android app's formerly fixed port.
+            self._send_json({"service": "LucimaTools", "version": config.APP_VERSION})
             return
         if path.startswith("/api/"):
             body = self._read_body() if method == "POST" else {}
@@ -360,19 +419,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result)
                 # 日志增量接口由每个在线页面持续轮询；正常响应没有诊断价值，
                 # 记录它只会刷屏并挤掉真正有用的开发者日志。异常仍走下方分支记录。
-                if path not in {"/api/logs/auto", "/api/inventory", "/api/dev/history", "/api/update/status", "/api/resources/status", "/api/guild/quests"}:
+                if path not in {"/api/logs/auto", "/api/inventory", "/api/dev/history", "/api/update/status", "/api/guild/quests"}:
                     log.info("%s %s -> 200", method, path)
-            except EncyclopediaError as e:
-                self._send_json({"detail": str(e)}, 503)
             except ApiError as e:
                 self._send_json(
                     appcore.attach_connection({"detail": e.message}, request_account),
                     e.status,
                 )
                 log.warning("%s %s -> %d %s", method, path, e.status, e.message)
-            except MaintenanceError as error:
-                self._send_json(appcore.attach_connection({"detail": str(error)}, request_account), 409)
-                log.warning("%s %s -> 409 %s", method, path, error)
             except DuplicateLoginError:
                 # Direct task endpoints can propagate the protocol marker;
                 # normalize it so the UI receives the disconnected state.
@@ -405,12 +459,13 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> ThreadingHTTPServer:
     redeem_codes.start_scheduler()
-    update_service.start()
-    resource_service.start()
+    # 更新只由用户手动发起，启动不依赖更新服务。
     return ThreadingHTTPServer((host, port), Handler)
 
 
 def serve(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST):
+    from . import resource_sync
+    resource_sync.start()
     srv = make_server(port, host)
     srv.serve_forever()
 
