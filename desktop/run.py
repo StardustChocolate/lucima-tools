@@ -5,7 +5,7 @@
 - 关闭窗口时提供主题化确认弹窗，可勾选最小化到 Windows 系统托盘
 - 登录由 Python 后端直接调用 EROLABS V2 JSON API
 
-PyInstaller 打包后即为单个 LucimaTools.exe，双击运行。
+PyInstaller 打包后即为单个 LucimaTools.debug.exe，双击运行。
 """
 from __future__ import annotations
 
@@ -32,16 +32,20 @@ if str(_ROOT) not in sys.path:
 # 资源根（frontend/ assets/）与数据目录（settings.json / .browser_profile）
 os.environ.setdefault("ARK_ASSET_ROOT", str(_ROOT))
 # 数据目录：冻结时放 exe 同级（可写），源码时放项目根
-if getattr(sys, "frozen", False):
+if sys.platform=='darwin':
+    _DATA=Path(os.environ.get('ARK_DATA_DIR',Path.home()/'Library'/'Application Support'/'LucimaTools.debug'))
+    _DATA.mkdir(parents=True,exist_ok=True)
+elif getattr(sys, "frozen", False):
     _DATA = Path(sys.executable).resolve().parent
 else:
     _DATA = _ROOT
 os.environ.setdefault("ARK_DATA_DIR", str(_DATA))
-os.environ.setdefault("ARK_PLATFORM", "windows")
+os.environ.setdefault("ARK_PLATFORM", "macos" if sys.platform=='darwin' else "windows")
 
 import webview  # noqa: E402
 
 from backend import server  # noqa: E402
+from backend.branding import APP_NAME, WINDOWS_APPLICATION_ID  # noqa: E402
 from backend.updater import mark_launch_success  # noqa: E402
 
 
@@ -153,7 +157,7 @@ class LucimaDesktop:
 
                 native_icon = SystemIcons.Application
             icon.Icon = native_icon
-            icon.Text = "LucimaTools"
+            icon.Text = APP_NAME
 
             menu = forms.ContextMenuStrip()
             show_item = forms.ToolStripMenuItem("显示主窗口")
@@ -212,6 +216,7 @@ class LucimaDesktop:
                 logger.exception("从系统托盘退出失败")
 
     def _on_closing(self, window):
+        if sys.platform=='darwin':return True
         with self._state_lock:
             if self._allow_close:
                 self._dispose_tray()
@@ -269,6 +274,9 @@ def _start_server(port: int):
 
 
 def main():
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APPLICATION_ID)
     port = _free_port()
     srv = _start_server(port)
     # 等服务器起来
@@ -277,7 +285,7 @@ def main():
     bridge = LucimaDesktop()
     try:
         window = webview.create_window(
-            "璐茜玛的深层幻影",
+            APP_NAME,
             url,
             js_api=bridge,
             width=1180,
@@ -289,7 +297,9 @@ def main():
             raise RuntimeError("pywebview 未创建桌面窗口")
         bridge.bind_window(window)
         mark_launch_success()
-        webview.start()  # 阻塞至窗口关闭
+        # The frontend requires Chromium features; bootstrap checks WebView2
+        # before launch so machines without it receive an actionable message.
+        webview.start(gui="edgechromium" if sys.platform == "win32" else None)
     finally:
         bridge._dispose_tray()
         srv.shutdown()

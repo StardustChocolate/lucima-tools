@@ -1,0 +1,259 @@
+{
+  "source": "2026-10-23 H192 plan 2 screenshot. Six real cached item records; actual own-role Skills.Skills entries read from existing redacted logs. A0434 LV13 is an identical-growth artifact representative inferred from the exact Attack/HP panel, not confirmed artifact identity. Equipment attributes reconstructed from displayed text.",
+  "state": {
+    "EquipmentContainer": {
+      "Datas": [
+        {
+          "_id": "weapon",
+          "StaticID": "E0221",
+          "LV": 15,
+          "Set": "Lifesteal",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 500.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.05
+              },
+              {
+                "PropertyType": "HPValue",
+                "Value": 330.0
+              },
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.14
+              }
+            ]
+          }
+        },
+        {
+          "_id": "helmet",
+          "StaticID": "E3022",
+          "LV": 15,
+          "Set": "Lifesteal",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "HPValue",
+            "Value": 2700.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.18
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.06
+              }
+            ]
+          }
+        },
+        {
+          "_id": "armor",
+          "StaticID": "E0429",
+          "LV": 15,
+          "Set": "Resist",
+          "EquipRole": "other-role",
+          "MainProp": {
+            "PropertyType": "DefenceValue",
+            "Value": 285.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.07
+              },
+              {
+                "PropertyType": "DefenceRate",
+                "Value": 0.11
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 4.0
+              },
+              {
+                "PropertyType": "ResistanceRate",
+                "Value": 0.3
+              }
+            ]
+          }
+        },
+        {
+          "_id": "necklace",
+          "StaticID": "E0224",
+          "LV": 15,
+          "Set": "Resist",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "DefenceRate",
+            "Value": 0.6
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "HPValue",
+                "Value": 162.0
+              },
+              {
+                "PropertyType": "DefenceValue",
+                "Value": 90.0
+              },
+              {
+                "PropertyType": "ResistanceRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.11
+              }
+            ]
+          }
+        },
+        {
+          "_id": "ring",
+          "StaticID": "E0225",
+          "LV": 15,
+          "Set": "Lifesteal",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "DefenceValue",
+            "Value": 300.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "DefenceRate",
+                "Value": 0.04
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.06
+              }
+            ]
+          }
+        },
+        {
+          "_id": "boots",
+          "StaticID": "E0226",
+          "LV": 15,
+          "Set": "Lifesteal",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "DefenceValue",
+            "Value": 300.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "DefenceRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "ResistanceRate",
+                "Value": 0.05
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "RoleDataContainer": {
+      "Roles": [
+        {
+          "StaticID": "H192",
+          "LV": 60,
+          "Star": 6,
+          "AwakenLV": 6,
+          "ImprintLV": 0,
+          "IsSelfImprint": false,
+          "Skills": {
+            "Skills": [
+              {
+                "Level": 4,
+                "StaticID": "H192S1"
+              },
+              {
+                "Level": 8,
+                "StaticID": "H192S2"
+              },
+              {
+                "Level": 2,
+                "StaticID": "H192S3"
+              },
+              {
+                "Level": 1,
+                "StaticID": "H192S4"
+              }
+            ]
+          },
+          "_id": "dailian"
+        }
+      ]
+    },
+    "Artifacts": {
+      "Datas": [
+        {
+          "StaticID": "A0434",
+          "LV": 13,
+          "EquipRole": "dailian"
+        }
+      ]
+    }
+  },
+  "oldPanel": {
+    "HP": 10325,
+    "Attack": 1788,
+    "Defence": 2247,
+    "Speed": 135,
+    "CriticalRate": 70.0,
+    "CriticalDamageRate": 171.0,
+    "EffectHitRate": 18.0,
+    "ResistanceRate": 87.0,
+    "PinchRate": 3.0
+  },
+  "expectedPanel": {
+    "HP": 10325,
+    "Attack": 1788,
+    "Defence": 2247,
+    "Speed": 135,
+    "CriticalRate": 100.0,
+    "CriticalDamageRate": 171.0,
+    "EffectHitRate": 18.0,
+    "ResistanceRate": 107.0,
+    "PinchRate": 3.0
+  }
+}

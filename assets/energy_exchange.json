@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "source": "sd_Commodity.txt + sd_VIP.txt",
+  "version": "catalog_115942",
+  "commodities": {
+    "Normal6": {
+      "store": "Normal",
+      "currency": "37",
+      "price": 1,
+      "item": "3",
+      "gain": 100,
+      "daily": false
+    },
+    "Normal11": {
+      "store": "Normal",
+      "currency": "2",
+      "price": 30,
+      "item": "3",
+      "gain": 60,
+      "daily": true
+    },
+    "HeartShop8": {
+      "store": "HeartShop",
+      "currency": "83",
+      "price": 100,
+      "item": "37",
+      "gain": 10,
+      "daily": false
+    }
+  },
+  "diamondDailyLimits": {
+    "0": 2,
+    "1": 4,
+    "2": 6,
+    "3": 8,
+    "4": 10,
+    "5": 12,
+    "6": 15,
+    "7": 18,
+    "8": 21,
+    "9": 24,
+    "10": 27,
+    "11": 30,
+    "12": 33,
+    "13": 36,
+    "14": 39,
+    "15": 42
+  }
+}

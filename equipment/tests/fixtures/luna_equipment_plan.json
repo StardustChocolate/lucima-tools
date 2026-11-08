@@ -1,0 +1,499 @@
+{
+  "source": "2026-10-22 Luna screenshot: actual six-piece game plan and old first three candidates, anonymized from cached item records. Artifact A0022 LV30 represents the shared 156 Attack / 585 HP growth row matching the bare panel; equipped artifact identity is not known. Equipment properties were converted from display text.",
+  "state": {
+    "RoleDataContainer": {
+      "Roles": [
+        {
+          "_id": "luna",
+          "StaticID": "H606",
+          "LV": 60,
+          "Star": 6,
+          "AwakenLV": 6,
+          "ImprintLV": 0,
+          "IsSelfImprint": false
+        }
+      ]
+    },
+    "EquipmentContainer": {
+      "Datas": [
+        {
+          "_id": "other-boots-8",
+          "StaticID": "E0226",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "SpeedValue",
+            "Value": 40.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "HPRate",
+                "Value": 0.13
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.09
+              },
+              {
+                "PropertyType": "DefenceRate",
+                "Value": 0.08
+              }
+            ]
+          }
+        },
+        {
+          "_id": "other-weapon-7",
+          "StaticID": "E0341",
+          "LV": 15,
+          "Set": "Penetration",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 500.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.12
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.09
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 11.0
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.1
+              }
+            ]
+          }
+        },
+        {
+          "_id": "other-necklace-10",
+          "StaticID": "E0344",
+          "LV": 15,
+          "Set": "Penetration",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "CriticalDamageRate",
+            "Value": 0.65
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 11.0
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.08
+              },
+              {
+                "PropertyType": "AttackValue",
+                "Value": 81.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "game-weapon",
+          "StaticID": "E0448",
+          "LV": 15,
+          "Set": "Penetration",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 475.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.12
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 4.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.16
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.11
+              }
+            ]
+          }
+        },
+        {
+          "_id": "other-ring-12",
+          "StaticID": "E0225",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "other-role-2",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 500.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 14.0
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.06
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.04
+              }
+            ]
+          }
+        },
+        {
+          "_id": "game-helmet",
+          "StaticID": "E0342",
+          "LV": 15,
+          "Set": "Penetration",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "HPValue",
+            "Value": 2700.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.07
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.15
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 6.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "other-necklace-6",
+          "StaticID": "E0344",
+          "LV": 15,
+          "Set": "Penetration",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "CriticalDamageRate",
+            "Value": 0.65
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 4.0
+              },
+              {
+                "PropertyType": "AttackValue",
+                "Value": 66.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "game-boots",
+          "StaticID": "E0226",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "other-role-2",
+          "MainProp": {
+            "PropertyType": "SpeedValue",
+            "Value": 40.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "HPValue",
+                "Value": 535.0
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.18
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.04
+              }
+            ]
+          }
+        },
+        {
+          "_id": "game-armor",
+          "StaticID": "E0223",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "other-role-1",
+          "MainProp": {
+            "PropertyType": "DefenceValue",
+            "Value": 300.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 7.0
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.07
+              },
+              {
+                "PropertyType": "DefenceRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.14
+              }
+            ]
+          }
+        },
+        {
+          "_id": "game-necklace",
+          "StaticID": "E0224",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "other-role-4",
+          "MainProp": {
+            "PropertyType": "CriticalDamageRate",
+            "Value": 0.65
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.12
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.08
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 10.0
+              },
+              {
+                "PropertyType": "AttackValue",
+                "Value": 42.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "other-weapon-11",
+          "StaticID": "E0341",
+          "LV": 15,
+          "Set": "Penetration",
+          "EquipRole": "",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 500.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 7.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.13
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.1
+              },
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.14
+              }
+            ]
+          }
+        },
+        {
+          "_id": "game-ring",
+          "StaticID": "E0225",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "other-role-1",
+          "MainProp": {
+            "PropertyType": "AttackRate",
+            "Value": 0.6
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.06
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 6.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.13
+              },
+              {
+                "PropertyType": "AttackValue",
+                "Value": 121.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "other-helmet-9",
+          "StaticID": "E0222",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "other-role-9",
+          "MainProp": {
+            "PropertyType": "HPValue",
+            "Value": 2700.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.12
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.18
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 4.0
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.08
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Artifacts": {
+      "Datas": [
+        {
+          "StaticID": "A0022",
+          "LV": 30,
+          "EquipRole": "luna"
+        }
+      ]
+    }
+  },
+  "gamePlan": {
+    "weapon": "game-weapon",
+    "helmet": "game-helmet",
+    "armor": "game-armor",
+    "necklace": "game-necklace",
+    "ring": "game-ring",
+    "boots": "game-boots"
+  },
+  "expectedOldTop3": [
+    {
+      "HP": 8031,
+      "Attack": 3304,
+      "Defence": 1087,
+      "Speed": 184,
+      "CriticalRate": 100.0,
+      "CriticalDamageRate": 310.0,
+      "EffectHitRate": 0.0,
+      "ResistanceRate": 0.0,
+      "PinchRate": 3.0
+    },
+    {
+      "HP": 8031,
+      "Attack": 3276,
+      "Defence": 1087,
+      "Speed": 187,
+      "CriticalRate": 100.0,
+      "CriticalDamageRate": 310.0,
+      "EffectHitRate": 0.0,
+      "ResistanceRate": 0.0,
+      "PinchRate": 3.0
+    },
+    {
+      "HP": 8031,
+      "Attack": 3123,
+      "Defence": 1087,
+      "Speed": 185,
+      "CriticalRate": 100.0,
+      "CriticalDamageRate": 309.0,
+      "EffectHitRate": 0.0,
+      "ResistanceRate": 0.0,
+      "PinchRate": 3.0
+    }
+  ],
+  "expectedBare": {
+    "HP": 4833,
+    "Attack": 1569,
+    "Defence": 645,
+    "Speed": 112,
+    "CriticalRate": 38,
+    "CriticalDamageRate": 150,
+    "EffectHitRate": 0,
+    "ResistanceRate": 0,
+    "PinchRate": 3
+  },
+  "expectedPlan": {
+    "HP": 8068,
+    "Attack": 3448,
+    "Defence": 1035,
+    "Speed": 185,
+    "CriticalRate": 100.0,
+    "CriticalDamageRate": 314.0,
+    "EffectHitRate": 0.0,
+    "ResistanceRate": 0.0,
+    "PinchRate": 3.0
+  }
+}

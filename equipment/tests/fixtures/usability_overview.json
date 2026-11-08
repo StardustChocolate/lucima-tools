@@ -1,0 +1,927 @@
+{
+  "overview": {
+    "roles": [
+      {
+        "id": "r0",
+        "staticID": "H001",
+        "name": "配装角色甲",
+        "level": 60,
+        "star": 5,
+        "worn": 6,
+        "avatar": null,
+        "aliases": [
+          "目标角色"
+        ],
+        "searchName": "夏妮",
+        "current": {
+          "panel": {
+            "HP": 15294,
+            "Attack": 671,
+            "Defence": 648,
+            "Speed": 106,
+            "CriticalRate": 15.0,
+            "CriticalDamageRate": 150.0,
+            "EffectHitRate": 0.0,
+            "ResistanceRate": 0.0,
+            "PinchRate": 3.0
+          },
+          "sets": [
+            "Health",
+            "Health",
+            "Health"
+          ],
+          "count": 6,
+          "aux": 0
+        }
+      },
+      {
+        "id": "r1",
+        "staticID": "H001",
+        "name": "猫祭",
+        "level": 60,
+        "star": 5,
+        "worn": 6,
+        "avatar": null,
+        "aliases": [
+          "红猫"
+        ],
+        "searchName": "夏妮",
+        "current": {
+          "panel": {
+            "HP": 13494,
+            "Attack": 671,
+            "Defence": 648,
+            "Speed": 106,
+            "CriticalRate": 15.0,
+            "CriticalDamageRate": 150.0,
+            "EffectHitRate": 0.0,
+            "ResistanceRate": 0.0,
+            "PinchRate": 3.0
+          },
+          "sets": [
+            "Health",
+            "Health",
+            "Health"
+          ],
+          "count": 6,
+          "aux": 0
+        }
+      },
+      {
+        "id": "r2",
+        "staticID": "H001",
+        "name": "爱恋泡影的玳莲",
+        "level": 60,
+        "star": 5,
+        "worn": 6,
+        "avatar": null,
+        "aliases": [
+          "泳莲"
+        ],
+        "searchName": "夏妮",
+        "current": {
+          "panel": {
+            "HP": 11694,
+            "Attack": 671,
+            "Defence": 648,
+            "Speed": 106,
+            "CriticalRate": 15.0,
+            "CriticalDamageRate": 150.0,
+            "EffectHitRate": 0.0,
+            "ResistanceRate": 0.0,
+            "PinchRate": 3.0
+          },
+          "sets": [
+            "Health",
+            "Health",
+            "Health"
+          ],
+          "count": 6,
+          "aux": 0
+        }
+      },
+      {
+        "id": "r3",
+        "staticID": "H001",
+        "name": "夏妮",
+        "level": 60,
+        "star": 5,
+        "worn": 0,
+        "avatar": null,
+        "aliases": [
+          "团长",
+          "火团长",
+          "狼团"
+        ],
+        "searchName": "夏妮"
+      },
+      {
+        "id": "r4",
+        "staticID": "H001",
+        "name": "夏妮",
+        "level": 60,
+        "star": 5,
+        "worn": 0,
+        "avatar": null,
+        "aliases": [
+          "团长",
+          "火团长",
+          "狼团"
+        ],
+        "searchName": "夏妮"
+      },
+      {
+        "id": "r5",
+        "staticID": "H001",
+        "name": "夏妮",
+        "level": 60,
+        "star": 5,
+        "worn": 0,
+        "avatar": null,
+        "aliases": [
+          "团长",
+          "火团长",
+          "狼团"
+        ],
+        "searchName": "夏妮"
+      }
+    ],
+    "equips": [
+      {
+        "staticID": "W001",
+        "name": "W001",
+        "level": 5,
+        "slot": "weapon",
+        "slotCN": "武器",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "1000"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e0-0",
+        "role": "r0",
+        "locked": false,
+        "roleName": "配装角色甲"
+      },
+      {
+        "staticID": "W001",
+        "name": "W001",
+        "level": 5,
+        "slot": "weapon",
+        "slotCN": "武器",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "700"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e0-1",
+        "role": "r1",
+        "locked": false,
+        "roleName": "猫祭"
+      },
+      {
+        "staticID": "W001",
+        "name": "W001",
+        "level": 5,
+        "slot": "weapon",
+        "slotCN": "武器",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "400"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e0-2",
+        "role": "r2",
+        "locked": false,
+        "roleName": "爱恋泡影的玳莲"
+      },
+      {
+        "staticID": "EH001",
+        "name": "EH001",
+        "level": 5,
+        "slot": "helmet",
+        "slotCN": "头盔",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "1000"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e1-0",
+        "role": "r0",
+        "locked": false,
+        "roleName": "配装角色甲"
+      },
+      {
+        "staticID": "EH001",
+        "name": "EH001",
+        "level": 5,
+        "slot": "helmet",
+        "slotCN": "头盔",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "700"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e1-1",
+        "role": "r1",
+        "locked": false,
+        "roleName": "猫祭"
+      },
+      {
+        "staticID": "EH001",
+        "name": "EH001",
+        "level": 5,
+        "slot": "helmet",
+        "slotCN": "头盔",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "400"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e1-2",
+        "role": "r2",
+        "locked": false,
+        "roleName": "爱恋泡影的玳莲"
+      },
+      {
+        "staticID": "C001",
+        "name": "暗影标志",
+        "level": 5,
+        "slot": "armor",
+        "slotCN": "铠甲",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "1000"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e2-0",
+        "role": "r0",
+        "locked": false,
+        "roleName": "配装角色甲"
+      },
+      {
+        "staticID": "C001",
+        "name": "暗影标志",
+        "level": 5,
+        "slot": "armor",
+        "slotCN": "铠甲",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "700"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e2-1",
+        "role": "r1",
+        "locked": false,
+        "roleName": "猫祭"
+      },
+      {
+        "staticID": "C001",
+        "name": "暗影标志",
+        "level": 5,
+        "slot": "armor",
+        "slotCN": "铠甲",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "400"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e2-2",
+        "role": "r2",
+        "locked": false,
+        "roleName": "爱恋泡影的玳莲"
+      },
+      {
+        "staticID": "N001",
+        "name": "N001",
+        "level": 5,
+        "slot": "necklace",
+        "slotCN": "项链",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "1000"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e3-0",
+        "role": "r0",
+        "locked": false,
+        "roleName": "配装角色甲"
+      },
+      {
+        "staticID": "N001",
+        "name": "N001",
+        "level": 5,
+        "slot": "necklace",
+        "slotCN": "项链",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "700"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e3-1",
+        "role": "r1",
+        "locked": false,
+        "roleName": "猫祭"
+      },
+      {
+        "staticID": "N001",
+        "name": "N001",
+        "level": 5,
+        "slot": "necklace",
+        "slotCN": "项链",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "400"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e3-2",
+        "role": "r2",
+        "locked": false,
+        "roleName": "爱恋泡影的玳莲"
+      },
+      {
+        "staticID": "R001",
+        "name": "下级火元素",
+        "level": 5,
+        "slot": "ring",
+        "slotCN": "戒指",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "1000"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e4-0",
+        "role": "r0",
+        "locked": false,
+        "roleName": "配装角色甲"
+      },
+      {
+        "staticID": "R001",
+        "name": "下级火元素",
+        "level": 5,
+        "slot": "ring",
+        "slotCN": "戒指",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "700"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e4-1",
+        "role": "r1",
+        "locked": false,
+        "roleName": "猫祭"
+      },
+      {
+        "staticID": "R001",
+        "name": "下级火元素",
+        "level": 5,
+        "slot": "ring",
+        "slotCN": "戒指",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "400"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e4-2",
+        "role": "r2",
+        "locked": false,
+        "roleName": "爱恋泡影的玳莲"
+      },
+      {
+        "staticID": "S001",
+        "name": "S001",
+        "level": 5,
+        "slot": "boots",
+        "slotCN": "鞋子",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "1000"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e5-0",
+        "role": "r0",
+        "locked": false,
+        "roleName": "配装角色甲"
+      },
+      {
+        "staticID": "S001",
+        "name": "S001",
+        "level": 5,
+        "slot": "boots",
+        "slotCN": "鞋子",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "700"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e5-1",
+        "role": "r1",
+        "locked": false,
+        "roleName": "猫祭"
+      },
+      {
+        "staticID": "S001",
+        "name": "S001",
+        "level": 5,
+        "slot": "boots",
+        "slotCN": "鞋子",
+        "img": null,
+        "classLV": null,
+        "enhance": 15,
+        "tierName": "品阶None",
+        "isLegendary": false,
+        "is85Legendary": false,
+        "set": "Health",
+        "setCN": "生命",
+        "setIcon": "/assets/sets/Health.png",
+        "mainProp": {
+          "type": "HPValue",
+          "label": "生命值",
+          "text": "400"
+        },
+        "subProps": [],
+        "auxScore": 0,
+        "id": "e5-2",
+        "role": "r2",
+        "locked": false,
+        "roleName": "爱恋泡影的玳莲"
+      }
+    ],
+    "sets": [
+      {
+        "id": "Injury",
+        "name": "创伤",
+        "count": 4,
+        "desc": "攻击后削减目标最大生命（最多 6%/单体 12%）",
+        "icon": "/assets/sets/Injury.png"
+      },
+      {
+        "id": "Counter",
+        "name": "反击",
+        "count": 4,
+        "desc": "受击时 30% 反击",
+        "icon": "/assets/sets/Counter.png"
+      },
+      {
+        "id": "Lifesteal",
+        "name": "吸血",
+        "count": 4,
+        "desc": "攻击时按伤害 20% 回复生命",
+        "icon": "/assets/sets/Lifesteal.png"
+      },
+      {
+        "id": "Revenge",
+        "name": "复仇",
+        "count": 4,
+        "desc": "速度 +12%，每损失 1% 生命再 +0.5%",
+        "icon": "/assets/sets/Revenge.png"
+      },
+      {
+        "id": "Attack",
+        "name": "攻击",
+        "count": 4,
+        "desc": "攻击力 +45%",
+        "icon": "/assets/sets/Attack.png"
+      },
+      {
+        "id": "Destruction",
+        "name": "暴伤",
+        "count": 4,
+        "desc": "暴击伤害 +50%",
+        "icon": "/assets/sets/Destruction.png"
+      },
+      {
+        "id": "Rage",
+        "name": "暴怒",
+        "count": 4,
+        "desc": "目标有负面状态时伤害 +30%",
+        "icon": "/assets/sets/Rage.png"
+      },
+      {
+        "id": "Speed",
+        "name": "速度",
+        "count": 4,
+        "desc": "速度 +16%",
+        "icon": "/assets/sets/Speed.png"
+      },
+      {
+        "id": "Immunity",
+        "name": "免疫",
+        "count": 2,
+        "desc": "战斗开始获得 1 回合免疫",
+        "icon": "/assets/sets/Immunity.png"
+      },
+      {
+        "id": "Hit",
+        "name": "命中",
+        "count": 2,
+        "desc": "状态命中 +20%",
+        "icon": "/assets/sets/Hit.png"
+      },
+      {
+        "id": "Resist",
+        "name": "抗性",
+        "count": 2,
+        "desc": "状态抗性 +20%",
+        "icon": "/assets/sets/Resist.png"
+      },
+      {
+        "id": "Critical",
+        "name": "暴击",
+        "count": 2,
+        "desc": "暴击率 +12%",
+        "icon": "/assets/sets/Critical.png"
+      },
+      {
+        "id": "Health",
+        "name": "生命",
+        "count": 2,
+        "desc": "生命力 +20%",
+        "icon": "/assets/sets/Health.png"
+      },
+      {
+        "id": "Penetration",
+        "name": "贯穿",
+        "count": 2,
+        "desc": "单体攻击无视 15% 防御",
+        "icon": "/assets/sets/Penetration.png"
+      },
+      {
+        "id": "Pinch",
+        "name": "追击",
+        "count": 2,
+        "desc": "追击率 +8%，追击伤害 +6%",
+        "icon": "/assets/sets/Pinch.png"
+      },
+      {
+        "id": "Defense",
+        "name": "防御",
+        "count": 2,
+        "desc": "防御力 +20%",
+        "icon": "/assets/sets/Defense.png"
+      },
+      {
+        "id": "Torrent",
+        "name": "飞流",
+        "count": 2,
+        "desc": "生命力 -10%，伤害 +10%",
+        "icon": "/assets/sets/Riptide.png"
+      }
+    ],
+    "stats": [
+      {
+        "id": "HP",
+        "name": "生命",
+        "percent": false
+      },
+      {
+        "id": "Attack",
+        "name": "攻击",
+        "percent": false
+      },
+      {
+        "id": "Defence",
+        "name": "防御",
+        "percent": false
+      },
+      {
+        "id": "Speed",
+        "name": "速度",
+        "percent": false
+      },
+      {
+        "id": "CriticalRate",
+        "name": "暴击率",
+        "percent": true
+      },
+      {
+        "id": "CriticalDamageRate",
+        "name": "暴击伤害",
+        "percent": true
+      },
+      {
+        "id": "EffectHitRate",
+        "name": "状态命中",
+        "percent": true
+      },
+      {
+        "id": "ResistanceRate",
+        "name": "状态抗性",
+        "percent": true
+      },
+      {
+        "id": "PinchRate",
+        "name": "追击率",
+        "percent": true
+      }
+    ],
+    "excludedRoles": []
+  },
+  "batch": {
+    "batchId": "454cf902e73247e9a021bc484f578f29",
+    "entries": [
+      {
+        "results": [
+          {
+            "equipIds": {
+              "weapon": "e0-0",
+              "helmet": "e1-0",
+              "armor": "e2-0",
+              "necklace": "e3-0",
+              "ring": "e4-0",
+              "boots": "e5-0"
+            },
+            "panel": {
+              "HP": 15294,
+              "Attack": 671,
+              "Defence": 648,
+              "Speed": 106,
+              "CriticalRate": 15.0,
+              "CriticalDamageRate": 150.0,
+              "EffectHitRate": 0.0,
+              "ResistanceRate": 0.0,
+              "PinchRate": 3.0
+            },
+            "aux": 0,
+            "sets": [
+              "Health",
+              "Health",
+              "Health"
+            ],
+            "metrics": {
+              "damage": 1006.5,
+              "survival": 48329.04,
+              "effectiveCrit": 100.0,
+              "effectiveCritDamage": 150.0
+            },
+            "reason": "同速度保留生存评分最高方案；不同速度按主评分从高到低排序",
+            "secondaryStatus": {}
+          }
+        ],
+        "nodes": 0,
+        "neighborNodes": 0,
+        "truncated": false,
+        "searchComplete": true,
+        "candidateLimit": null,
+        "moreCandidatesPossible": false,
+        "bestConfirmed": true,
+        "shortage": {},
+        "pool": {
+          "weapon": 3,
+          "helmet": 3,
+          "armor": 3,
+          "necklace": 3,
+          "ring": 3,
+          "boots": 3
+        },
+        "current": {
+          "panel": {
+            "HP": 15294,
+            "Attack": 671,
+            "Defence": 648,
+            "Speed": 106,
+            "CriticalRate": 15.0,
+            "CriticalDamageRate": 150.0,
+            "EffectHitRate": 0.0,
+            "ResistanceRate": 0.0,
+            "PinchRate": 3.0
+          },
+          "sets": [
+            "Health",
+            "Health",
+            "Health"
+          ]
+        },
+        "base": {
+          "HP": 5809,
+          "Attack": 671,
+          "Defence": 648,
+          "Speed": 106,
+          "CriticalRate": 15.0,
+          "CriticalDamageRate": 150.0,
+          "EffectHitRate": 0.0,
+          "ResistanceRate": 0.0,
+          "PinchRate": 3.0
+        },
+        "criticalTarget": 0,
+        "objective": "survival",
+        "secondary": [],
+        "bestPossible": {
+          "Speed": 106
+        },
+        "roleId": "r0",
+        "pick": 0,
+        "done": false
+      }
+    ],
+    "configs": [
+      {
+        "roleId": "r0",
+        "criticalTarget": 50,
+        "objective": "survival",
+        "sets": [],
+        "conditions": [
+          {
+            "stat": "Speed",
+            "min": 100
+          }
+        ],
+        "secondary": []
+      }
+    ],
+    "options": {
+      "only_max": true,
+      "include_worn": true,
+      "excluded_roles": [],
+      "complete": true
+    },
+    "excludedRoles": []
+  }
+}

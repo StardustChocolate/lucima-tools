@@ -8,9 +8,8 @@ callback before filling HP; later trusted events supply current battle values.
 """
 from __future__ import annotations
 
-from . import runtime_data as resources
-
 from copy import deepcopy
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -21,12 +20,13 @@ from .game_client import GameError
 from .game_data import activity_open, enabled, timestamp
 
 
-@resources.cached
+@lru_cache(maxsize=1)
 def metadata() -> dict:
     root = Path(os.environ.get("ARK_ASSET_ROOT") or Path(__file__).resolve().parent.parent)
-    path = root / "assets" / "abyss_battle_static.json"
+    from .resource_store import path as resource_path
+    path = resource_path("assets/abyss_battle_static.json")
     try:
-        data = resources.read_json("assets/abyss_battle_static.json")
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise GameError("缺少深渊战斗静态资料，请更新资源") from exc
     required = {"Role", "Skill", "Status", "Fantasy", "AIAction", "Scene", "Activity", "RoleProperty",
@@ -253,6 +253,12 @@ def sync_activity_support(msg: dict, units: dict, start_info: dict, fantasy: dic
     uid, role = replacement.get("ID"), replacement.get("RoleData")
     if not isinstance(uid, str) or not uid.startswith("1-") or not isinstance(role, dict):
         raise GameError("助战替换数据不完整，已停止战斗")
+    if not role.get('StaticID'):
+        from .tasks import _oid
+        selected=((start_info.get('Support')or{}).get('PlayerRoleData')or{}).get('RoleData')or{}
+        if selected.get('StaticID') and (not role.get('_id') or _oid(role.get('_id'))==_oid(selected.get('_id'))):
+            role={**deepcopy(selected),**role,'StaticID':selected['StaticID']}
+        else:raise GameError('服务器替补角色缺少身份资料，正在同步后重新配队')
     roster = {str(u["Position"]): deepcopy(u) for u in units.values() if u["id"].startswith("1-")}
     pos = str(replacement.get("CampPosition", uid.rsplit("-", 1)[-1]))
     roster[pos] = {**deepcopy(role), "_IsSupport": True}
@@ -262,12 +268,15 @@ def sync_activity_support(msg: dict, units: dict, start_info: dict, fantasy: dic
     support.update({key: deepcopy(replacement[key]) for key in
                     ("NowHP", "NowSP", "NowRound", "DisplayRound", "RoleTimeInfo", "IsDieOut") if key in replacement})
     support["id"] = uid
+    support['_SupportHealthPending'] = 'NowHP' not in replacement
     # A replacement created after a wave transition has that wave in its ID.
-    units.pop(next((key for key, value in units.items() if key.startswith("1-") and str(value["Position"]) == pos), ""), None)
+    old_id=next((key for key, value in units.items() if key.startswith("1-") and str(value["Position"]) == pos), "")
+    units.pop(old_id,None)
     units[uid] = support
+    return {old_id} if old_id and old_id!=uid else set()
 
 
-def sync_units(msg: dict, units: dict[str, dict]) -> None:
+def sync_units(msg: dict, units: dict[str, dict], *, ignored_ids=()) -> None:
     # BattleData.ApplyProcessResult 0x2121b14 applies RoundResult first.
     # A trusted RoleEvent later in the same frame replaces its role's values.
     rr = msg.get("RoundResult") or {}
@@ -283,7 +292,9 @@ def sync_units(msg: dict, units: dict[str, dict]) -> None:
             if not isinstance(item, dict) or not item.get("TargetRoleID") or item.get("IsCanSyncRole", 0) == 0:
                 continue
             uid = str(item["TargetRoleID"])
+            if uid in ignored_ids:continue
             current = units.setdefault(uid, {"id": uid})
+            if 'NowHP' in item:current.pop('_SupportHealthPending',None)
             # Constructor defaults of a *trusted* BattleRoleEvent. Omission
             # means empty collections, not "leave the old collection alone".
             current["NowStatusList"] = deepcopy(item.get("NowStatusList") or [])

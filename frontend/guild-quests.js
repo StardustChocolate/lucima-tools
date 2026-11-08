@@ -207,11 +207,11 @@
   function init() {
     if (initialized || !$('guildQuestPanel')) return;
     initialized = true;
-    $('guildQuestQuery').addEventListener('click', query);
-    $('guildQuestStart').addEventListener('click', start);
-    $('guildQuestStop').addEventListener('click', cancel);
-    $('guildQuestResolve').addEventListener('click', resolveUnknown);
-    $('guildQuestRefresh').addEventListener('click', () => { if (activeAccount) return check(getState(activeAccount)); });
+    $('guildQuestQuery').addEventListener('click', LucimaActionWait.wrap(query));
+    $('guildQuestStart').addEventListener('click', LucimaActionWait.wrap(start));
+    $('guildQuestStop').addEventListener('click', LucimaActionWait.wrap(cancel));
+    $('guildQuestResolve').addEventListener('click', LucimaActionWait.wrap(resolveUnknown));
+    $('guildQuestRefresh').addEventListener('click', LucimaActionWait.wrap(() => { if (activeAccount) return check(getState(activeAccount)); }));
     $('guildQuestRounds').addEventListener('input', () => { if (activeAccount) getState(activeAccount).rounds = $('guildQuestRounds').value; });
     window.addEventListener('lucima:account-change', changed);
     window.addEventListener('lucima:section-change', changed);

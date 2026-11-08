@@ -6,7 +6,7 @@
   function resourceUrl(config, path) {
     if (!path || !config.baseUrl) return "";
     try {
-      if (config.schema === 2) {
+      if (config.schema === 2 && !config.privateFileIndex) {
         const file = config.files?.[path];
         const extension = String(path).match(/\.(png|jpg|jpeg|webp|skel|atlas|js)$/i)?.[0].toLowerCase();
         if (!file || !/^[a-f0-9]{64}$/.test(file.sha256) || !extension) return "";
@@ -17,7 +17,7 @@
     } catch { return ""; }
   }
 
-  function mount({ renderer, entry, data, config = {}, fetchResource, loadRuntime }) {
+  function mount({ renderer, entry, data, config = {}, fetchResource, loadRuntime, resolveResourceUrl }) {
     const card = renderer.card;
     const host = card.querySelector(".portrait-layer");
     const canvas = card.querySelector(".portrait-canvas");
@@ -38,6 +38,18 @@
       if (!url || disposed) return false;
       let objectUrl = "";
       try {
+        if (resolveResourceUrl) {
+          const local = await resolveResourceUrl(url);
+          if (disposed) return false;
+          node.decoding = 'async';
+          node.src = local;
+          await node.decode();
+          if (disposed) return false;
+          node.alt = alt;
+          node.hidden = false;
+          node.style.visibility = 'visible';
+          return true;
+        }
         const response = await fetchResource(url);
         if (disposed) return false;
         objectUrl = URL.createObjectURL(await response.blob());

@@ -3,8 +3,6 @@ package com.openrubi.lucimatools
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ContentValues
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -20,6 +18,18 @@ import android.provider.Settings
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
+import android.webkit.WebResourceResponse
+import android.view.View
+import android.view.Gravity
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.Button
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -32,14 +42,23 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
-    private val port = AppBootstrap.PORT
+    private val equipmentNotification = AtomicReference<String?>(null)
     private var pendingUpdatePath: String? = null
+    private var lastRendererRecovery = 0L
+    private lateinit var startupOverlay: LinearLayout
+    private lateinit var startupMessage: TextView
+    private lateinit var startupRetry: Button
+    private lateinit var startupSpinner: ProgressBar
+    private var startupGeneration = 0
+    private var pageReady = false
+    private var startupPermissionsRequested = false
     private val filePreferences by lazy {
         getSharedPreferences(FILE_PREFERENCES, Context.MODE_PRIVATE)
     }
@@ -98,30 +117,145 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        equipmentNotification.set(intent?.getStringExtra(EquipmentNotifications.EVENT_EXTRA))
 
-        // 1) 引导后端（Python 运行时 + 资源释放 + 起 HTTP 服务）。幂等：若前台服务已引导过
-        //    则直接返回。这里先引导，保证 WebView 一起来就能连上本地服务。
+        // Bootstrap is asynchronous. Clear a prior failure before its new UI
+        // starts polling, so a retry cannot consume the previous error.
         AppBootstrap.ensureStarted(this)
+        createWebView()
 
         // 2) 启动前台服务托管进程——让息屏 / 切后台 / 划掉最近任务后后端调度线程仍存活。
         //    持有 Partial WakeLock + WifiLock，配合下面的电池白名单请求对抗 Doze。
         AutomationService.start(this)
 
-        // 3) 请求通知权限（API 33+，用于常驻通知）+ 引导用户加电池优化白名单（Doze 豁免）。
-        requestNotificationPermission()
-        requestIgnoreBatteryOptimizations()
+    }
 
-        // 4) WebView 加载本地前端
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView() {
+        val generation = ++startupGeneration
+        pageReady = false
         webView = WebView(this)
-        setContentView(webView)
+        webView.setBackgroundColor(android.graphics.Color.rgb(11, 16, 32))
+        val root = FrameLayout(this)
+        root.addView(webView, FrameLayout.LayoutParams(-1, -1))
+        startupOverlay = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(32, 48, 32, 48)
+            setBackgroundColor(android.graphics.Color.rgb(11, 16, 32))
+        }
+        startupMessage = TextView(this).apply {
+            text = "正在启动璐茜玛…"
+            textSize = 17f
+            gravity = Gravity.CENTER
+            setTextColor(android.graphics.Color.WHITE)
+        }
+        startupSpinner = ProgressBar(this).apply {
+            isIndeterminate = true
+            contentDescription = "正在加载，请稍候"
+        }
+        startupRetry = Button(this).apply {
+            text = "重试"
+            visibility = View.GONE
+            setOnClickListener {
+                isEnabled = false
+                val old = webView
+                (old.parent as? android.view.ViewGroup)?.removeView(old)
+                old.destroy()
+                AppBootstrap.ensureStarted(this@MainActivity)
+                createWebView()
+            }
+        }
+        startupOverlay.addView(startupSpinner, LinearLayout.LayoutParams(64, 64).apply {
+            bottomMargin = 24
+        })
+        startupOverlay.addView(startupMessage)
+        startupOverlay.addView(startupRetry)
+        root.addView(startupOverlay, FrameLayout.LayoutParams(-1, -1))
+        setContentView(root)
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true          // localStorage（主题/购买目标等）
-            cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+            // APIs are no-store; local files revalidate their ETag. Reuse
+            // image/file bodies instead of reading and copying every visit.
+            cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
         }
         webView.addJavascriptInterface(UpdateBridge(), "LucimaUpdate")
         webView.addJavascriptInterface(FileBridge(), "LucimaFiles")
-        loadWhenServerReady()
+        webView.addJavascriptInterface(TaskRenderingBridge(webView), "LucimaRendering")
+        webView.addJavascriptInterface(NotificationBridge(), "LucimaNotifications")
+        webView.addJavascriptInterface(StartupBridge(generation), "LucimaStartup")
+        webView.webViewClient = object : WebViewClient() {
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame && generation == startupGeneration) {
+                    showStartup("页面加载失败，请点击重试。\n${error.description}", true)
+                }
+            }
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (request.isForMainFrame && generation == startupGeneration) {
+                    showStartup("页面加载失败（${response.statusCode}），请点击重试。", true)
+                }
+            }
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                // Recover the page only. The Python worker retains task state;
+                // opening the UI again must never resubmit a battle or sale.
+                val now = android.os.SystemClock.elapsedRealtime()
+                val repeated = lastRendererRecovery != 0L && now - lastRendererRecovery < 10000
+                lastRendererRecovery = now
+                (view.parent as? android.view.ViewGroup)?.removeView(view)
+                view.destroy()
+                if (repeated) {
+                    val retry = TextView(this@MainActivity).apply {
+                        text = "页面显示暂时中断，已提交的操作不会重复执行。点此恢复页面。"
+                        setTextColor(android.graphics.Color.WHITE)
+                        setBackgroundColor(android.graphics.Color.rgb(7, 11, 20))
+                        setPadding(32, 64, 32, 32)
+                        setOnClickListener { isEnabled = false; createWebView() }
+                    }
+                    setContentView(retry)
+                } else createWebView()
+                return true
+            }
+        }
+        loadWhenServerReady(generation)
+    }
+
+    private fun showStartup(message: String, retry: Boolean = false) {
+        startupMessage.text = message
+        startupSpinner.visibility = if (retry) View.GONE else View.VISIBLE
+        startupRetry.isEnabled = retry
+        startupRetry.visibility = if (retry) View.VISIBLE else View.GONE
+        startupOverlay.visibility = View.VISIBLE
+    }
+
+    private inner class StartupBridge(private val generation: Int) {
+        @JavascriptInterface
+        fun ready() = runOnUiThread {
+            if (generation != startupGeneration || isFinishing || isDestroyed) return@runOnUiThread
+            pageReady = true
+            startupOverlay.visibility = View.GONE
+            if (!startupPermissionsRequested) {
+                startupPermissionsRequested = true
+                requestNotificationPermission()
+                requestIgnoreBatteryOptimizations()
+            }
+        }
+        @JavascriptInterface
+        fun failed(message: String) = runOnUiThread {
+            if (generation == startupGeneration) showStartup("页面初始化失败，请点击重试。\n${message.take(500)}", true)
+        }
+    }
+
+    private inner class NotificationBridge {
+        @JavascriptInterface
+        fun takePendingEquipmentEvent(): String = equipmentNotification.getAndSet(null).orEmpty()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra(EquipmentNotifications.EVENT_EXTRA)?.let { equipmentNotification.set(it) }
+        webView.evaluateJavascript("window.dispatchEvent(new Event('lucima:notification-open'))", null)
     }
 
     private inner class UpdateBridge {
@@ -132,31 +266,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private inner class FileBridge {
-        @JavascriptInterface
-        fun writeClipboardText(text: String): String = try {
-            require(text.toByteArray(Charsets.UTF_8).size <= EQUIPMENT_FILTER_FILE_MAX_BYTES) {
-                "方案内容超过 1 MB，无法复制"
-            }
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("装备筛选方案", text))
-            jsonResult(true)
-        } catch (error: Exception) {
-            jsonResult(false, detail = error.message ?: "复制方案失败")
-        }
-
-        @JavascriptInterface
-        fun readClipboardText(): String = try {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = clipboard.primaryClip
-            val text = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).text?.toString().orEmpty() else ""
-            require(text.toByteArray(Charsets.UTF_8).size <= EQUIPMENT_FILTER_FILE_MAX_BYTES) {
-                "方案内容超过 1 MB，无法导入"
-            }
-            JSONObject().put("ok", true).put("text", text).toString()
-        } catch (error: Exception) {
-            jsonResult(false, detail = error.message ?: "读取剪贴板失败")
-        }
-
         @JavascriptInterface
         fun getDownloadLocation(): String = currentDownloadLocation()
 
@@ -648,6 +757,10 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         AutomationService.refreshBatteryOptimizationState(this)
+        if (::webView.isInitialized) {
+            webView.onResume()
+            webView.evaluateJavascript("window.dispatchEvent(new Event('lucima:resume'))", null)
+        }
         val pending = pendingUpdatePath ?: return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
             packageManager.canRequestPackageInstalls()
@@ -655,6 +768,20 @@ class MainActivity : AppCompatActivity() {
             pendingUpdatePath = null
             checkedUpdateApk(pending)?.let { apk ->
                 webView.post { openUpdateInstaller(apk) }
+            }
+        }
+    }
+
+    override fun onPause() {
+        if (::webView.isInitialized) webView.onPause()
+        super.onPause()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::webView.isInitialized && level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            webView.post {
+                webView.evaluateJavascript("window.dispatchEvent(new Event('lucima:memory-pressure'))", null)
             }
         }
     }
@@ -673,10 +800,17 @@ class MainActivity : AppCompatActivity() {
     /**
      * 引导用户把本 app 加入电池优化白名单（Doze 豁免）。关键：即便有前台服务，未加白名单的
      * app 在 Doze 下网络仍可能被切断、定时任务被延迟批处理 → 挂机时长任务照样停摆。
-     * 已在白名单则不弹。用户拒绝也不影响启动，只是息屏可靠性下降。
+     * 每次安装只主动请求一次；允许、拒绝或关闭后，重启和覆盖更新均不再请求。
      */
     private fun requestIgnoreBatteryOptimizations() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val preferences = getSharedPreferences(STARTUP_PREFERENCES, Context.MODE_PRIVATE)
+        if (preferences.getBoolean(BATTERY_OPTIMIZATION_PROMPTED, false)) return
+        // 打开系统界面前持久化，避免拒绝后重启或 Activity 重建时重复弹出。
+        preferences.edit().putBoolean(BATTERY_OPTIMIZATION_PROMPTED, true).commit()
+        // 旧版本没有提示记录，覆盖安装时也不补弹。
+        val installed = packageManager.getPackageInfo(packageName, 0)
+        if (installed.lastUpdateTime > installed.firstInstallTime) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         if (pm.isIgnoringBatteryOptimizations(packageName)) return
         try {
@@ -696,41 +830,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 轮询本地端口，服务器就绪后再加载页面（Python 启动需要一点时间）。 */
-    private fun loadWhenServerReady() {
-        thread(isDaemon = true) {
-            val url = "http://127.0.0.1:$port/"
-            repeat(60) {
-                if (probe(url)) {
-                    runOnUiThread { webView.loadUrl(url) }
+    private fun loadWhenServerReady(generation: Int) {
+        thread(isDaemon = true, name = "lucima-startup-probe") {
+            val deadline = android.os.SystemClock.elapsedRealtime() + 120_000
+            while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                if (isDestroyed || generation != startupGeneration) return@thread
+                val endpoint = AppBootstrap.endpoint
+                if (endpoint?.isReady() == true) {
+                    runOnUiThread {
+                        if (generation == startupGeneration && !isDestroyed) {
+                            showStartup("正在加载界面…")
+                            webView.loadUrl(endpoint.url)
+                            webView.postDelayed({
+                                if (generation == startupGeneration && !pageReady && !isDestroyed) {
+                                    showStartup("页面未能完成加载，请点击重试。若多次失败，请更新系统的 Android System WebView。", true)
+                                }
+                            }, 30_000)
+                        }
+                    }
                     return@thread
                 }
+                val error = AppBootstrap.failure
+                runOnUiThread {
+                    if (generation == startupGeneration && !isDestroyed) {
+                        showStartup(if (error == null) AppBootstrap.status else
+                            "启动失败，请点击重试。\n${error.lineSequence().take(3).joinToString("\n")}", error != null)
+                    }
+                }
+                if (error != null) return@thread
                 Thread.sleep(300)
             }
             runOnUiThread {
-                Toast.makeText(this, "本地服务未能就绪", Toast.LENGTH_LONG).show()
+                if (generation == startupGeneration && !isDestroyed) {
+                    showStartup("启动所需时间较长，请点击重试。\n${AppBootstrap.status}", true)
+                }
             }
-        }
-    }
-
-    private fun probe(url: String): Boolean {
-        return try {
-            val c = (java.net.URL(url + "api/config").openConnection() as java.net.HttpURLConnection)
-            c.connectTimeout = 500
-            c.readTimeout = 500
-            c.requestMethod = "GET"
-            val ok = c.responseCode in 200..499
-            c.disconnect()
-            ok
-        } catch (e: Exception) {
-            false
         }
     }
 
     override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+        if (webView.parent != null && webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {
+        startupGeneration++
         synchronized(pendingEncyclopediaImagesLock) {
             pendingEncyclopediaImages.values.forEach { it.file.delete() }
             pendingEncyclopediaImages.clear()
@@ -739,6 +882,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val STARTUP_PREFERENCES = "lucima_startup"
+        private const val BATTERY_OPTIMIZATION_PROMPTED = "battery_optimization_prompted"
         private const val FILE_PREFERENCES = "lucima_files"
         private const val DOWNLOAD_TREE_URI = "download_tree_uri"
         private const val DOWNLOAD_TREE_LABEL = "download_tree_label"

@@ -1,0 +1,270 @@
+{
+  "source": "2026-10-22 screenshot: H167 B imprint (ImprintLV 3), six actual equipped items from anonymized cached overview. A0317 LV15 is a representative matching the 101 Attack / 366 HP artifact growth; raw artifact identity was not read. Equipment property values were converted from display text.",
+  "state": {
+    "EquipmentContainer": {
+      "Datas": [
+        {
+          "_id": "helmet",
+          "StaticID": "E0425",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "catfestival",
+          "MainProp": {
+            "PropertyType": "HPValue",
+            "Value": 2565.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.22
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 6.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.07
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.11
+              }
+            ]
+          }
+        },
+        {
+          "_id": "armor",
+          "StaticID": "E0223",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "catfestival",
+          "MainProp": {
+            "PropertyType": "DefenceValue",
+            "Value": 300.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.15
+              },
+              {
+                "PropertyType": "DefenceRate",
+                "Value": 0.08
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.08
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "necklace",
+          "StaticID": "E0104",
+          "LV": 15,
+          "Set": "Critical",
+          "EquipRole": "catfestival",
+          "MainProp": {
+            "PropertyType": "CriticalDamageRate",
+            "Value": 0.65
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.2
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.11
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 7.0
+              },
+              {
+                "PropertyType": "AttackValue",
+                "Value": 33.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "weapon",
+          "StaticID": "E0221",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "catfestival",
+          "MainProp": {
+            "PropertyType": "AttackValue",
+            "Value": 500.0
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackRate",
+                "Value": 0.14
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.12
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.13
+              },
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 5.0
+              }
+            ]
+          }
+        },
+        {
+          "_id": "boots",
+          "StaticID": "E0226",
+          "LV": 15,
+          "Set": "Destruction",
+          "EquipRole": "catfestival",
+          "MainProp": {
+            "PropertyType": "AttackRate",
+            "Value": 0.6
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "AttackValue",
+                "Value": 197.0
+              },
+              {
+                "PropertyType": "ResistanceRate",
+                "Value": 0.08
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.07
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.06
+              }
+            ]
+          }
+        },
+        {
+          "_id": "ring",
+          "StaticID": "E2035",
+          "LV": 15,
+          "Set": "Critical",
+          "EquipRole": "catfestival",
+          "MainProp": {
+            "PropertyType": "AttackRate",
+            "Value": 0.6
+          },
+          "SubProps": {
+            "SourceValues": [
+              {
+                "PropertyType": "SpeedValue",
+                "Value": 8.0
+              },
+              {
+                "PropertyType": "CriticalRate",
+                "Value": 0.09
+              },
+              {
+                "PropertyType": "CriticalDamageRate",
+                "Value": 0.13
+              },
+              {
+                "PropertyType": "AttackValue",
+                "Value": 84.0
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "RoleDataContainer": {
+      "Roles": [
+        {
+          "_id": "catfestival",
+          "StaticID": "H167",
+          "LV": 60,
+          "Star": 6,
+          "AwakenLV": 6,
+          "ImprintLV": 3,
+          "IsSelfImprint": true
+        }
+      ]
+    },
+    "Artifacts": {
+      "Datas": [
+        {
+          "StaticID": "A0317",
+          "LV": 15,
+          "EquipRole": "catfestival"
+        }
+      ]
+    }
+  },
+  "oldPanel": {
+    "HP": 8473,
+    "Attack": 3753,
+    "Defence": 897,
+    "Speed": 153,
+    "CriticalRate": 101.4,
+    "CriticalDamageRate": 323,
+    "EffectHitRate": 0,
+    "ResistanceRate": 8,
+    "PinchRate": 3
+  },
+  "expectedPanel": {
+    "HP": 8473,
+    "Attack": 3753,
+    "Defence": 897,
+    "Speed": 153,
+    "CriticalRate": 98.6,
+    "CriticalDamageRate": 323,
+    "EffectHitRate": 0,
+    "ResistanceRate": 8,
+    "PinchRate": 3
+  },
+  "alternativeHelmet": {
+    "_id": "higher-crit-helmet",
+    "StaticID": "E0432",
+    "LV": 15,
+    "Set": "Destruction",
+    "EquipRole": "other-role",
+    "MainProp": {
+      "PropertyType": "HPValue",
+      "Value": 2565.0
+    },
+    "SubProps": {
+      "SourceValues": [
+        {
+          "PropertyType": "AttackRate",
+          "Value": 0.07
+        },
+        {
+          "PropertyType": "SpeedValue",
+          "Value": 8.0
+        },
+        {
+          "PropertyType": "CriticalRate",
+          "Value": 0.12
+        },
+        {
+          "PropertyType": "CriticalDamageRate",
+          "Value": 0.18
+        }
+      ]
+    }
+  }
+}

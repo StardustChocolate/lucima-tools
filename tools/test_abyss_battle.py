@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 from backend import abyss_battle as ai
 from backend.abyss_state import activity_open, fantasy_config, initialize_units, sync_units, status_properties
 from backend.game_client import GameClient, GameError
-from backend.tasks import abyss_progress, abyss_scenes, abyss_scene_effects, normalize_abyss_config
+from backend.tasks import abyss_progress, abyss_scenes, abyss_scene_effects, abyss_scene_enemies, normalize_abyss_config
 from backend.abyss_properties import (artifact_properties, role_properties, formation_properties,
                                       final_literal_values)
 
@@ -177,10 +177,75 @@ class ScenePickerContracts(unittest.TestCase):
         client.call.assert_not_called()
 
 
+class EnemyPreviewContracts(unittest.TestCase):
+    def state(self, activity="Fantasy_H189"):
+        state = ScenePickerContracts().snapshot(["MysteriousRealm_7"])
+        state["ActivityDBSettingContainer"]["SettingList"][-1]["ActivityID"] = activity
+        return state
+
+    def test_both_waves_follow_the_exact_active_fantasy_row_and_preserve_positions(self):
+        for activity in ("Fantasy_H189", "Fantasy_H610", "Fantasy_H612", "Fantasy_H144"):
+            state = self.state(activity)
+            before = deepcopy(state)
+            actual = abyss_scene_enemies(state, "MysteriousRealm_7")
+            expected = fantasy_config("MysteriousRealm_7", state)
+            for wave, source in zip(("upper", "lower"), expected["Waves"]):
+                self.assertEqual([enemy["staticId"] for enemy in actual[wave]], [row["M"] for row in source["Monsters"]])
+                self.assertEqual([enemy["position"] for enemy in actual[wave]], [row.get("Pos", 1) for row in source["Monsters"]])
+            self.assertEqual(state, before)
+        self.assertEqual(len(actual["upper"]), 3)
+        self.assertEqual([enemy["isBoss"] for enemy in actual["upper"]], [True, False, False])
+
+    def test_variant_attributes_and_all_real_skill_ids_include_hidden_and_common_skills(self):
+        from backend.abyss_state import metadata
+        enemy = abyss_scene_enemies(self.state("Fantasy_H610"), "MysteriousRealm_7")["upper"][0]
+        definition = metadata()["tables"]["Role"]["FH038"]
+        self.assertEqual(enemy["element"], definition["Element"])
+        self.assertEqual(enemy["job"], definition["Job"])
+        self.assertEqual([skill["id"] for skill in enemy["skills"]], [value.split(":")[0] for value in definition["SkillIDs"].split("~")])
+        self.assertTrue(next(skill for skill in enemy["skills"] if skill["id"] == "H038S4")["hidden"])
+        self.assertEqual([skill["id"] for skill in enemy["skills"]][-2:], ["F_Special", "F_Attack"])
+
+    def test_skill_localization_keeps_visible_values_status_names_and_line_breaks(self):
+        from backend import tasks
+        text = tasks._abyss_skill_text('以 [35%:1_1:Rate] 机率造成[沉睡:Sleep:StatusFun]<br>[:AWAKEN]攻击提升 &amp; 测试')
+        self.assertEqual(text, '以 35% 机率造成沉睡\n攻击提升 & 测试')
+        skill = abyss_scene_enemies(self.state(), "MysteriousRealm_1")["upper"][0]["skills"][3]
+        self.assertEqual(skill["name"], "神秘气息")
+        self.assertIn("境域狂暴", skill["description"])
+        self.assertNotIn("StatusFun", skill["description"])
+        self.assertIn("\n", skill["description"])
+
+    def test_missing_variant_text_does_not_copy_the_different_base_skill_mechanics(self):
+        from backend import tasks
+        enemy = abyss_scene_enemies(self.state(), "MysteriousRealm_7")["upper"][0]
+        skill = enemy["skills"][0]
+        self.assertEqual(skill["id"], "EP1EH027S1")
+        self.assertTrue(skill["descriptionMissing"])
+        self.assertEqual(skill["description"], "该技能暂缺独立说明。")
+        with patch.object(tasks, "_LOCALIZATION", {}):
+            enemies = abyss_scene_enemies(self.state(), "MysteriousRealm_1")
+        self.assertTrue(all(skill["descriptionMissing"] for enemy in enemies["upper"] for skill in enemy["skills"]))
+
+    def test_options_resolve_hero_portraits_and_summon_names_without_network(self):
+        from backend import appcore
+        client = SimpleNamespace(account_state=self.state("Fantasy_H144"), call=Mock())
+        client.account_state["SceneDataContainer"]["Scenes"].append({"StaticID": "MysteriousRealm_1", "Stars": [1, 0, 0]})
+        acc = SimpleNamespace(client=client, params={}, state_revision=1, state_synced_at=0, state_sync_error=None)
+        with patch.object(appcore, "_require", return_value=acc):
+            scenes = appcore.abyss_options("offline")["scenes"]
+        first = next(scene for scene in scenes if scene["id"] == "MysteriousRealm_1")["enemies"]
+        self.assertEqual(first["upper"][0]["name"], "蜜丽恩")
+        self.assertEqual(first["upper"][0]["avatar"], "/assets/avatars/H032.png")
+        summons = next(scene for scene in scenes if scene["id"] == "MysteriousRealm_7")["enemies"]["upper"][1:]
+        self.assertEqual([enemy["name"] for enemy in summons], ["金光星源", "金光星源"])
+        self.assertTrue(all(enemy["skills"] for enemy in summons))
+        client.call.assert_not_called()
+
+
 class StateContracts(unittest.TestCase):
     def test_android_asset_root_reads_the_bundled_battle_table(self):
         from backend.abyss_state import metadata
-        from backend import runtime_data
         original = {**metadata(), "version": "android-test-root"}
         self.addCleanup(metadata.cache_clear)
         with tempfile.TemporaryDirectory() as temporary:
@@ -188,8 +253,7 @@ class StateContracts(unittest.TestCase):
             path.parent.mkdir()
             path.write_text(json.dumps(original), encoding="utf-8")
             metadata.cache_clear()
-            with patch.dict("os.environ", {"ARK_ASSET_ROOT": temporary}), patch.object(
-                    runtime_data, 'registry', runtime_data.Registry(Path(temporary) / 'game-data')):
+            with patch.dict("os.environ", {"ARK_ASSET_ROOT": temporary}):
                 self.assertEqual(metadata()["version"], "android-test-root")
 
     def test_trusted_empty_collections_and_scalar_defaults_replace_old_state(self):
@@ -629,6 +693,33 @@ class SocketLifecycle(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("ssl", connect.call_args.kwargs)
         return result, socket.sent, client.applied
 
+    async def test_real_server_backpack_rejection_is_not_treated_as_lost_settlement(self):
+        result, sent, rewards = await self.run_socket([
+            {'NetBattleGameOverCmd': {}, 'Index': '0', 'OID': '0_S1'},
+            {'ErrorID': 'Role backpack is full', 'Index': '0', 'OID': '0_S1'},
+            {'BattleEndData': {'Result': 'Win'}},
+        ])
+        self.assertIsInstance(result, GameError)
+        self.assertNotIsInstance(result, ai.BattleUnconfirmed)
+        self.assertIn('角色背包已满', str(result))
+        self.assertEqual(rewards, [])
+        self.assertIn({'NetBattleGameOverCmd': {}, 'Index': '0', 'OID': '0_S1'}, sent)
+
+    async def test_unknown_server_rejection_is_reported_without_fabricating_win(self):
+        result, _, _ = await self.run_socket([{'ErrorID': 'Scene not available'}])
+        self.assertIn('Scene not available', str(result))
+        self.assertNotIsInstance(result, ai.BattleUnconfirmed)
+
+    async def test_settlement_line_roles_are_reported_as_fresh_friendship_data(self):
+        result, _, _ = await self.run_socket([
+            {'BattleEndData': {'Result': 'Win'}, 'SceneRewardData': {
+                'SceneData': {'StaticID': 'S', 'Stars': [1, 1, 1, 1]},
+                'LineRoleDatas': [{'Info': {'StaticID': 'H002', 'IntimacyLV': 2}}]}},
+        ])
+        self.assertTrue(result['intimacySynced'])
+        result, _, _ = await self.run_socket([{'BattleEndData': {'Result': 'Win'}}])
+        self.assertFalse(result['intimacySynced'])
+
     async def test_progress_uses_server_wave_index_and_does_not_repeat_on_heartbeats(self):
         snapshots = []
         result, _, _ = await self.run_socket([
@@ -667,6 +758,21 @@ class SocketLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("[abyss] start scene=S data_version=" in line for line in trace.output))
         self.assertTrue(any("[abyss] end scene=S result=Win" in line for line in trace.output))
         self.assertFalse(any("account" in line or "ServerID" in line for line in trace.output))
+
+    async def test_separate_reward_frame_before_or_after_result_is_applied_once(self):
+        reward={'SceneData':{'StaticID':'S','Stars':[1,1,1,1],'PassCount':1}}
+        for messages in ([{'BattleEndData':{'Result':'Win'}},{'HB':0},{'SceneRewardData':reward}],
+                         [{'SceneRewardData':reward},{'BattleEndData':{'Result':'Win'}}]):
+            with self.subTest(messages=messages):
+                result,_,rewards=await self.run_socket(deepcopy(messages))
+                self.assertTrue(result['ok']);self.assertTrue(result['settlementConfirmed'])
+                self.assertEqual(rewards,[reward])
+
+    async def test_reward_is_kept_even_if_final_result_frame_is_lost(self):
+        reward={'SceneData':{'StaticID':'S','Stars':[1,1,1,1]}}
+        result,_,rewards=await self.run_socket([{'SceneRewardData':reward}])
+        self.assertIsInstance(result,ai.BattleUnconfirmed)
+        self.assertEqual(rewards,[reward])
 
     async def test_heartbeat_does_not_extend_progress_deadline(self):
         ticks = iter(range(0, 1000, 10))

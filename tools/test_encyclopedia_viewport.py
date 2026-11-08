@@ -21,7 +21,9 @@ class EncyclopediaViewportTests(unittest.TestCase):
         try:
             # Playwright normally hides scrollbars, which masks this defect.
             cls.browser = cls.playwright.chromium.launch(
-                headless=True, ignore_default_args=["--hide-scrollbars"])
+                headless=True, ignore_default_args=["--hide-scrollbars"], **(
+                    {'executable_path': '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'}
+                    if Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome').is_file() else {}))
         except Exception:
             cls.playwright.stop()
             raise
@@ -64,6 +66,7 @@ class EncyclopediaViewportTests(unittest.TestCase):
         if overlay:
             # Overlay scrollbars consume no layout space, as on Android.
             self.page.add_style_tag(content=".encyclopedia-archive-viewport {scrollbar-width:none}")
+        self.page.add_script_tag(path=str(ROOT / 'frontend/action-wait.js'))
         self.page.add_script_tag(content="""
             const ENCYCLOPEDIA_STATE = {archiveView: {zoomFactor: 1, scale: 1, fitScale: 1}};
             const $ = id => document.getElementById(id);

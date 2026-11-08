@@ -2,10 +2,14 @@
 # 账号注册表 + base64 保存的密码 + 各项设置
 settings.json
 settings.local.json
+# 深渊临时借装归还记录（账号实物编号，不进入源码发布）
+/abyss-recovery/
 # 浏览器登录态（Playwright profile，含 cookie/JWT）
 # ⚠️ 单数是旧的单账号目录，复数是多账号版——两条都要，早先只写了单数那条
 .browser_profile/
 .browser_profiles/
+# 运行期数据（装备归还记录等本地数据库）
+/records/
 # 运行日志（含账号名、请求路径、traceback）
 logs/
 encyclopedia-cache/
@@ -65,6 +69,7 @@ android/keystore.properties
 *.keystore
 # 构建时从项目根复制进来的共享源（单一真源在 backend/ frontend/ assets/）
 android/app/src/main/python/backend/
+android/app/src/main/python/equipment/
 android/app/src/main/assets/web/
 android/.idea/
 *.iml

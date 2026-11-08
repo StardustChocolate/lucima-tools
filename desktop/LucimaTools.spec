@@ -2,9 +2,9 @@
 """PyInstaller 打包配置：LucimaTools 桌面版。
 
 用法（在项目根目录）：
-    pyinstaller desktop/LucimaTools.spec --noconfirm --distpath build/windows/dist --workpath build/windows/work
+    pyinstaller desktop/LucimaTools.spec --noconfirm
 
-产物：build/windows/dist/LucimaTools/LucimaTools.exe （onedir，双击运行）
+产物：dist/LucimaTools.debug/LucimaTools.debug.exe （onedir，双击运行）
 
 说明：
 - 前端 frontend/、运行资源 assets/、backend/*.json 数据表作为数据一并打包。
@@ -16,14 +16,13 @@
 import glob
 import json
 import os
-from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = os.path.abspath(os.getcwd())
 
 # 更新服务地址只允许在本地构建环境注入，不进入源码仓库。
 update_url = os.environ.get("LUCIMA_UPDATE_URL", "").strip()
-update_endpoint = os.path.join(ROOT, "build", "windows", "update-endpoint.json")
+update_endpoint = os.path.join(ROOT, "build", "update-endpoint.json")
 if update_url:
     os.makedirs(os.path.dirname(update_endpoint), exist_ok=True)
     with open(update_endpoint, "w", encoding="utf-8") as stream:
@@ -34,10 +33,8 @@ elif os.path.exists(update_endpoint):
 # 数据文件：(源路径, 打包内相对目录)
 datas = [
     (os.path.join(ROOT, "frontend"), "frontend"),
+    (os.path.join(ROOT, "assets"), "assets"),
 ]
-for asset in Path(os.path.join(ROOT, "assets")).iterdir():
-    if asset.name != "encyclopedia" and asset.suffix not in {".py", ".pyc"} and asset.name != "__pycache__":
-        datas.append((str(asset), "assets/" + asset.name if asset.is_dir() else "assets"))
 if update_url:
     datas.append((update_endpoint, "."))
 for name in ("encyclopedia-endpoint.json", "redeem-codes-endpoint.json"):
@@ -47,8 +44,10 @@ for name in ("encyclopedia-endpoint.json", "redeem-codes-endpoint.json"):
 # backend 下全部 json 数据表（新增数据文件无需再改本 spec）
 datas += [(p, "backend") for p in glob.glob(os.path.join(ROOT, "backend", "*.json"))]
 assert any(p.endswith("item_names.json") for p, _ in datas), "backend/item_names.json 缺失"
+datas += [(p, "equipment") for p in glob.glob(os.path.join(ROOT, "equipment", "*.json"))]
+datas.append((os.path.join(ROOT, "equipment", "web"), "equipment/web"))
 binaries = []
-hiddenimports = collect_submodules("backend")
+hiddenimports = collect_submodules("backend") + collect_submodules("equipment")
 
 # pywebview 运行时数据
 d, b, h = collect_all("webview")
@@ -94,7 +93,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="LucimaTools",
+    name="LucimaTools.debug",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -115,5 +114,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="LucimaTools",
+    name="LucimaTools.debug",
 )

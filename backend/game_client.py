@@ -72,18 +72,45 @@ _LOGIN_ROUTES = frozenset({
 })
 
 
-def _log_game_response(route: str, status: int, body: Any, *, is_json: bool = True) -> None:
-    """Keep redacted game responses, including login snapshots and parse failures."""
-    log.info("[game<-] %s HTTP %s %s%s", route, status,
-             "" if is_json else "[non-JSON] ", format_payload(body))
+_MAX_RESPONSE_LOG = 2000  # 非 trace route 的响应日志字符上限，防止邮件等大报文刷爆日志
+
+
+def _truncate_payload(value: Any, limit: int) -> str:
+    text = format_payload(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"…（已截断，原文 {len(text)} 字符）"
+
+
+def _log_game_response(route: str, status: int, body: Any, *, login: bool) -> None:
+    """Log responses: trace routes keep distilled audit fields, others are capped.
+
+    QueryNewestMails 之类的大报文每分钟都会返回，全量落盘会在十几分钟内把日志
+    刷满轮转，把真正要看的报错 traceback 挤掉。这里只给 trace 路由保留裁决字段，
+    其余路由截断到 _MAX_RESPONSE_LOG，让日志能留存更长时间。
+    """
+    if login:
+        log.info("[game<-] %s HTTP %s response body suppressed (login)", route, status)
+        return
+    if route in _TRACE_ROUTES:
+        log.info("[game<-] %s HTTP %s %s", route, status, _distill(body))
+    else:
+        log.info("[game<-] %s HTTP %s %s", route, status,
+                 _truncate_payload(body, _MAX_RESPONSE_LOG))
 
 
 class GameError(Exception):
     """游戏后端返回的业务错误。"""
 
 
-class TaskDeferred(GameError):
-    """No request was sent: an account prerequisite is still pending."""
+class GameUnavailable(GameError):
+    """Edge/gateway failure before the game backend answered.
+
+    The game router sits behind a proxy which can answer 502/503/504 with a
+    plain-text upstream error while the backend is restarting. That response
+    means the request never reached the game logic, so replaying it cannot
+    duplicate an action and a background task may wait instead of stopping.
+    """
 
 
 class GameMessage(Exception):
@@ -102,8 +129,29 @@ class DuplicateLoginError(GameMessage):
     """The game rejected this session because the account logged in elsewhere."""
 
 
-class MaintenanceError(GameError):
-    """The official server is closed or this session is awaiting recovery."""
+# Only non-JSON bodies are replayed. A parsed game response, even with an error
+# status, may already have committed on the backend.
+_GATEWAY_STATUSES = frozenset({502, 503, 504})
+_GATEWAY_RETRIES = 2
+
+
+def is_transient_failure(error: BaseException) -> bool:
+    """Transport and edge failures that can succeed on a later attempt."""
+    return isinstance(error, (GameUnavailable, httpx.TransportError, TimeoutError, ConnectionError))
+
+
+# 只读类 route 的 method 前缀：连接中断时只对这类请求安全地重放一次，因为重复
+# 查询不会改变服务端状态。刻意不用 "Get"/"Check"——GetReward 是领取，
+# GuildMemberCheckIn / PVPCheckTicket 会消耗次数，重放等于重复执行。
+_READONLY_METHOD_PREFIXES = ("Query", "List", "Search", "Fetch")
+
+
+def is_readonly_route(route: str) -> bool:
+    """Whether a route only reads state and can be replayed after a dropped connection."""
+    if not route:
+        return False
+    method = str(route).rsplit(".", 1)[-1]
+    return any(method.startswith(prefix) for prefix in _READONLY_METHOD_PREFIXES)
 
 
 def is_duplicate_login_message(value: Any) -> bool:
@@ -167,23 +215,17 @@ class GameClient:
             self._login_in_progress = False
 
     def connection_status(self) -> dict[str, Any]:
-        from .maintenance import service as maintenance_service
         self._ensure_connection_state()
         return {
             "connected": self._connection_state == "connected",
             "reason": self._connection_reason,
             "changedAt": self._connection_changed_at,
-            "maintenance": maintenance_service.active,
-            "maintenanceEpoch": maintenance_service.epoch,
         }
 
     def is_connected(self) -> bool:
         return bool(self.connection_status()["connected"])
 
     def _mark_disconnected(self, reason: str = "connection_error") -> None:
-        from .maintenance import service as maintenance_service
-        if maintenance_service.active:
-            reason = "maintenance"
         self._ensure_connection_state()
         changed = self._connection_state != "disconnected" or self._connection_reason != reason
         if changed:
@@ -195,22 +237,11 @@ class GameClient:
             callback()
 
     def _mark_connected(self) -> None:
-        from .maintenance import service as maintenance_service
-        with maintenance_service.lock:
-            maintenance_service.require_open()
-            self._ensure_connection_state()
-            if self._connection_state != "connected" or self._connection_reason is not None:
-                self._connection_changed_at = int(time.time() * 1000)
-            self._connection_state = "connected"
-            self._connection_reason = None
-
-    def require_connection(self):
-        from .maintenance import service as maintenance_service
-        maintenance_service.require_open()
-        if not self.is_connected():
-            if self.connection_status().get("reason") == "maintenance":
-                raise MaintenanceError("维护后等待重新登录，任务保持停止")
-            raise DuplicateLoginError("Duplicate Login")
+        self._ensure_connection_state()
+        if self._connection_state != "connected" or self._connection_reason is not None:
+            self._connection_changed_at = int(time.time() * 1000)
+        self._connection_state = "connected"
+        self._connection_reason = None
 
     def _sync_login_auth(self, force: bool = False) -> None:
         """在登录握手前同步安全存储中的 V2 Token，不向调用方暴露凭证。"""
@@ -246,12 +277,19 @@ class GameClient:
         """读取共享的系统代理缓存，地址变化时才重建连接池。"""
         cur = config.get_proxy()
         if cur != self._proxy:
-            try:
-                self._client.close()
-            except Exception:
-                pass
-            self._proxy = cur
-            self._client = self._build_client(cur)
+            self._rebuild_client(cur)
+
+    def _rebuild_client(self, proxy: str | None = None) -> None:
+        """Drop the current connection pool so the next request opens fresh."""
+        if proxy is None:
+            proxy = self._proxy
+        previous = self._client
+        self._proxy = proxy
+        self._client = self._build_client(proxy)
+        try:
+            previous.close()
+        except Exception:
+            pass
 
     # ---- 底层调用 ----
     def _ensure_request_history(self) -> None:
@@ -383,7 +421,7 @@ class GameClient:
         if not hasattr(self, "_call_serial_lock"):
             self._call_serial_lock = threading.RLock()
 
-    def _request_http(self, method: str, url: str, *, game_route=None, **kwargs):
+    def _request_http(self, method: str, url: str, *, _game_route: str | None = None, **kwargs):
         """Send one game request while serializing transport calls.
 
         Delays intentionally do not live here: login, developer-console calls,
@@ -392,38 +430,49 @@ class GameClient:
         """
         self._ensure_request_transport()
         with self._request_serial_lock:
-            if game_route != "GameServerDBSettingHandler.QueryBulletinInfoResult":
-                from .maintenance import service as maintenance_service
-                maintenance_service.require_open()
-            guard = getattr(self, "before_game_request", None)
-            if (callable(guard) and game_route and game_route not in _LOGIN_ROUTES
-                    and game_route != "GameServerDBSettingHandler.QueryBulletinInfoResult"):
-                guard(game_route)
+            if _game_route == "PVPHandler.ChoosePVPWeekReward":
+                # Check after waiting for transport, and again on the automatic
+                # proxy-to-direct retry. Neither may escape the reward window.
+                from .arena_reward import in_window
+                if not in_window(int(time.time() * 1000)):
+                    raise GameError("竞技场周奖励仅北京时间每周一 05:30–07:40 内领取，窗口外不发送领取请求")
             return self._client.request(method, url, **kwargs)
 
     def call(self, route: str, data: dict | None = None) -> dict:
         """调用一个 route，返回解压后的 JSON dict。"""
+        owner = getattr(self, '_intimacy_asset_owner', None)
+        label = '亲密度任务'
+        reserved = set(getattr(self, '_intimacy_reserved_equipment', set()))
+        if owner is None:
+            owner = getattr(self, '_automation_asset_owner', None)
+            label = getattr(self, '_automation_asset_label', None) or '自动借装任务'
+            reserved.update(getattr(self, '_automation_reserved_equipment', set()))
+        if owner is not None and owner != threading.get_ident():
+            if route == 'RoomHandler.CreateRoomByScene':
+                raise GameError(f'当前账号正在执行{label}，请先中止再开启另一场实时战斗；商店及领取任务可继续执行')
+            if route in {'EquipmentHandler.EquipsToRole', 'EquipmentHandler.EquipToRole',
+                         'EquipmentHandler.TakeOffEquip', 'ArtifactHandler.Equip', 'ArtifactHandler.UnEquip'}:
+                raise GameError(f'{label}正在借用装备与羁绊，请中止并归还后再调整穿戴；其他任务可正常执行')
+            if route == 'EquipmentHandler.SellEquips' and set((data or {}).get('IDs') or []) & reserved:
+                raise GameError(f'本次贩卖包含{label}借用的装备，已保留')
         self._ensure_request_transport()
         # Keep parsing and inventory settlement in the same order as requests.
         # The short inventory lock is separate, so snapshots never wait on HTTP.
         with self._call_serial_lock:
-            guard = getattr(self, "before_game_request", None)
-            if callable(guard) and route not in _LOGIN_ROUTES and route != "GameServerDBSettingHandler.QueryBulletinInfoResult":
-                guard(route)
             return self._call_serial(route, data)
 
-    def _call_serial(self, route: str, data: dict | None = None) -> dict:
-        from .maintenance import service as maintenance_service
+    def _call_serial(self, route: str, data: dict | None = None, *, _gateway_retry: int = 0) -> dict:
         self._ensure_connection_state()
         self._sync_proxy()
         payload = {"data": data or {}, "route": route}
         body = json.dumps(payload).encode("utf-8")
+        request_options = {"content": body}
+        if route == "PVPHandler.ChoosePVPWeekReward":
+            request_options["_game_route"] = route
         login = route in _LOGIN_ROUTES
         bootstrap_route = "GameServerDBSettingHandler.QueryBulletinInfoResult"
-        if route != bootstrap_route:
-            maintenance_service.require_open()
         if not login and route != bootstrap_route and not self._login_in_progress and not self.is_connected():
-            self.require_connection()
+            raise DuplicateLoginError("Duplicate Login")
         # route 下拉框仅记录 route 名称，开发者模式下登录 route 也可用于排查流程；
         # 完整请求历史仍由下面的 record_request 保持登录请求排除。
         history_id = None
@@ -440,22 +489,49 @@ class GameClient:
             log.info("[game->] %s request body suppressed (login)", route)
         else:
             log.info("[game->] %s %s", route, format_payload(payload))
-        bulletin_token = maintenance_service.observation_token()
         try:
-            resp = self._request_http("PUT", config.GAME_ROUTER, game_route=route, content=body)
+            resp = self._request_http("PUT", config.GAME_ROUTER, **request_options)
+        except httpx.ConnectTimeout as error:
+            # TCP/TLS connection establishment timed out before an HTTP request
+            # was sent. Rebuild the pool and retry once, including direct mode.
+            # Read/write timeouts may have committed and are never replayed.
+            self._rebuild_client()
+            try:
+                resp = self._request_http("PUT", config.GAME_ROUTER, **request_options)
+            except Exception as retry_error:
+                self.update_request_history(history_id, error=str(retry_error))
+                raise
         except (httpx.ProxyError, httpx.ConnectError) as e:
             # 代理连不上（用户关了代理软件，系统设置/短期缓存尚未更新）。
             # 游戏后端登录后可直连，故自动改直连重试一次——同浏览器的容错表现。
             if not self._proxy:
                 self.update_request_history(history_id, error=str(e))
                 raise  # 本来就是直连还失败，说明是真的网络问题
-            self._proxy = ""
-            self._client = self._build_client("")
+            self._rebuild_client("")
             try:
-                resp = self._request_http("PUT", config.GAME_ROUTER, game_route=route, content=body)
+                resp = self._request_http("PUT", config.GAME_ROUTER, **request_options)
             except Exception as retry_error:
                 self.update_request_history(history_id, error=str(retry_error))
                 raise
+        except (httpx.RemoteProtocolError, httpx.ReadError) as error:
+            # 服务器/代理在给出响应前就断开了连接（"Server disconnected without
+            # sending a response"）。请求可能已被服务端处理，绝不能盲目重放；
+            # 只对只读查询安全地重试一次，其余按瞬时网络故障交给任务层退避。
+            self._rebuild_client()
+            log.warning("[game] %s 连接被中断（%s）：%s",
+                        route, type(error).__name__, error)
+            if not is_readonly_route(route):
+                self.update_request_history(history_id, error=str(error))
+                raise GameUnavailable(
+                    "与游戏服务器的连接被中断（未收到响应），为避免重复执行已保留本次操作，稍后自动重试")
+            try:
+                resp = self._request_http("PUT", config.GAME_ROUTER, **request_options)
+            except Exception as retry_error:
+                self.update_request_history(history_id, error=str(retry_error))
+                log.warning("[game] %s 连接中断后重试仍失败（%s）：%s",
+                            route, type(retry_error).__name__, retry_error)
+                raise GameUnavailable(
+                    "与游戏服务器的连接被中断，重试后仍未收到响应，稍后自动重试")
         except Exception as error:
             self.update_request_history(history_id, error=str(error))
             raise
@@ -483,14 +559,30 @@ class GameClient:
                 is_json=False,
                 gzip=was_gzip,
             )
-            _log_game_response(route, resp.status_code, text, is_json=False)
-            if maintenance_service.observe_response(text):
-                self._mark_disconnected("maintenance")
-                raise MaintenanceError("游戏维护中，任务已停止，等待维护结束后自动重登")
+            if login:
+                log.info("[game<-] %s HTTP %s response body suppressed (login)",
+                         route, resp.status_code)
+            else:
+                log.info("[game<-] %s HTTP %s %s", route, resp.status_code,
+                         format_payload(msg))
             if duplicate_login or is_duplicate_login_message(msg):
                 self._mark_disconnected("duplicate_login")
                 log.warning("[game] %s returned Duplicate Login; connection marked disconnected", route)
                 raise DuplicateLoginError("Duplicate Login")
+            if resp.status_code in _GATEWAY_STATUSES:
+                # The proxy answered instead of the game router ("upstream
+                # connect error ..."), so the request never reached the game
+                # backend. Replaying it is safe; a short recovery window is
+                # normal during server restarts or brief edge hiccups.
+                if _gateway_retry < _GATEWAY_RETRIES:
+                    delay = 0.4 * (2 ** _gateway_retry)
+                    log.warning("[game] %s HTTP %s from gateway, retry %s/%s in %.1fs: %s",
+                                route, resp.status_code, _gateway_retry + 1, _GATEWAY_RETRIES,
+                                delay, msg[:120])
+                    time.sleep(delay)
+                    return self._call_serial(route, data, _gateway_retry=_gateway_retry + 1)
+                raise GameUnavailable(
+                    f"游戏服务器暂时不可用（HTTP {resp.status_code}），已自动重试，请稍后再试")
             resp.raise_for_status()
             raise GameMessage(msg)
         self.update_request_history(
@@ -501,10 +593,7 @@ class GameClient:
             is_json=True,
             gzip=was_gzip,
         )
-        _log_game_response(route, resp.status_code, body)
-        if maintenance_service.observe_response(body):
-            self._mark_disconnected("maintenance")
-            raise MaintenanceError("游戏维护中，任务已停止，等待维护结束后自动重登")
+        _log_game_response(route, resp.status_code, body, login=login)
         if duplicate_login or is_duplicate_login_message(body):
             self._mark_disconnected("duplicate_login")
             log.warning("[game] %s returned Duplicate Login; connection marked disconnected", route)
@@ -514,10 +603,21 @@ class GameClient:
         # NowItem（该物品操作后的绝对新余额）。把它写回缓存 ItemContainer，状态栏就能
         # 零额外请求地反映工具自己领取/购买/花费的结果（游戏没有单独查背包的接口）。
         if isinstance(body, dict):
-            if route == bootstrap_route:
-                from .resource_update import service as resource_service
-                resource_service.observe(body, token=bulletin_token)
-            self._apply_now_items(body)
+            # Observe before NowItem overwrites balances, so older responses
+            # which return only final balances can still yield actual costs.
+            shop_refresh=route=='StoreHandler.ResetRandomStore' and (data or {}).get('StoreID')=='SecretShop'
+            shop_purchase=route=='StoreHandler.BuyCommodity' and ((data or {}).get('Record') or {}).get('Store') in ('SecretShop','RainbowStarSource')
+            if shop_refresh or shop_purchase:
+                try:
+                    from .recruitment import observe_shop,observe_shop_purchase
+                    (observe_shop if shop_refresh else observe_shop_purchase)(self,data or {},body)
+                    self._recruitment_record_error=None
+                except Exception as error:
+                    # A local ledger failure never retries a confirmed paid action.
+                    self._recruitment_record_error=str(error)
+                    log.exception('商店操作成功，但出货记录保存失败')
+            self._apply_now_items(body, cost_fallback_items=('109',) if shop_purchase and
+                                  ((data or {}).get('Record') or {}).get('Store')=='RainbowStarSource' else ())
             self._apply_commodity_record(body)
             self._apply_store_records(body)
             self._apply_quest_updates(body)
@@ -525,6 +625,13 @@ class GameClient:
         return body
 
     def apply_scene_reward(self, body: dict):
+        # Shops may settle an HTTP request while a farming websocket finishes.
+        # Merge both channels in transport order instead of racing two writers.
+        self._ensure_request_transport()
+        with self._call_serial_lock:
+            return self._apply_scene_reward_serial(body)
+
+    def _apply_scene_reward_serial(self, body: dict):
         """Merge confirmed WebSocket settlement using the HTTP inventory rules.
 
         Returned records are partial updates, so preserve unrelated login fields
@@ -534,6 +641,8 @@ class GameClient:
         if not isinstance(state, dict) or not isinstance(body, dict):
             return
         self._apply_now_items(body)
+        from .equipment_sale import merge_equipment_drop
+        merge_equipment_drop(self, body)
         self._apply_quest_updates(body)
         self._apply_account_status_updates(body)
         for source, target in (("AccountInfo", "Info"), ("AccountSaveData", "AccountSaveData")):
@@ -634,6 +743,13 @@ class GameClient:
         direct = body.get("Quests")
         if isinstance(direct, list):
             updates.extend(direct)
+        # GuildMemberCheckInResult uses this separate personal-quest field,
+        # not Quests. Accept both the container and list wire representations.
+        guild_personal = body.get("PlayerGuildQuestList")
+        if isinstance(guild_personal, dict):
+            guild_personal = guild_personal.get("Quests")
+        if isinstance(guild_personal, list):
+            updates.extend(guild_personal)
         for result in body.get("Results") or []:
             if isinstance(result, dict) and isinstance(result.get("Quests"), list):
                 updates.extend(result["Quests"])
@@ -747,6 +863,7 @@ class GameClient:
         self._ensure_inventory_state()
         with self._inventory_lock:
             self.account_state = state
+            self._state_received_at_ms = int(time.time()*1000)
             self._activity_pending = None
             self._reset_inventory_locked(state)
 
@@ -784,7 +901,7 @@ class GameClient:
                 "removed": [],
             }
 
-    def _apply_now_items(self, body: dict):
+    def _apply_now_items(self, body: dict, *, cost_fallback_items=()):
         """Merge confirmed balances only, once per response, including batch rewards."""
         if not isinstance(body, dict) or not isinstance(getattr(self, "account_state", None), dict):
             return
@@ -806,6 +923,18 @@ class GameClient:
                     continue
                 for entry in entries:
                     item = self._inventory_item(entry.get("NowItem")) if isinstance(entry, dict) else None
+                    if item is None and cost_fallback_items and isinstance(entry, dict) and entries is settlement.get('CostItems'):
+                        cost = entry.get('Item') or {}
+                        sid = str(cost.get('StaticID') or '')
+                        before = next((i for i in reversed(updates) if i['StaticID']==sid), self._inventory_items.get(sid, {})).get('Count')
+                        spent = cost.get('Count')
+                        if (sid in cost_fallback_items and isinstance(before, (int, float))
+                                and isinstance(spent, (int, float)) and not isinstance(spent, bool)
+                                and spent>=0 and before>=spent):
+                            # Some star-source receipts return the confirmed cost
+                            # without NowItem. Debit that cost once in transport
+                            # order; an absolute NowItem always takes precedence.
+                            item = self._inventory_item({'StaticID':sid, 'Count':before-spent})
                     if item is not None:
                         updates.append(item)
         if not updates:
@@ -865,9 +994,6 @@ class GameClient:
         records.append(rec)   # 首次购买的新档：快照里还没有，整条塞进去
 
     def _auth_data(self, extra: dict | None = None) -> dict:
-        guard = getattr(self, "before_game_request", None)
-        if callable(guard):
-            guard()
         if not self.aid or not self.session_id:
             raise GameError("未登录：缺少 AID/SessionID")
         d = {"AID": self.aid, "SessionID": self.session_id}
@@ -878,6 +1004,9 @@ class GameClient:
     # ---- 登录握手 ----
     def bootstrap(self) -> dict:
         """完整登录握手 -> 拿到 AID + SessionID + 账号状态。返回账号状态。"""
+        owner = getattr(self,'_automation_asset_owner',None) or getattr(self,'_intimacy_asset_owner',None)
+        if owner is not None and owner != threading.get_ident():
+            raise GameError('当前借装任务正在战斗或归还装备，请结束后再刷新账号；商店和领取任务可继续执行')
         self._ensure_request_transport()
         with self._call_serial_lock:
             return self._bootstrap_serial()
@@ -889,8 +1018,6 @@ class GameClient:
 
         # 1. 公告/服务器配置(可选，确认连通)
         self.call("GameServerDBSettingHandler.QueryBulletinInfoResult", {})
-        from .maintenance import service as maintenance_service
-        maintenance_service.require_open()
 
         # V2 门户已经返回 userId，可直接作为 LoginID；旧 WebGL jwt 才需要 QueryUserID。
         if self._fixed_login_id:

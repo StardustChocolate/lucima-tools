@@ -1516,12 +1516,15 @@
       const elementConfig = activeElementConfig(value);
       card.dataset.element = elementConfig.element;
       card.style.setProperty("--theme-color", elementConfig.color);
+      const surface = palette.themes[elementConfig.element]['--theme-surface'];
+      const solid = color => window.LucimaSurfaceColors?.opaque(color, surface) ?? color;
+      card.style.setProperty('--archive-status-base', solid('rgba(8,15,20,.58)'));
       for (const [property, color] of Object.entries(palette.themes[elementConfig.element])) {
-        card.style.setProperty(property, color);
+        card.style.setProperty(property, solid(color));
       }
       for (const colors of Object.values(palette.statuses)) {
         for (const [property, color] of Object.entries(colors)) {
-          card.style.setProperty(property, color);
+          card.style.setProperty(property, solid(color));
         }
       }
       renderBadge(elementConfig);

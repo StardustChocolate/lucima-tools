@@ -225,6 +225,9 @@ PROXY_MODE: str = "system"
 
 def _read_system_proxy() -> str:
     """读取系统代理（Windows 注册表 IE 设置）。读不到返回空串。"""
+    if PLATFORM=='macos':
+        from urllib.request import getproxies
+        values=getproxies();return str(values.get('https')or values.get('http')or'')
     if PLATFORM != "windows":
         return ""  # Android 等：直连，靠系统 VPN/TUN 截流
     try:
@@ -257,7 +260,7 @@ def _read_system_proxy() -> str:
 def _system_proxy() -> str:
     """读取系统代理并缓存 5 秒；不会发起网络请求。"""
     global _proxy_cache_value, _proxy_cache_expires_at
-    if PLATFORM != "windows":
+    if PLATFORM not in {'windows','macos'}:
         return ""
     now = time.monotonic()
     with _proxy_cache_lock:
@@ -459,7 +462,7 @@ def load_accounts() -> dict:
 
 def save_account(email: str, *, auth: dict | None | object = _AUTH_UNSET,
                  toggles: dict | None = None, params: dict | None = None,
-                 name: str | None = None) -> None:
+                 character_name: str | None = None, automation_active: bool | None = None) -> None:
     """新增/更新一个账号存档。只更新传入的字段，其余保留。"""
     with _SETTINGS_LOCK:
         s = _load_settings()
@@ -480,8 +483,10 @@ def save_account(email: str, *, auth: dict | None | object = _AUTH_UNSET,
             rec["toggles"] = toggles
         if params is not None:
             rec["params"] = params
-        if name is not None:
-            rec["name"] = name
+        if automation_active is not None:
+            rec['automationActive'] = automation_active is True
+        if isinstance(character_name, str) and character_name.strip():
+            rec["character_name"] = character_name.strip()[:128]
         accs[email] = rec
         s["accounts"] = accs
         if not _save_settings(s):

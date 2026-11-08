@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from backend import activity_progress as ap, abyss_battle, appcore, config, server, tasks
+from backend import activity_progress as ap, activity_elite, abyss_battle, appcore, config, server, tasks
 from backend.abyss_state import metadata, initialize_units, sync_activity_support
 from backend.game_client import GameClient, GameError, GameMessage
 
@@ -35,6 +35,13 @@ class ActivityProgressTests(unittest.TestCase):
         self.enterContext(patch.object(config, "get_request_delay_config", return_value={"enabled": False}))
         self.client.call = Mock(side_effect=self.finish)
         self.elite = self.enterContext(patch.object(abyss_battle, "run_activity_battle", side_effect=self.battle))
+        # These tests cover the stage sequencer and protocol. Real automatic
+        # elite teams and loan transactions have their own inventory fixtures.
+        self.enterContext(patch.object(activity_elite,'run',side_effect=self.elite_sequence))
+
+    def elite_sequence(self, client, sid, **kwargs):
+        return abyss_battle.run_activity_battle(client,ap.start_info(client.account_state,sid,'T'),
+            cancel_event=kwargs['cancel_event'],on_progress=kwargs.get('on_progress'))
 
     def finish(self, route, payload):
         self.assertEqual(route, "SceneHandler.FinishScene")
@@ -101,7 +108,7 @@ class ActivityProgressTests(unittest.TestCase):
         self.assertEqual(len(emitted), 13)
         for entry, stage in zip(emitted, ap.scenes(self.client.account_state, "BH610")):
             self.assertTrue(entry["ok"])
-            self.assertEqual(entry["name"], f"活动自动推关·{stage['name']}")
+            self.assertEqual(entry["name"], f"活动自动推图·{stage['name']}")
             self.assertEqual(len(entry["lines"]), 1)
         self.assertEqual(emitted[0]["lines"], ["获得 250金币"])
         self.assertEqual(emitted[-1]["lines"], ["获得 700金币"])
@@ -162,17 +169,17 @@ class ActivityProgressTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         fresh.call.assert_not_called()
 
-    def test_uncertain_settlement_blocks_retry_until_login_replaces_state(self):
+    def test_start_after_uncertain_result_syncs_automatically_and_continues(self):
         self.client.call.side_effect = lambda *args: {"Drop": {"Items": []}}
         result = self.run_activity()
         self.assertFalse(result["ok"])
         self.assertIn("等待登录同步刷新", result["detail"])
-        with self.assertRaisesRegex(GameError, "等待登录"):
-            self.run_activity()
         self.assertEqual(self.client.call.call_count, 1)
-        self.client._replace_account_state(deepcopy(self.client.account_state))
         self.client.call.side_effect = self.finish
-        self.assertTrue(self.run_activity()["ok"])
+        with patch.object(self.client,'bootstrap',side_effect=lambda:self.client._replace_account_state(deepcopy(self.client.account_state))) as sync:
+            self.assertTrue(self.run_activity()["ok"])
+        sync.assert_called_once()
+        self.assertIsNone(self.client._activity_pending)
 
     def test_disconnect_marks_uncertain_and_stops_after_first_attempt(self):
         self.client.call.side_effect = GameError("网络断开")
@@ -267,7 +274,7 @@ class ActivityProgressTests(unittest.TestCase):
                 self.assertEqual(snapshot["enemies"][0]["avatar"], "/assets/avatars/H016.png")
                 self.assertEqual(snapshot["enemies"][0]["hpPercent"], 50)
                 self.assertNotIn("avatar", progress["battle"]["enemies"][0])
-                partial = {"ok": True, "name": "活动自动推关·关卡1", "lines": ["获得 250金币"]}
+                partial = {"ok": True, "name": "活动自动推图·关卡1", "lines": ["获得 250金币"]}
                 kwargs["on_partial"](partial)
                 acc.push_log.assert_called_once_with(partial, "")
                 server._route_api("POST", "/api/activity/progress/cancel", {"account": acc.email}, {})
@@ -289,6 +296,104 @@ class ActivityProgressTests(unittest.TestCase):
 
 
 class SceneDropLogTests(unittest.TestCase):
+    def test_elite_socket_actions_hold_s1_and_soul_for_two_waves_then_burn_boss_break(self):
+        from tools.test_activity_elite import friend
+        client=client_fixture();sid='BH806_1_13'
+        role=deepcopy(friend('H121')['RoleDataList'][0]['Role']);role['_id']='own'
+        client.account_state['RoleDataContainer']['Roles']=[role]
+        client.call=Mock(return_value={'_id':'room','ServerID':1,'AID':'aid','Domain':'wss://offline.invalid'})
+        info={'SceneData':{'StaticID':sid},'CampData1':{'PositionRoleMap':{'0':role}}}
+        messages=[{'CType':'Start','Index':0,'OID':'oid'}]
+        for wave in range(3):
+            messages += [{'Step':'NowRoleBeforeRound','RoundResult':{
+                'NowRoundRoleID':'1-0-0','NowWaveIndex':wave,'CampSoulList':[20,0]}},
+                {'Step':'RoleAction'}]
+        messages.append({'BattleEndData':{'Result':'Lose'}})
+        sent=[]
+        class Socket:
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):pass
+            async def send(self,value):sent.append(json.loads(value))
+            async def recv(self):return json.dumps(messages.pop(0)) if messages else None
+        with patch('websockets.legacy.client.connect',return_value=Socket()):
+            abyss_battle.run_activity_battle(client,info,reserve_boss_tools=True,
+                use_soul=True,prioritize_soul_break=True)
+        actions=[row for row in sent if 'SkillData'in row]
+        self.assertEqual([row['SkillData']['StaticID']for row in actions],['H121S1','H121S1','H121S3'])
+        self.assertEqual([row['IsUseSoul']for row in actions],[0,0,1])
+        self.assertTrue(actions[-1]['TargetID'].startswith('2-2-'))
+
+    def test_real_socket_payload_contains_reserve_and_server_join_replaces_dead_role_once(self):
+        from tools.test_activity_elite import friend
+        client=client_fixture();sid='BH610_1_13'
+        roles=[deepcopy(friend(s,i)['RoleDataList'][0]['Role'])for i,s in enumerate(('H165','H029','H006','H121'))]
+        for i,role in enumerate(roles):role['_id']='own'+str(i)
+        client.account_state['RoleDataContainer']['Roles']=roles
+        client.call=Mock(return_value={'_id':'room','ServerID':1,'AID':'aid','Domain':'wss://offline.invalid'})
+        support=tasks._build_support(friend())
+        info={'SceneData':{'StaticID':sid},'CampData1':{'PositionRoleMap':{str(i):r for i,r in enumerate(roles)}},'Support':support}
+        messages=[{'CType':'Start','Index':0,'OID':'oid'},
+            {'RoundResult':{'NowRoundRoleID':'1-0-0'}},
+            {'ActionResult':{'NewSupportRole':{'ID':'1-1-0','CampPosition':0,'RoleData':support['PlayerRoleData']['RoleData'],'NowHP':2500},
+                'SkillEventList':[{'RoleEventList':[{'TargetRoleID':'1-0-0','IsCanSyncRole':1,'NowHP':0}]}]},
+                'RoundResult':{'NowWaveIndex':1}},
+            {'Step':'NowRoleBeforeRound','RoundResult':{'NowRoundRoleID':'1-0-1','NowWaveIndex':1}},
+            {'BattleEndData':{'Result':'Lose'}}]
+        sent=[];progress=[]
+        class Socket:
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):pass
+            async def send(self,value):sent.append(json.loads(value))
+            async def recv(self):return json.dumps(messages.pop(0)) if messages else None
+        with patch('websockets.legacy.client.connect',return_value=Socket()):
+            outcome=abyss_battle.run_activity_battle(client,info,on_progress=progress.append,
+                reserve_boss_tools=True,use_soul=True,prioritize_soul_break=True)
+        submitted=next(row['StartBattleInfo']for row in sent if 'StartBattleInfo'in row)
+        self.assertEqual(len(submitted['CampData1']['PositionRoleMap']),4)
+        self.assertEqual(submitted['Support']['PlayerRoleData']['RoleData']['StaticID'],'H165')
+        self.assertEqual(outcome['support']['status'],'joined')
+        joined=next(row for row in progress if row.get('support',{}).get('status')=='joined')
+        self.assertEqual(len(joined['allies']),4)
+        self.assertNotIn('1-0-0',[row['id']for row in joined['allies']])
+        self.assertTrue(all(row['staticId']for row in joined['allies']))
+        borrowed=next(row for row in joined['allies']if row['id']=='1-1-0')
+        self.assertTrue(borrowed['support']);self.assertGreater(borrowed['hpPercent'],0)
+
+    def test_confirmed_victory_survives_static_id_error_in_drop_display(self):
+        client=client_fixture()
+        client.call=Mock(return_value={'_id':'room','ServerID':1,'AID':'aid','Domain':'wss://offline.invalid'})
+        sid='BH610_1_13'
+        info={'SceneData':{'StaticID':sid},'CampData1':{'PositionRoleMap':{
+            '0':deepcopy(client.account_state['RoleDataContainer']['Roles'][0])}}}
+        message={'BattleEndData':{'Result':'Win'},'SceneRewardData':{'SceneData':{'StaticID':sid,'Stars':[1,0,0]}}}
+        class Socket:
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):pass
+            async def send(self,raw):pass
+            async def recv(self):return json.dumps(message)
+        with patch('websockets.legacy.client.connect',return_value=Socket()), \
+             patch.object(tasks,'_format_scene_drop',side_effect=KeyError('StaticID')):
+            result=abyss_battle.run_activity_battle(client,info)
+        self.assertTrue(result['ok']);self.assertTrue(result['confirmed'])
+        self.assertTrue(ap.cleared(ap.records(client.account_state).get(sid)))
+        self.assertIn('服务器确认',result['lines'][0])
+
+    def test_room_rejection_for_already_used_support_is_explicitly_retryable(self):
+        for error_id in ('SupportUseTwice','Support Use Twice'):
+            with self.subTest(error_id=error_id):
+                client=client_fixture()
+                client.call=Mock(return_value={'_id':'room','ServerID':1,'AID':'aid','Domain':'wss://offline.invalid'})
+                info={'SceneData':{'StaticID':'BH610_1_13'},'CampData1':{'PositionRoleMap':{
+                    '0':deepcopy(client.account_state['RoleDataContainer']['Roles'][0])}}}
+                class Socket:
+                    async def __aenter__(self):return self
+                    async def __aexit__(self,*args):pass
+                    async def send(self,raw):pass
+                    async def recv(self):return json.dumps({'ErrorID':error_id})
+                with patch('websockets.legacy.client.connect',return_value=Socket()):
+                    with self.assertRaises(abyss_battle.SupportUnavailable):
+                        abyss_battle.run_activity_battle(client,info)
+
     def test_sweep_and_first_clear_share_one_mixed_drop_line_with_equipment_cards(self):
         client = client_fixture()
         sid = "BH610_1_1"

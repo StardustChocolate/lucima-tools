@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import csv
 import hashlib
 import json
 import os
@@ -333,13 +332,6 @@ def build_metadata(source: Path, *, previous_root: Path = ROOT, data_root: Path 
     battle, battle_evidence = build_battle_metadata(source, provenance)
     outputs = {STATIC_PATH: static, AI_PATH: auto_rules, EQUIPMENT_PATH: references,
                BATTLE_PATH: battle, GAME_CONFIG_PATH: build_game_config(battle["tables"])}
-    vote_table = source / '文本/数据表/sd_Vote.txt'
-    if vote_table.is_file():
-        from backend.voting import build_catalog
-        with vote_table.open(encoding='utf-8-sig', newline='') as stream:
-            votes = list(csv.DictReader(stream, delimiter='@'))
-        quests = list(load_table(source, 'Quest', ('ID', 'ActivityID', 'Group')).values())
-        outputs[GAME_CONFIG_PATH]['voting'] = build_catalog(votes, quests, localization)
     report = {"schema": 1, "source_root": str(source), "character_data_root": str(data_root), "source": provenance,
               "character_evidence": character_evidence, "equipment": equipment_evidence, "battle": battle_evidence,
               "differences": {"skills": compare_indexes(old_static.get("skills", {}), static["skills"]),

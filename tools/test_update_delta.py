@@ -30,8 +30,8 @@ class DeltaTests(unittest.TestCase):
         self.old = self.root / "old.zip"
         self.new = self.root / "new.zip"
         same = os.urandom(100000)
-        for path, contents in ((self.old, {"_internal/removed": b"old", "LucimaTools.exe": b"old"}),
-                               (self.new, {"_internal/added": b"new", "LucimaTools.exe": b"new"})):
+        for path, contents in ((self.old, {"_internal/removed": b"old", "LucimaTools.debug.exe": b"old"}),
+                               (self.new, {"_internal/added": b"new", "LucimaTools.debug.exe": b"new"})):
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("_internal/same", same)
                 for name, data in contents.items():
@@ -64,7 +64,7 @@ class DeltaTests(unittest.TestCase):
 
     def test_windows_rejects_unsafe_paths(self):
         for name in ("../outside", "_internal/../outside", "_internal/C:secret", "_internal/x\\y",
-                     "_internal/aux.png", "_internal/file.", "_internal/file ", "/LucimaTools.exe",
+                     "_internal/aux.png", "_internal/file.", "_internal/file ", "/LucimaTools.debug.exe",
                      "_internal//x", "_internal/x\x00", "settings.json"):
             with self.subTest(name=name), self.assertRaises(DeltaError):
                 windows_path(name)
@@ -147,11 +147,11 @@ class DeltaTests(unittest.TestCase):
         descriptor = {"fromVersion": config.APP_VERSION, "format": WINDOWS_FORMAT, "size": self.patch.stat().st_size}
         service = updater.UpdateService()
         artifact = {**self.artifact, "format": "windows-portable-zip", "deltas": [descriptor]}
-        with patch.object(sys, "executable", str(self.root / "installed/LucimaTools.exe")), \
+        with patch.object(sys, "executable", str(self.root / "installed/LucimaTools.debug.exe")), \
                 patch.object(service, "_download", return_value=self.patch):
             path, stage = service._prepare_update(artifact, "1.2.7", "windows")
         self.assertTrue(stage)
-        self.assertEqual((path / "LucimaTools.exe").read_bytes(), b"new")
+        self.assertEqual((path / "LucimaTools.debug.exe").read_bytes(), b"new")
 
     def test_channels_reset_cache_and_only_read_selected_manifest(self):
         service = updater.UpdateService()

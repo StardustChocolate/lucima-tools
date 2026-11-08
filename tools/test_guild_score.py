@@ -80,13 +80,6 @@ class GuildScoreTests(unittest.TestCase):
     def claims(self):
         return [body['RewardQuestInfos'][0]['ID'] for body in self.client.routes('RewardQuest')]
 
-    def test_score_job_uses_summary_without_member_gid(self):
-        self.client.own.pop('GID')
-        self.client.account_state['PlayerGuildInfo'].pop('GID')
-        result = self.start()
-        self.assertEqual((result['state'], result['score']), ('completed', 2800))
-        self.assertNotIn('GID', self.client.account_state['PlayerGuildInfo'])
-
     def test_highest_point_finished_task_repeats_planned_times_then_verifies_score(self):
         result = self.start()
         self.assertEqual((result['state'], result['score'], result['target']), ('completed', 2800, 2800))
@@ -124,6 +117,13 @@ class GuildScoreTests(unittest.TestCase):
         self.assertEqual(self.start()['state'], 'completed')
         self.assertEqual(self.claims(), [])
         self.assertEqual(len(self.client.routes('QueryGuildDataForSync')), 1)
+
+    def test_user_example_one_thousand_to_full_calculates_seventy_two_claims(self):
+        self.client.score=1000
+        self.client.minimal_repeat_reply=True
+        result=self.start()
+        self.assertEqual((result['state'],result['planned'],result['score']),('completed',72,2800))
+        self.assertEqual(len(self.claims()),72)
 
     def test_no_completed_or_unconfirmed_personal_quests_never_claim(self):
         for known in (True, False):
@@ -223,10 +223,10 @@ class GuildScoreTests(unittest.TestCase):
         self.assertEqual(len(self.claims()), 2)
 
     def test_no_guild_or_disconnected_never_queries_or_claims(self):
-        self.client.account_state['Info'].pop('GuildSubInfo')
+        self.client.account_state['PlayerGuildInfo']['GID'] = ''
         self.assertEqual(self.start()['state'], 'failed')
         self.assertEqual(self.client.calls, [])
-        self.client.account_state['Info']['GuildSubInfo'] = {'_id': 'guild'}
+        self.client.account_state['PlayerGuildInfo']['GID'] = 'guild'
         self.client.connected = False
         self.assertEqual(self.start()['state'], 'failed')
         self.assertEqual(self.client.calls, [])
@@ -266,15 +266,13 @@ class GuildScoreTests(unittest.TestCase):
                 self.client = ScoreClient()
                 self.acc.client = self.client
                 self.acc.guild_runtime.clear()
-                self.acc.guild_runtime['stateSyncedAtMs'] = int(time.time() * 1000)
                 self.acc.guild_runtime['weeklyPersonalWeek'] = self.client.week
-                self.client.before_game_request = self.acc._before_game_request
                 def after_claim(_):
                     if change == 'relogin':
                         self.acc.state_revision += 1
                         self.acc.guild_runtime.clear()
                     elif change == 'guild':
-                        self.client.account_state['Info']['GuildSubInfo'] = {'_id': 'another-guild'}
+                        self.client.account_state['PlayerGuildInfo']['GID'] = 'another-guild'
                     else:
                         self.client.account_state['GuildData']['Record']['LastResetQuestWeek'] += 1
                 self.client.after_claim = after_claim

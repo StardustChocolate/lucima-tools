@@ -91,15 +91,9 @@ class CaptainShopInsufficientCurrency(GameError):
         super().__init__(f"佣兵团公共货币 {currency} 不足：当前 {balance if balance is not None else '未确认'}，需要 {required}")
 
 
-def guild_id(state):
-    """Read membership from this account's guild summary, not member records."""
-    info = state.get("Info") if isinstance(state, dict) else None
-    summary = info.get("GuildSubInfo") if isinstance(info, dict) else None
-    return object_id(summary.get("_id")) if isinstance(summary, dict) else ""
-
-
 def has_guild(state):
-    return bool(guild_id(state))
+    info = (state or {}).get("PlayerGuildInfo") or {}
+    return isinstance(info, dict) and bool(object_id(info.get("GID")))
 
 
 def _timestamp(value):
@@ -343,6 +337,9 @@ class GuildService:
         state = self.client.account_state
         if not isinstance(state, dict):
             return
+        apply_quests = getattr(self.client, "_apply_quest_updates", None)
+        if callable(apply_quests):
+            apply_quests(result)
         currency_increases = set()
         apply_statuses = getattr(self.client, "_apply_account_status_updates", None)
         if callable(apply_statuses):
@@ -375,9 +372,17 @@ class GuildService:
             old_balances = {str(item.get("StaticID")): _nonnegative_int(item.get("Count"))
                             for item in old_items or [] if isinstance(item, dict)}
             gid = object_id((guild.get("Info") or {}).get("_id"))
-            if (has_guild(state) and gid and gid != guild_id(state)):
+            if (has_guild(state) and gid
+                    and gid != object_id(state["PlayerGuildInfo"].get("GID"))):
                 raise GameError("佣兵团信息与登录快照不一致，请重新登录")
-            state["GuildData"] = deepcopy(guild)
+            # Sync/full replies may omit unrelated Record fields. Preserve the
+            # latest confirmed attendance when a subsequent partial read arrives.
+            merged = deepcopy(old_guild) if isinstance(old_guild, dict) else {}
+            merged.update(deepcopy(guild))
+            for field in ('Record', 'Info'):
+                if isinstance((old_guild or {}).get(field), dict) and isinstance(guild.get(field), dict):
+                    merged[field] = {**deepcopy(old_guild[field]), **deepcopy(guild[field])}
+            state["GuildData"] = merged
             self.runtime["updatedAtMs"] = int(time.time() * 1000)
             # SelfGuildInfo may be a default object. Find our own member by
             # CUID / player object ID; never replace state with that default.
@@ -402,24 +407,37 @@ class GuildService:
         info = nested.get("PlayerGuildInfo") if isinstance(nested, dict) else None
         if not isinstance(info, dict):
             info = result.get("PlayerGuildInfo")
-        # Some real member records omit GID. Match the player's object ID in
-        # that case; default reward objects without either identity stay ignored.
-        accepted_member = False
-        if isinstance(info, dict) and guild_id(state):
-            response_gid = object_id(info.get("GID"))
-            player_id = object_id((state.get("Info") or {}).get("_id"))
-            if (response_gid == guild_id(state) or (not response_gid and player_id
-                    and object_id(info.get("_id")) == player_id)):
-                state["PlayerGuildInfo"] = deepcopy(info)
-                accepted_member = True
-        if route == "GuildHandler.GuildMemberCheckIn" and accepted_member:
-            self._cache_checkin_quests(result, info)
+        # RewardQuest can return a default PlayerGuildInfo without GID (cdp-123,
+        # 125, 126). It is not this player's authoritative member record.
+        if (isinstance(info, dict) and object_id(info.get("GID"))
+                == object_id((state.get("PlayerGuildInfo") or {}).get("GID"))
+                and object_id(info.get("GID"))):
+            state["PlayerGuildInfo"] = deepcopy(info)
         guild = state.get("GuildData")
         if not isinstance(guild, dict):
             return
-        gid = guild_id(state)
+        # Match the official GuildData.ReplaceMemberData callback: the member
+        # list and top-level personal record must share the confirmed update.
+        if isinstance(info, dict) and state.get('PlayerGuildInfo') == info:
+            own_player = state.get('Info') or {}
+            for member in guild.get('MemberList') or []:
+                player = member.get('PlayerInfo') or {}
+                if ((own_player.get('CUID') and str(player.get('CUID')) == str(own_player['CUID']))
+                        or (object_id(own_player.get('_id')) and object_id(player.get('_id')) == object_id(own_player['_id']))):
+                    member['PlayerGuildInfo'] = deepcopy(info)
+                    break
+        gid = object_id((state.get("PlayerGuildInfo") or {}).get("GID"))
         record = guild.get("Record") or {}
         week = _nonnegative_int(record.get("LastResetQuestWeek"))
+        personal = result.get("PlayerGuildQuestList")
+        if isinstance(personal, dict):
+            personal = personal.get("Quests")
+        if isinstance(personal, list):
+            updated_ids = {row.get("StaticID") for row in personal if isinstance(row, dict)}
+            member_week = _nonnegative_int((state.get("PlayerGuildInfo") or {}).get("NowGuildQuestWeek"))
+            active_ids = set(record.get("GuildQuestIDList") or [])
+            if member_week == week and week is not None and active_ids and active_ids <= updated_ids:
+                self.runtime["weeklyPersonalWeek"] = week
         # Public tier progress appears both at the top level and inside Results.
         # Replace by StaticID only within the active guild and server week.
         parts = [result] + [part for part in result.get("Results") or [] if isinstance(part, dict)]
@@ -451,7 +469,9 @@ class GuildService:
                     inventory.append(deepcopy(item))
                 else:
                     current.update(deepcopy(item))
-            for quest in part.get("GuildQuestDataList") or []:
+            quest_rows = [row for key in ("GuildQuestDataList", "GuildQuestList")
+                          for row in (part[key] if isinstance(part.get(key), list) else [])]
+            for quest in quest_rows:
                 if (not isinstance(quest, dict) or not quest.get("StaticID") or week is None
                         or quest.get("Week") != week or object_id(quest.get("GID")) != gid):
                     continue
@@ -462,40 +482,7 @@ class GuildService:
         if currency_increases and callable(callback):
             callback(currency_increases)
 
-    def _cache_checkin_quests(self, result, own):
-        # Official GuildMemberCheckIn callback clears the old guild quests,
-        # loads PlayerGuildQuestList.Quests, then applies direct Quests.
-        container = result.get("PlayerGuildQuestList")
-        quests = container.get("Quests") if isinstance(container, dict) else None
-        from .guild_quests import weekly_catalog
-        identifiers = set(weekly_catalog()["personal"])
-        week = _nonnegative_int(own.get("NowGuildQuestWeek"))
-        valid_personal = (week is not None and isinstance(quests, list) and bool(quests)
-                          and all(isinstance(row, dict) and row.get("StaticID") in identifiers
-                                  and _nonnegative_int(row.get("Count")) is not None for row in quests))
-        if valid_personal:
-            target = self.client.account_state.setdefault("QuestContainer", {}).setdefault("Quests", [])
-            target[:] = [row for row in target if row.get("StaticID") not in identifiers]
-            target.extend(deepcopy(quests))
-            self.client._apply_quest_updates({"Quests": result.get("Quests") or []})
-            self.runtime["weeklyPersonalWeek"] = week
-        # GuildQuestList is the complete tier list on this particular response.
-        public = result.get("GuildQuestList")
-        guild = self.client.account_state.get("GuildData")
-        gid = guild_id(self.client.account_state)
-        if (week is not None and isinstance(guild, dict) and isinstance(public, list) and public
-                and all(isinstance(row, dict) and row.get("Week") == week
-                        and object_id(row.get("GID")) == gid for row in public)):
-            guild["GuildQuestList"] = deepcopy(public)
-            guild.setdefault("Record", {})["LastResetQuestWeek"] = week
-        callback = getattr(self.client, "quest_update_callback", None)
-        if valid_personal and callable(callback):
-            callback()
-
     def _call(self, route, extra=None):
-        guard = getattr(self.client, "before_game_request", None)
-        if callable(guard):
-            guard(route)
         result = self.client.call(route, self.client._auth_data(extra))
         if isinstance(result, str) and result.strip():
             raise GameMessage(result.strip())
@@ -511,6 +498,7 @@ class GuildService:
         """Refresh the entire joined-guild entry flow, then check in if needed."""
         if not has_guild(self.client.account_state):
             return {"skipped": True, "checkedIn": False}
+        self.runtime.pop('entryWarnings', None)
         for key, route, extra in GUILD_ENTRY_ROUTES:
             if key == "war":
                 # QueryFullGuildDataWithGuildWar: Version_GVG must be open and
@@ -522,10 +510,14 @@ class GuildService:
                     continue
             try:
                 response = self._call(route, extra)
-            except GameMessage as error:
+            except Exception as error:
                 # A stale unlock condition must not block ordinary guild entry.
                 # Authentication and transport failures still propagate.
-                if key == "war" and error.msg == "Low GuildLV":
+                if key == "war" and isinstance(error, GameMessage) and error.msg == "Low GuildLV":
+                    continue
+                if (key in {'war', 'status', 'invitation'} and not is_auth_error(error)
+                        and self.client.is_connected()):
+                    self.runtime.setdefault('entryWarnings', {})[key] = describe_error(error)
                     continue
                 raise
             if key == "full":
@@ -533,17 +525,9 @@ class GuildService:
                 if not isinstance(guild, dict) or not (guild.get("Info") or {}).get("Name"):
                     raise GameError("佣兵团查询缺少完整信息，请刷新登录快照后重试")
                 gid = object_id((guild.get("Info") or {}).get("_id"))
-                if gid and gid != guild_id(self.client.account_state):
+                if gid and gid != object_id(self.client.account_state["PlayerGuildInfo"].get("GID")):
                     raise GameError("佣兵团信息与登录快照不一致，请重新登录")
-        checked = self.checkin_if_due()
-        state = self.client.account_state
-        week = _nonnegative_int((state.get("PlayerGuildInfo") or {}).get("NowGuildQuestWeek"))
-        public_week = _nonnegative_int(((state.get("GuildData") or {}).get("Record") or {}).get("LastResetQuestWeek"))
-        personal_week = self.runtime.get("weeklyPersonalWeek")
-        if (week is not None and ((public_week is not None and public_week != week)
-                                  or (personal_week is not None and personal_week != week))):
-            raise GameError("佣兵团周任务尚未同步，等待重新登录确认")
-        return {"checkedIn": checked}
+        return {"checkedIn": self.checkin_if_due()}
 
     def checkin_if_due(self):
         own = self.client.account_state.get("PlayerGuildInfo") or {}
@@ -556,6 +540,14 @@ class GuildService:
         self._call("GuildHandler.GuildMemberCheckIn")
         if not checked_in_today(self.client.account_state.get("PlayerGuildInfo"), self.now_ms()):
             raise GameError("佣兵团报到响应未确认今日状态，将查询后再检查")
+        # Read authoritative counters; never synthesize attendance locally.
+        self.query()
+        # Sync responses from some builds carry only the personal quest delta.
+        # Always read the complete guild record after a confirmed check-in so
+        # both the hall's current attendance and the weekly attendance quest
+        # use the server's counters.  The older conditional skipped this read
+        # exactly when the cached record was incomplete, leaving 0/8 and 1/5.
+        self._call("GuildHandler.QueryFullGuildData")
         return True
 
     def claim_daily_if_due(self):
@@ -585,7 +577,11 @@ class GuildService:
         return self.enter()
 
     def attendance(self):
-        return self._call("GuildHandler.GuildMemberDayCheckReward")
+        result = self._call("GuildHandler.GuildMemberDayCheckReward")
+        # Confirm omitted reward flags from the authoritative guild snapshot.
+        if (self.client.account_state.get('PlayerGuildInfo') or {}).get('CanLastDayCheckReward') is True:
+            self.query()
+        return result
 
     def buy(self, item_id, count=1, *, required_currency=None, required_amount=None):
         # BuyGuildCommodity consumes a complete commodity Record, not ItemID.
@@ -613,7 +609,7 @@ class GuildService:
         guild_info = guild.get("Info")
         if not isinstance(membership, dict) or not isinstance(guild_info, dict):
             raise GameError("佣兵团成员职位未确认，未发送购买请求")
-        current_gid = guild_id(state)
+        current_gid = object_id(membership.get("GID"))
         full_gid = object_id(guild_info.get("_id"))
         if not current_gid or full_gid != current_gid:
             raise GameError("佣兵团信息与登录快照不一致，未发送购买请求")

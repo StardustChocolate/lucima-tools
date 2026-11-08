@@ -1,7 +1,7 @@
 """Build the lightweight character encyclopedia bundle from ark2 data.
 
-The generated index and complete text dossiers feed the cloud publication.
-Portraits, Spine files and skill icons are staged separately into the media pool.
+The application ships the index and complete minified text dossiers. Large
+portraits, Spine files, and skill icons stay on the configured resource server.
 """
 
 from __future__ import annotations
@@ -326,7 +326,7 @@ def build_bundle(ark2_root: Path, output_root: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ark2-root", type=Path, default=Path(r"E:\Project\ark2"))
-    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "build/encyclopedia-bundle/encyclopedia")
+    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "assets" / "encyclopedia")
     args = parser.parse_args()
     build_bundle(args.ark2_root, args.output)
 

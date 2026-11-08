@@ -323,7 +323,9 @@ def _item_category(row: dict[str, str]) -> str:
     if item_type in {"Crafting", "ReforgeMat"} and item_id.startswith("CR"):
         return "crystal"
     if item_type == "ActivityCurrency" and item_id.startswith("AH"):
-        return "activity"
+        return "wealth"
+    if item_type in {"AP", "DayAP", "WeekAP"}:
+        return "other"
     if item_type == "Catalyst":
         return "catalyst"
     if item_id.isdigit():
@@ -361,29 +363,29 @@ def _write_item_categories(target: Path, categories: dict[str, str]) -> None:
     )
 
 
-def _role_elements(source: Path, field: str = "Element") -> dict[str, str]:
+def _role_elements(source: Path) -> dict[str, str]:
     source_file = source / ROLE_TABLE_SOURCE
     if not source_file.is_file():
         raise RuntimeError(f"full resource archive is missing role table: {source_file}")
     try:
         with source_file.open(encoding="utf-8", errors="replace", newline="") as stream:
             rows = csv.DictReader(stream, delimiter="@")
-            if not rows.fieldnames or "ID" not in rows.fieldnames or field not in rows.fieldnames:
+            if not rows.fieldnames or "ID" not in rows.fieldnames or "Element" not in rows.fieldnames:
                 raise RuntimeError(f"invalid role table header: {source_file}")
             elements = {
                 role_id: element
                 for row in rows
                 if (role_id := (row.get("ID") or "").strip())
-                if (element := (row.get(field) or "").strip())
+                if (element := (row.get("Element") or "").strip())
             }
     except (OSError, UnicodeError, csv.Error) as exc:
         raise RuntimeError(f"invalid role table: {source_file}: {exc}") from exc
     return elements
 
 
-def _write_role_elements(target: Path, elements: dict[str, str], field: str = "Element") -> None:
+def _write_role_elements(target: Path, elements: dict[str, str]) -> None:
     target.mkdir(parents=True, exist_ok=True)
-    output = target / ("role_jobs.json" if field == "Job" else "role_elements.json")
+    output = target / "role_elements.json"
     output.write_text(
         json.dumps(elements, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -445,7 +447,6 @@ def sync(source: Path, target: Path, *, items_target: Path | None = None,
     _validate_target(target, set(selection))
     item_categories = _item_categories(source)
     role_elements = _role_elements(source) if not inventory_only else None
-    role_jobs = _role_elements(source, "Job") if not inventory_only else None
     inventory_files, item_names, item_ranks = ({}, {}, {})
     if items_target is not None or metadata_target is not None:
         inventory_files, item_names, item_ranks = _inventory_data(source)
@@ -471,8 +472,6 @@ def sync(source: Path, target: Path, *, items_target: Path | None = None,
     _write_item_categories(target, item_categories)
     if role_elements is not None:
         _write_role_elements(target, role_elements)
-    if role_jobs is not None:
-        _write_role_elements(target, role_jobs, "Job")
     if items_target is not None:
         items_target.mkdir(parents=True, exist_ok=True)
         # Keep existing optimized icons and icons absent from the newer archive.

@@ -62,12 +62,12 @@ def file_sha256(path: Path) -> str:
 
 def create_windows_archive(source: Path, destination: Path) -> None:
     source = source.resolve()
-    expected = {"LucimaTools.exe", "_internal"}
+    expected = {"LucimaTools.debug.exe", "_internal"}
     actual = {entry.name for entry in source.iterdir()}
-    if actual != expected or not (source / "LucimaTools.exe").is_file() \
+    if actual != expected or not (source / "LucimaTools.debug.exe").is_file() \
             or not (source / "_internal").is_dir():
         raise SystemExit(
-            f"Windows bundle must contain only LucimaTools.exe and _internal: {source}"
+            f"Windows bundle must contain only LucimaTools.debug.exe and _internal: {source}"
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.unlink(missing_ok=True)
@@ -334,8 +334,8 @@ def main() -> int:
             else:
                 with zipfile.ZipFile(path) as archive:
                     names = archive.namelist()
-                    if "LucimaTools.exe" not in names or any(
-                        name != "LucimaTools.exe" and not name.startswith("_internal/") for name in names
+                    if "LucimaTools.debug.exe" not in names or any(
+                        name != "LucimaTools.debug.exe" and not name.startswith("_internal/") for name in names
                     ):
                         raise SystemExit("Invalid Windows release archive")
                     expected_endpoint(archive.read("_internal/update-endpoint.json"), args.update_url, "Windows release")

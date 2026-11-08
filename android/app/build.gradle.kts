@@ -37,7 +37,10 @@ val appVersion: String = run {
 val appVersionCode: Int = run {
     val p = appVersion.substringBefore("-").split(".")
     fun seg(i: Int) = p.getOrNull(i)?.toIntOrNull() ?: 0
-    seg(0) * 10000 + seg(1) * 100 + seg(2)
+    val base = seg(0) * 10000 + seg(1) * 100 + seg(2)
+    val override = Regex("""^ANDROID_VERSION_CODE\s*=\s*(\d+)""", RegexOption.MULTILINE)
+        .find(File(projectRoot, "backend/version.py").readText())?.groupValues?.get(1)?.toIntOrNull() ?: base
+    maxOf(base, override)
 }
 
 // 正式签名只从被 Git 忽略的 keystore.properties 读取。
@@ -81,7 +84,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.openrubi.lucimatools"
+        applicationId = "com.openrubi.lucimatools.debug"
         minSdk = 24
         targetSdk = 34
         versionCode = appVersionCode      // 1.1.0 → 10100（旧手工值最大 8，可安全覆盖安装）
@@ -115,6 +118,7 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.12"
+        buildPython(System.getenv("LUCIMA_BUILD_PYTHON") ?: "python3.12")
         pip {
             // httpx 及其纯 Python 依赖；游戏协议客户端用它走代理
             install("httpx")
@@ -122,36 +126,43 @@ chaquopy {
             install("websockets==13.1")
         }
         // 让 backend 包被提取到真实文件系统，使 open(equip_ref.json) 可用
-        extractPackages("backend")
+        extractPackages("backend", "equipment")
     }
 }
 
 // ---------- 构建前把共享源复制进来（单一真源在项目根，不重复维护） ----------
 val copyBackend = tasks.register<Sync>("copyBackendPython") {
     from(File(projectRoot, "backend")) {
-        exclude("__pycache__/**")
+        exclude("**/__pycache__/**")
     }
     into(layout.projectDirectory.dir("src/main/python/backend"))
+}
+
+val copyEquipment = tasks.register<Sync>("copyEquipmentPython") {
+    from(File(projectRoot, "equipment")) {
+        exclude("**/__pycache__/**", "tests/**")
+    }
+    into(layout.projectDirectory.dir("src/main/python/equipment"))
 }
 
 val copyWeb = tasks.register<Sync>("copyWebAssets") {
     dependsOn(writeUpdateEndpoint)
     into(layout.projectDirectory.dir("src/main/assets/web"))
     from(File(projectRoot, "frontend")) { into("frontend") }
-    from(File(projectRoot, "assets")) { into("assets"); exclude("encyclopedia/**", "**/*.py", "**/__pycache__/**") }
+    from(File(projectRoot, "assets")) { into("assets") }
     from(updateEndpointFile)
     from(File(projectRoot, "encyclopedia-endpoint.json"))
     from(File(projectRoot, "redeem-codes-endpoint.json"))
 }
 
 tasks.named("preBuild") {
-    dependsOn(copyBackend, copyWeb)
+    dependsOn(copyBackend, copyEquipment, copyWeb)
 }
 
 // Chaquopy 的 mergePythonSources / AGP 的 mergeAssets 会读取被 Sync 写入的目录，
 // 必须显式声明依赖，否则 Gradle 报隐式依赖错误（且可能顺序错乱）。
 tasks.matching { it.name.matches(Regex("merge.*PythonSources")) }
-    .configureEach { dependsOn(copyBackend) }
+    .configureEach { dependsOn(copyBackend, copyEquipment) }
 tasks.matching { it.name.matches(Regex("merge.*Assets")) }
     .configureEach { dependsOn(copyWeb) }
 

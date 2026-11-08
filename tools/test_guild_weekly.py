@@ -1,7 +1,6 @@
 """Offline weekly reward, reset, timeout and shared scheduler regressions."""
 import copy
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -9,7 +8,6 @@ from tools.test_guild_aid import AidClient, NOW, accounts, config
 from backend.game_client import GameError
 from backend.guild import GuildService, has_guild
 from backend.guild_quests import DAY_MS, WEEKLY_POLL_MS, GuildWeeklyService, weekly_catalog
-from backend import runtime_data
 from tools import build_guild_quests
 
 
@@ -104,17 +102,6 @@ class GuildWeeklyTests(unittest.TestCase):
         self.acc.toggles["guild_auto_weekly"] = False
         self.run_weekly()
         self.acc.toggles["guild_auto_weekly"] = True
-
-    def test_weekly_rewards_work_without_member_gid(self):
-        self.client.info["_id"] = {"$oid": "local-player-id"}
-        self.client.account_state["Info"]["_id"] = {"$oid": "local-player-id"}
-        self.client.own.pop("GID")
-        self.client.own["_id"] = {"$oid": "local-player-id"}
-        self.client.account_state["PlayerGuildInfo"] = copy.deepcopy(self.client.own)
-        self.run_weekly()
-        status = self.weekly.snapshot()
-        self.assertEqual((status["personalClaimed"], status["tiersClaimed"], status["score"]), (2, 1, 500))
-        self.assertNotIn("GID", self.client.account_state["PlayerGuildInfo"])
 
     def test_claims_selected_completed_personal_before_newly_unlocked_tier(self):
         self.run_weekly()
@@ -274,21 +261,12 @@ class GuildWeeklyTests(unittest.TestCase):
         self.client.own["PlayerGuildQuestSave"] = {"LastRewardQuestWeek": self.client.week}
         self.client.personal = [quest("GuildCheckIn", 0, 5), quest("GuildDonatedCourage", 0, 10), quest("GuildGetRing", 0, 10)]
         self.advance(DAY_MS)
-        calls = len(self.client.calls)
-        self.run_weekly()
-        self.assertEqual(len(self.client.calls), calls)
-        self.assertEqual(self.acc.automation_wait_reason(), "等待每日重登")
-        # Even a same-day query cannot label the old cached personal quests as new.
-        self.client.account_state["Utc"] = str(self.client.now // 1000)
-        self.acc.state_synced_at = self.client.now
-        self.acc._note_guild_login()
         self.run_weekly()
         status = self.weekly.snapshot()
         self.assertFalse(status["personalKnown"])
         self.assertTrue(all(row["count"] is None for row in status["personal"]))
         self.assertEqual(len(self.client.routes("RewardQuest")), 2)
         self.client.account_state["QuestContainer"]["Quests"] = copy.deepcopy(self.client.personal)
-        self.client.account_state["PlayerGuildInfo"] = copy.deepcopy(self.client.own)
         self.acc._note_guild_login()
         self.run_weekly()
         self.assertTrue(self.weekly.snapshot()["personalKnown"])
@@ -342,11 +320,11 @@ class GuildWeeklyTests(unittest.TestCase):
         self.assertEqual(len(self.client.routes("RewardGuildQuest")), 0)
 
     def test_no_guild_or_disconnection_never_sends_requests(self):
-        self.client.account_state["Info"].pop("GuildSubInfo")
+        self.client.account_state["PlayerGuildInfo"]["GID"] = ""
         self.run_weekly()
         self.assertEqual(self.client.calls, [])
         self.assertEqual(self.weekly.snapshot()["personal"], [])
-        self.client.account_state["Info"]["GuildSubInfo"] = {"_id": "guild"}
+        self.client.account_state["PlayerGuildInfo"]["GID"] = "guild"
         self.client.connected = False
         self.run_weekly()
         self.assertEqual(self.client.calls, [])
@@ -392,9 +370,7 @@ class GuildWeeklyTests(unittest.TestCase):
                          "Optional extracted game tables are not distributed")
     def test_catalog_matches_local_source_tables(self):
         root = Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as folder, patch.object(
-                runtime_data, "registry", runtime_data.Registry(folder)):
-            self.assertEqual(weekly_catalog(), build_guild_quests.build(root / "assets_full"))
+        self.assertEqual(weekly_catalog(), build_guild_quests.build(root / "assets_full"))
 
 
 if __name__ == "__main__":

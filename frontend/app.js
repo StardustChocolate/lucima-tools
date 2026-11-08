@@ -12,18 +12,22 @@ const checkboxUIHTML = () => `
 const _GLOBAL_PATHS = new Set(["/api/config", "/api/preferences", "/api/logs", "/api/logs/save", "/api/equipment-filter/export", "/api/diagnostics/runtime", "/api/tasks", "/api/accounts", "/api/login", "/api/login/saved", "/api/accounts/logout", "/api/accounts/delete", "/api/accounts/restore", "/api/update/status", "/api/update/check", "/api/update/ignore", "/api/update/install", "/api/update/channel"]);
 _GLOBAL_PATHS.add("/api/encyclopedia/resources");
 _GLOBAL_PATHS.add("/api/encyclopedia/save-image");
-_GLOBAL_PATHS.add("/api/resources/status");
-_GLOBAL_PATHS.add("/api/resources/check");
+_GLOBAL_PATHS.add("/api/gvg/catalog");
+_GLOBAL_PATHS.add("/api/game-data/status");
 const _CONNECTION_BLOCKED_PATHS = new Set([
   "/api/tasks/auto", "/api/tasks/run", "/api/shop/reset", "/api/shop/buy",
   "/api/star-source/query", "/api/star-source/refresh", "/api/star-source/buy",
   "/api/customized-equip/action", "/api/store/options", "/api/store/buy",
-  "/api/sweep/options", "/api/sweep/run", "/api/activity/options", "/api/activity/run",
+  "/api/sweep/options", "/api/sweep/run", "/api/sweep/equipment/sell", "/api/activity/options", "/api/activity/run",
   "/api/activity/progress/run",
   "/api/activity/urgent/clear", "/api/support/favorite", "/api/support/unfavorite",
   "/api/arena/options", "/api/arena/config", "/api/dev/call",
-  "/api/abyss/options", "/api/abyss/config", "/api/abyss/run", "/api/abyss/cancel", "/api/abyss/rewards",
+  "/api/abyss/options", "/api/abyss/config", "/api/abyss/run", "/api/abyss/cancel", "/api/abyss/rewards", "/api/abyss/restore",
+  "/api/intimacy/start",
   "/api/guild/overview", "/api/guild/action", "/api/guild/quests/query", "/api/guild/quests/start",
+  "/api/equipment/action",
+  "/api/recruitment/refresh",
+  "/api/inventory/manage", "/api/activity/store/options", "/api/activity/store/config", "/api/activity/store/buy", "/api/activity/support/search", "/api/energy/options", "/api/energy/buy",
 ]);
 
 // Request pacing is deliberately owned by repeated-task loops. Keeping this
@@ -61,14 +65,15 @@ function waitRequestDelayBetweenIterations(iteration, shouldStop = null) {
   });
 }
 
-const api = async (path, body, { signal } = {}) => {
+const api = (...args) => LucimaActionWait.track(apiRequest(...args));
+const apiRequest = async (path, body, { signal } = {}) => {
   const [apiPath, queryString = ""] = String(path || "").split("?", 2);
   const queryAccount = new URLSearchParams(queryString).get("account");
   const requestAccount = body?.account || queryAccount || (typeof activeAccount !== "undefined" ? activeAccount : null);
   const localAccount = requestAccount && typeof ACCOUNTS !== "undefined" ? ACCOUNTS[requestAccount] : null;
   if (_CONNECTION_BLOCKED_PATHS.has(apiPath) && localAccount?.connection?.connected === false) {
     applyConnectionState(requestAccount, localAccount.connection, { notify: true });
-    throw new Error(connectionBlockedMessage(localAccount.connection));
+    throw new Error("[重复登录] 当前连接已断开");
   }
   // POST：向 body 注入 account（未显式给且非全局接口时）
   if (body && typeof body === "object" && !("account" in body) && activeAccount && !_GLOBAL_PATHS.has(apiPath)) {
@@ -158,7 +163,7 @@ async function flushFrontendSettings() {
   frontendSettingsSaveInFlight = true;
   try {
     await api("/api/preferences", { settings: { ...FRONTEND_SETTINGS } });
-    frontendSettingsDirty = false;
+    frontendSettingsDirty = frontendSettingsSavePending;
   } catch (error) {
     frontendSettingsSavePending = true;
     console.warn("保存前端设置失败：", error);
@@ -170,6 +175,7 @@ async function flushFrontendSettings() {
     }
   } finally {
     frontendSettingsSaveInFlight = false;
+    if (frontendSettingsSavePending && !frontendSettingsSaveTimer) scheduleFrontendSettingsSave(0);
   }
 }
 
@@ -190,7 +196,8 @@ async function loadFrontendSettings() {
   const merged = { ...legacy, ...remote };
   const needsMigration = Object.keys(legacy).some((key) => !Object.prototype.hasOwnProperty.call(remote, key));
   FRONTEND_SETTINGS = merged;
-  if (needsMigration || (!Object.keys(remote).length && Object.keys(legacy).length)) {
+  const presetMigrated = migrateEquipmentFilterPreset();
+  if (presetMigrated || needsMigration || (!Object.keys(remote).length && Object.keys(legacy).length)) {
     frontendSettingsDirty = true;
     frontendSettingsSavePending = true;
     await flushFrontendSettings();
@@ -244,6 +251,7 @@ function applyTheme(t) {
   root.style.setProperty("--accent-rgb", hexToRgb(t.accent).join(", "));
   root.style.setProperty("--accent2-rgb", hexToRgb(t.accent2).join(", "));
   root.setAttribute("data-theme", t.mode);
+  window.LucimaSurfaceColors?.apply(t);
   frontendStorageSet(THEME_LS, JSON.stringify(t));
   syncThemeUI(t);
 }
@@ -275,17 +283,98 @@ function renderSwatches() {
       style="background:linear-gradient(135deg, ${p.accent}, ${p.accent2})" title="${p.name}"></div>`
   ).join("");
   row.querySelectorAll(".swatch").forEach((s) =>
-    s.addEventListener("click", () => setTheme({ accent: s.dataset.accent, accent2: s.dataset.accent2 }))
+    s.addEventListener("click", LucimaActionWait.wrap(() => setTheme({ accent: s.dataset.accent, accent2: s.dataset.accent2 })))
   );
 }
 
 // ---------- 板块导航 ----------
-const SECTION_TITLES = { info: "基本信息", auto: "自动任务", manual: "主动任务", guild: "佣兵团", toolbox: "工具箱", logs: "运行日志", settings: "系统设置", about: "关于我们" };
+const SECTION_TITLES = { info: "基本信息", auto: "自动任务", manual: "主动任务", guild: "佣兵团", equipment: "装备", recruitment: "出货记录", gvg: "GVG", toolbox: "工具箱", logs: "运行日志", settings: "系统设置", about: "关于我们" };
 let currentSection = "info";
 let logUnread = 0;
+// Keep markup strings and task/account data, never detached page trees.
+const sectionTemplates = new Map([...document.querySelectorAll('.content > .section')]
+  .map(root => [root.id.slice(8), root.innerHTML]));
+const sectionControllers = new Map();
+let sectionLifecycleReady = false;
+
+function disposeSection(id) {
+  const root = $(`section-${id}`);
+  if (!root) return;
+  window.dispatchEvent(new CustomEvent('lucima:section-unmount', {detail:{section:id}}));
+  sectionControllers.get(id)?.abort();
+  sectionControllers.delete(id);
+  root.querySelectorAll('.eq-card-shell').forEach(node => equipCardResizeObserver?.unobserve(node));
+  if (id === 'toolbox') {
+    showToolboxHome();
+    ENCYCLOPEDIA_STATE.initialized = false;
+  }
+  if (id === 'settings') { clearTimeout(devGateTimer); devGateTimer = null; }
+  if (id === 'manual') closeAbyssPicker(false);
+  hideEquipPopup();
+  root.replaceChildren();
+  const empty = document.createElement('section');
+  empty.id = root.id; empty.className = 'section';
+  root.replaceWith(empty);
+}
+
+function mountSection(id) {
+  const root = $(`section-${id}`);
+  if (!root || root.dataset.mounted) return;
+  sectionControllers.set(id, new AbortController());
+  root.innerHTML = sectionTemplates.get(id) || '';
+  root.dataset.mounted = '1';
+  if (id === 'info') {
+    $('refreshBtn').onclick = LucimaActionWait.wrap(manualRefresh);
+    root.querySelectorAll('.roster-tabs .rtab').forEach(button => {
+      button.onclick = LucimaActionWait.wrap(() => { rosterTab = button.dataset.rtab; applyRosterTab(); });
+    });
+    renderStatus(activeAcc()?.status || {});
+    if (activeAcc()?.roster) renderRoster(activeAcc().roster);
+    else if (activeAccount) void loadRoster(activeAccount);
+    renderConnectionState();
+  } else if (id === 'auto' || id === 'manual') {
+    if (taskCatalogLoaded) {
+      if (id === 'auto') renderAutoPanel(TOGGLE_TASKS);
+      else renderManualPanel(TASKS);
+    } else if (activeAccount) void loadTasks();
+  } else if (id === 'toolbox') {
+    initToolbox();
+  } else if (id === 'logs') {
+    $('clearLogBtn').onclick = LucimaActionWait.wrap(clearAccountLogs);
+    $('saveDevLogBtn').onclick = LucimaActionWait.wrap(saveDevLog);
+    bindBottomLogSetting();
+    renderLogViews(activeAcc()?.logHtml || '');
+  } else if (id === 'settings') {
+    bindSettingsSection();
+  } else if (id === 'about') {
+    $('aboutUpdateBtn').onclick = LucimaActionWait.wrap(checkForUpdates);
+    void loadConfig();
+  }
+  window.dispatchEvent(new CustomEvent('lucima:section-mount', {detail:{section:id}}));
+}
+
+function initSectionLifecycle() {
+  sectionLifecycleReady = true;
+  for (const id of sectionTemplates.keys()) {
+    if (id === currentSection) {
+      $(`section-${id}`).dataset.mounted = '1';
+      sectionControllers.set(id, new AbortController());
+    } else disposeSection(id);
+  }
+}
+function syncTaskRendering(section) {
+  // Also turn off the whole-page software layer in already-installed shells.
+  // Native inputs and ordinary scrolling avoid allocating a page-sized bitmap.
+  try { window.LucimaRendering?.setTaskMode(false); }
+  catch (error) { console.warn("Task rendering mode unavailable", error); }
+}
 function showSection(id) {
+  if (!SECTION_TITLES[id]) return;
   const leavingToolbox = currentSection === "toolbox" && id !== "toolbox";
+  if (sectionLifecycleReady && currentSection !== id) disposeSection(currentSection);
   currentSection = id;
+  if (sectionLifecycleReady) mountSection(id);
+  syncTaskRendering(id);
   if ((id === "toolbox" || leavingToolbox) && typeof showToolboxHome === "function") showToolboxHome();
   if (id !== "toolbox" && typeof stopBackgroundTestPolling === "function") stopBackgroundTestPolling();
   document.querySelectorAll(".section").forEach((s) => s.classList.toggle("active", s.id === `section-${id}`));
@@ -294,7 +383,7 @@ function showSection(id) {
   if (id === "logs") {
     logUnread = 0;
     updateLogBadge();
-    setBottomLogExpanded(false);
+    renderLogViews(activeAcc()?.logHtml || '');
   }
   window.dispatchEvent(new CustomEvent("lucima:section-change", { detail: { section: id } }));
   // 移动端选完自动收起侧栏 + 隐藏遮罩
@@ -308,7 +397,7 @@ function updateLogBadge() {
   [$("logBadge"), $("bottomLogBadge")].forEach((badge) => {
     if (!badge) return;
     if (logUnread > 0) {
-      badge.textContent = value;
+      if (badge.textContent !== value) badge.textContent = value;
       badge.classList.remove("hidden");
     } else {
       badge.classList.add("hidden");
@@ -332,11 +421,22 @@ function _logLine(msg, cls, ts) {
   return `<span class="l-time">[${stamp}]</span> <span class="l-${cls}">${msg}</span>\n`;
 }
 
+let pendingLogHTML = '', logRenderFrame = null;
 function renderLogViews(html) {
-  [$("log"), $("bottomLog")].forEach((view) => {
-    if (!view) return;
-    view.innerHTML = html || "";
-    view.scrollTop = view.scrollHeight;
+  pendingLogHTML = html || '';
+  if (logRenderFrame != null) return;
+  logRenderFrame = requestAnimationFrame(() => {
+    logRenderFrame = null;
+    const html = pendingLogHTML;
+    [currentSection === 'logs' ? $('log') : null,
+      isBottomLogExpanded() ? $('bottomLog') : null].forEach(view => {
+      if (!view || view._renderedLogHTML === html) return;
+      const previous = view._renderedLogHTML || '';
+      if (previous && html.startsWith(previous)) view.insertAdjacentHTML('beforeend', html.slice(previous.length));
+      else view.innerHTML = html;
+      view._renderedLogHTML = html;
+      view.scrollTop = view.scrollHeight;
+    });
   });
 }
 
@@ -349,7 +449,13 @@ function logTo(email, msg, cls = "info", ts = null) {
   const a = ACCOUNTS[email];
   const line = _logLine(msg, cls, ts);
   if (a) {
-    a.logHtml = (a.logHtml || "") + line;
+    if (!a.logRows) a.logRows = a.logHtml ? [a.logHtml] : [];
+    a.logRows.push(line);
+    if (a.logRows.length > 500) {
+      a.logRows.splice(0, a.logRows.length - 500);
+      scheduleDropCardPrune();
+    }
+    a.logHtml = a.logRows.join('');
     if (email === activeAccount) {
       renderLogViews(a.logHtml);
       if (currentSection !== "logs" && !isBottomLogExpanded()) { logUnread++; updateLogBadge(); }
@@ -358,14 +464,17 @@ function logTo(email, msg, cls = "info", ts = null) {
       updateAccountSwitcherUnread(email);
     }
   } else {
-    renderLogViews(($("log")?.innerHTML || "") + line);
+    renderLogViews(pendingLogHTML + line);
   }
 }
 function log(msg, cls = "info") { logTo(activeAccount, msg, cls); }
 
 const BOTTOM_LOG_LS = "ark_bottom_log_enabled";
+const BOTTOM_LOG_EXPANDED_LS = "ark_bottom_log_expanded";
 const BOTTOM_LOG_HEIGHT_LS = "ark_bottom_log_height";
 let bottomLogHeight = null;
+let bottomLogEnabled = false;
+let bottomLogExpanded = false;
 
 function bottomLogHeightLimits() {
   const main = document.querySelector(".main");
@@ -398,12 +507,15 @@ function setBottomLogHeight(height, persist = false) {
   }
 }
 
-function setBottomLogExpanded(expanded) {
+function renderBottomLogDock() {
   const dock = $("bottomLogDock");
   const main = document.querySelector(".main");
-  const enabled = $("bottomLogEnabled")?.checked;
   if (!dock) return;
-  const open = !!expanded && !!enabled;
+  const checkbox = $("bottomLogEnabled");
+  if (checkbox) checkbox.checked = bottomLogEnabled;
+  dock.classList.toggle("hidden", !bottomLogEnabled);
+  main?.classList.toggle("bottom-log-enabled", bottomLogEnabled);
+  const open = bottomLogExpanded && bottomLogEnabled;
   dock.classList.toggle("expanded", open);
   main?.classList.toggle("bottom-log-expanded", open);
   $("bottomLogExpand")?.setAttribute("aria-expanded", String(open));
@@ -416,29 +528,37 @@ function setBottomLogExpanded(expanded) {
   }
 }
 
-function setBottomLogEnabled(enabled, persist = true) {
+function bindBottomLogSetting() {
   const checkbox = $("bottomLogEnabled");
-  const dock = $("bottomLogDock");
-  const main = document.querySelector(".main");
-  if (checkbox) checkbox.checked = !!enabled;
-  dock?.classList.toggle("hidden", !enabled);
-  main?.classList.toggle("bottom-log-enabled", !!enabled);
-  if (!enabled) setBottomLogExpanded(false);
+  if (!checkbox) return;
+  checkbox.checked = bottomLogEnabled;
+  checkbox.onchange = LucimaActionWait.wrap(event => setBottomLogEnabled(event.target.checked));
+}
+
+function setBottomLogExpanded(expanded, persist = true) {
+  bottomLogExpanded = !!expanded;
+  if (persist) frontendStorageSet(BOTTOM_LOG_EXPANDED_LS, expanded ? "1" : "0");
+  renderBottomLogDock();
+}
+
+function setBottomLogEnabled(enabled, persist = true) {
+  bottomLogEnabled = !!enabled;
   if (persist) {
     frontendStorageSet(BOTTOM_LOG_LS, enabled ? "1" : "0");
   }
+  renderBottomLogDock();
 }
 
 function initBottomLogDock() {
-  let enabled = false;
-  enabled = frontendStorageGet(BOTTOM_LOG_LS) === "1";
+  bottomLogEnabled = frontendStorageGet(BOTTOM_LOG_LS) === "1";
+  bottomLogExpanded = frontendStorageGet(BOTTOM_LOG_EXPANDED_LS) === "1";
   const savedHeight = Number(frontendStorageGet(BOTTOM_LOG_HEIGHT_LS));
   bottomLogHeight = Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : defaultBottomLogHeight();
   setBottomLogHeight(bottomLogHeight);
-  setBottomLogEnabled(enabled, false);
-  $("bottomLogEnabled")?.addEventListener("change", (event) => setBottomLogEnabled(event.target.checked));
-  $("bottomLogExpand")?.addEventListener("click", () => setBottomLogExpanded(true));
-  $("bottomLogCollapse")?.addEventListener("click", () => setBottomLogExpanded(false));
+  renderBottomLogDock();
+  bindBottomLogSetting();
+  $("bottomLogExpand")?.addEventListener("click", LucimaActionWait.wrap(() => setBottomLogExpanded(true)));
+  $("bottomLogCollapse")?.addEventListener("click", LucimaActionWait.wrap(() => setBottomLogExpanded(false)));
 
   const resizer = $("bottomLogResizer");
   const dock = $("bottomLogDock");
@@ -496,10 +616,7 @@ function loginStatus(html, kind = "hint") {
 
 // 有密码时换取新 Token；从下拉框选中账号后留空密码即可恢复会话。
 async function doLogin() {
-  if (!updateStartupReady || updateStartupBlocked) {
-    loginStatus("正在完成版本检查，请稍候…", "pending");
-    return;
-  }
+  if ($("loginBtn").disabled) return;
   const account = $("account").value.trim();
   const password = $("password").value;
   if (!account) return loginStatus("请填写账号", "err");
@@ -558,8 +675,6 @@ function rememberAccount(data) {
     activationPending: false,
     activationRetryAt: 0,
     activationError: "",
-    // 仅在当前前端会话中保存的浏览状态；不写入游戏或后端配置。
-    uiState: { panels: Object.create(null), optionCache: Object.create(null) },
   };
 }
 
@@ -567,6 +682,7 @@ function rememberAccount(data) {
 function registerAccount(data) {
   rememberAccount(data);
   const email = data.account;
+  rememberLastLoginAccount(email);
   enterApp();
   switchAccount(email);
   ensureAutoLogPoll();
@@ -600,36 +716,6 @@ async function ensureAccountStarted(email) {
   }
 }
 
-function connectionBlockedMessage(state) {
-  if (state?.reason === "maintenance") return state.maintenance
-    ? "游戏维护中，等待维护结束后自动重登" : "维护后等待重新登录，任务保持停止";
-  return state?.reason === "duplicate_login" ? "[重复登录] 当前连接已断开" : "当前游戏连接已断开";
-}
-
-function stopManualTasksForMaintenance(email) {
-  const account = ACCOUNTS[email];
-  if (shopRunning[email]) {
-    shopStopRequested[email] = true;
-    if (account?.secretShopPending) {
-      resolveSecretShopPending(account.secretShopPending.id, email, { action: "stop", count: 0 });
-    }
-  }
-  if (starSourceRunning[email]) {
-    starSourceStopRequested[email] = true;
-    if (account?.starSourcePending) {
-      resolveStarSourcePending(account.starSourcePending.id, email, { action: "stop" });
-    }
-  }
-  if (customizedEquipRunning[email]) customizedEquipStopRequested[email] = true;
-  if (sweepRunning[email]) sweepStopRequested[email] = true;
-  if (actRunning[email]) actStopRequested[email] = true;
-  const loop = DEV_LOOP_STATES.get(email);
-  if (loop?.running) {
-    loop.stopRequested = true;
-    loop.wake?.();
-  }
-}
-
 function renderConnectionState(email = activeAccount) {
   const pill = $("connPill");
   if (!pill) return;
@@ -638,21 +724,29 @@ function renderConnectionState(email = activeAccount) {
   const connected = state.connected !== false;
   pill.classList.toggle("on", !!account && connected);
   pill.classList.toggle("off", !!account && !connected);
-  $("connStatus").textContent = account ? (connected ? "已连接"
-    : state.reason === "maintenance" ? (state.maintenance ? "维护中" : "等待重登") : "已断开") : "未连接";
+  $("connStatus").textContent = account ? (connected ? "已连接" : "已断开-点击重新刷新") : "未连接";
   pill.title = !account ? "尚未登录" : connected ? "游戏会话正常"
-    : connectionBlockedMessage(state);
+    : state.reason === "duplicate_login" ? "重复登录，当前会话已断开" : "游戏会话已断开";
   const refreshing = !!account?.refreshPending;
-  const maintenance = !connected && state.maintenance;
+  const clickable = !!account && !connected;
+  pill.classList.toggle("connection-clickable", clickable);
+  pill.setAttribute("role", clickable ? "button" : "group");
+  pill.tabIndex = clickable ? 0 : -1;
+  pill.setAttribute("aria-disabled", String(!account || refreshing));
+  pill.setAttribute("aria-busy", String(refreshing));
+  if (clickable) pill.setAttribute("aria-label", "已断开，点击重新刷新");
+  else pill.removeAttribute("aria-label");
   const retry = $("reconnectBtn");
   if (retry) {
-    retry.disabled = !account || refreshing || maintenance;
+    retry.disabled = !account || refreshing;
     retry.classList.toggle("loading", refreshing);
     retry.setAttribute("aria-busy", String(refreshing));
+    retry.tabIndex = clickable ? -1 : 0;
+    retry.setAttribute("aria-hidden", String(clickable));
   }
   const refresh = $("refreshBtn");
   if (refresh) {
-    refresh.disabled = !account || refreshing || maintenance;
+    refresh.disabled = !account || refreshing;
     refresh.classList.toggle("spinning", refreshing);
   }
 }
@@ -665,16 +759,9 @@ function applyConnectionState(email, state, { notify = false } = {}) {
     connected: state.connected !== false,
     reason: state.reason || null,
     changedAt: Number.isFinite(rawChangedAt) && rawChangedAt > 0 ? rawChangedAt : null,
-    maintenance: !!state.maintenance,
-    maintenanceEpoch: Number(state.maintenanceEpoch) || 0,
   };
   const previous = account.connection || { connected: true };
   account.connection = next;
-  if ((!next.connected && next.reason === "maintenance")
-      || next.maintenanceEpoch > (previous.maintenanceEpoch || 0)) {
-    stopManualTasksForMaintenance(email);
-    if (notify && !next.connected) showMessageToast(connectionBlockedMessage(next), "warn", 5200);
-  }
   updateAccountConnectionIndicator(email);
   if (email === activeAccount) renderConnectionState(email);
   const duplicate = !next.connected && next.reason === "duplicate_login";
@@ -715,7 +802,10 @@ function switchAccount(email) {
   NEXT_CLAIMS = a.nextClaims || {};
   renderStatus(a.status || {});
   loadRoster(email);           // 团员/物品清单（按账号缓存，首次拉取）
-  loadTasks();                 // 重渲染开关/手动面板（反映该账号的 toggles/params）
+  // The catalog is shared and cached, so switching never leaves the previous
+  // account's team/buttons on screen while another HTTP request is pending.
+  void loadTasks().catch(error => logTo(email, `任务列表加载失败：${error.message}`, "err"));
+  void refreshIntimacy(email);
   // 恢复该账号日志到完整日志页和底部日志抽屉。
   renderLogViews(a.logHtml || "");
   logUnread = 0; updateLogBadge();
@@ -736,11 +826,7 @@ async function accLogout(email) {
 
 // 删除账号（下线 + 清存档）
 async function accDelete(email) {
-  try { await api("/api/accounts/delete", { account: email }); }
-  catch (error) {
-    showMessageToast(`删除账号失败：${error.message}`, "err");
-    return;
-  }
+  try { await api("/api/accounts/delete", { account: email }); } catch (e) {}
   SAVED_ACCTS = SAVED_ACCTS.filter((a) => a.account !== email);
   delete ACCOUNTS[email];
   afterAccountGone(email);
@@ -757,11 +843,12 @@ function afterAccountGone(email) {
     window.dispatchEvent(new CustomEvent("lucima:account-change", { detail: { account: null } }));
     $("appView").classList.add("hidden");
     $("loginView").classList.remove("hidden");
+    syncTaskRendering("login");
     $("loginCancel") && $("loginCancel").classList.add("hidden");
     const el = $("log"); if (el) el.innerHTML = "";
     renderSavedAccounts();
-    // Returning to the login page starts a fresh update gate as well.
-    runStartupUpdateCheck();
+    fillLastLoginAccount();
+    loginStatus("");
   }
   renderAccountSwitcher();
 }
@@ -769,6 +856,18 @@ function afterAccountGone(email) {
 // 装备掉落卡片缓存（日志里的可点击链接 → 弹窗查看）。key 递增。
 const EQUIP_DROPS = {};
 let equipDropSeq = 0;
+let dropCardPruneTimer = null;
+function scheduleDropCardPrune() {
+  if (dropCardPruneTimer != null) return;
+  dropCardPruneTimer = setTimeout(() => {
+    dropCardPruneTimer = null;
+    const used = new Set();
+    for (const account of Object.values(ACCOUNTS)) {
+      for (const match of (account.logHtml || '').matchAll(/data-eqd="([^"]+)"/g)) used.add(match[1]);
+    }
+    for (const key of Object.keys(EQUIP_DROPS)) if (!used.has(key)) delete EQUIP_DROPS[key];
+  }, 1000);
+}
 
 // 统一按结果输出日志：有 lines 就逐条，否则单条 detail。
 // line 可以是字符串，也可以是 {type:"drop", text, equips:[{text,card}]}（掉落：道具文字
@@ -837,6 +936,11 @@ function gaugeHTML({ key, label, color, icon }, g) {
 }
 
 function renderStatus(s) {
+  if (!$('avatar')) return;
+  renderAccountBuffs(s.buffs);
+  const statusKey = JSON.stringify(s);
+  if ($('avatar')._statusKey === statusKey) return;
+  $('avatar')._statusKey = statusKey;
   $("avatar").innerHTML = s.avatar
     ? `<img src="${s.avatar}" alt="${s.name || ""}">`
     : (s.name || "?").slice(0, 1);
@@ -856,12 +960,50 @@ function renderStatus(s) {
   </div>`).join("");
 }
 
+function renderAccountBuffs(snapshot) {
+  const root = $('accountBuffs');
+  if (!root) return;
+  const now = Date.now();
+  const items = (snapshot?.items || []).filter(row => row.source !== '会员'
+    && !String(row.staticId || '').toUpperCase().startsWith('VIP')
+    && (!row.expiresAtMs || row.expiresAtMs > now));
+  const groups = new Map();
+  const rows = items.map(row => {
+    groups.set(row.source, (groups.get(row.source) || 0) + 1);
+    const expiry = row.expiresAtMs ? `剩余 ${fmtRemain(row.expiresAtMs - now)}` : '生效中';
+    const end = row.expiresAtMs ? new Intl.DateTimeFormat('zh-CN', { timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' }).format(row.expiresAtMs) + '（北京时间到期）' : '';
+    const title = [row.name, row.description, end].filter(Boolean).join('\n');
+    return `<div class="account-buff" data-buff-id="${filterEscape(row.id)}" title="${filterEscape(title)}">
+      <div class="account-buff-label"><span class="account-buff-source">${filterEscape(row.source)}</span><span class="account-buff-name">${filterEscape(row.name)}</span></div>
+      ${row.description && row.description !== row.name ? `<div class="account-buff-description">${filterEscape(row.description)}</div>` : ''}
+      <div class="account-buff-expiry">${expiry}</div></div>`;
+  });
+  const summary = [...groups].map(([name, count]) => `${filterEscape(name)} ${count}`).join(' · ');
+  const open = items.length > 0 && root._buffOpen === true;
+  const html = `<button type="button" class="account-buffs-heading" aria-expanded="${open}" ${items.length ? '' : 'disabled'}><span>增益 buff</span><b>${items.length}</b><span class="account-buffs-chevron dd-caret" aria-hidden="true">${open ? '▴' : '▾'}</span></button>
+    <div class="account-buffs-details${open ? '' : ' hidden'}">${summary ? `<div class="account-buff-summary">${summary}</div>` : ''}
+    ${rows.length ? `<div class="account-buff-list">${rows.join('')}</div>` : `<div class="account-buffs-empty">${snapshot?.available ? '暂无生效增益' : '增益信息未同步'}</div>`}</div>`;
+  if (root._buffHTML === html) return;
+  const scrollTop = root.querySelector('.account-buff-list')?.scrollTop || 0;
+  root.innerHTML = html;
+  root._buffHTML = html;
+  const list = root.querySelector('.account-buff-list');
+  if (list) list.scrollTop = scrollTop;
+  root.querySelector('.account-buffs-heading')?.addEventListener('click', LucimaActionWait.wrap(event => {
+    const detail = root.querySelector('.account-buffs-details');
+    const closed = detail.classList.toggle('hidden');
+    root._buffOpen = !closed; event.currentTarget.setAttribute('aria-expanded', String(!closed));
+    event.currentTarget.querySelector('.account-buffs-chevron').textContent = closed ? '▾' : '▴';
+    root._buffHTML = null;
+  }));
+}
+
 // ---------- 团员 / 物品清单 ----------
 // 潜能等级图标（ImprintLV→字形：D/C/B/A/S/SS/SSS）。素材已复制进本项目 assets。
 const GRADE_ICON = "/assets/potential/";
 let rosterTab = "heroes";  // 当前 tab
-let heroElement = "all";
-let heroJob = "ALL";
+let heroElement = ["all"];
+let heroJob = ["ALL"];
 const HERO_ELEMENTS = [
   { id: "all", icon: "/assets/ui/hero-all.png", label: "全部" },
   { id: "Fire", icon: "/assets/attributes/fire.png", label: "火属性" },
@@ -979,7 +1121,7 @@ async function loadRoster(email, force = false) {
     const enriched = await enrichRosterElements(cachedRoster);
     if (ACCOUNTS[email] !== a) return;
     if (a.roster === cachedRoster) a.roster = { ...enriched, items: a.roster.items };
-    if (email === activeAccount) renderRoster(a.roster);
+    if (email === activeAccount && $('heroCount')) renderRoster(a.roster);
     syncInventory(email);
     return;
   }
@@ -995,10 +1137,10 @@ async function loadRoster(email, force = false) {
         full: true, items: r.items || [], removed: [],
       });
     } else a.roster.items = r.items || [];
-    if (email === activeAccount) renderRoster(a.roster);
+    if (email === activeAccount && $('heroCount')) renderRoster(a.roster);
     syncInventory(email);
   } catch (e) {
-    if (ACCOUNTS[email] === a && a.rosterLoadSeq === loadSeq && email === activeAccount) {
+    if (ACCOUNTS[email] === a && a.rosterLoadSeq === loadSeq && email === activeAccount && $('rosterHeroes')) {
       $("rosterHeroes").innerHTML = `<div class="roster-empty">加载失败：${e.message}</div>`;
       $("rosterItems").innerHTML = `<div class="roster-empty">加载失败：${e.message}</div>`;
     }
@@ -1006,6 +1148,7 @@ async function loadRoster(email, force = false) {
 }
 
 function renderRoster(r) {
+  if (!$('heroCount')) return;
   const heroes = r.heroes || [], items = r.items || [];
   $("heroCount").textContent = heroes.length;
   $("itemCount").textContent = items.length;
@@ -1037,18 +1180,19 @@ function heroCardHTML(h) {
 }
 
 function renderRosterHeroes(heroes) {
+  if (!$('rosterHeroes')) return;
   const selected = heroes.filter((hero) =>
-    (heroElement === "all" || heroElementOf(hero) === heroElement)
-    && (heroJob === "ALL" || hero.job === heroJob));
+    (heroElement.includes("all") || heroElement.includes(heroElementOf(hero)))
+    && (heroJob.includes("ALL") || heroJob.includes(hero.job)));
   const tabs = HERO_ELEMENTS.map(({ id, icon, label }) => `
-    <button type="button" class="hero-element-tab ${id === heroElement ? "active" : ""}"
-      data-hero-element="${id}" title="${label}" aria-label="${label}" aria-selected="${id === heroElement}" role="tab">
-      <img src="${icon}" alt="">
+    <button type="button" class="hero-element-tab ${heroElement.includes(id) ? "active" : ""}"
+      data-hero-element="${id}" title="${label}" aria-label="${label}" aria-selected="${heroElement.includes(id)}" role="tab">
+      <img src="${icon}" alt=""><span class="hero-filter-check">✓</span>
     </button>`).join("");
   const jobs = ENCYCLOPEDIA_JOBS.map(({ id, icon, label }) => `
-    <button type="button" class="hero-job-tab ${id === heroJob ? "active" : ""}"
-      data-hero-job="${id}" title="${id === "ALL" ? "全部职业" : label}" aria-label="${id === "ALL" ? "全部职业" : label}" aria-selected="${id === heroJob}" role="tab">
-      <img class="task-icon-light-invert" src="${icon}" alt="">
+    <button type="button" class="hero-job-tab ${heroJob.includes(id) ? "active" : ""}"
+      data-hero-job="${id}" title="${id === "ALL" ? "全部职业" : label}" aria-label="${id === "ALL" ? "全部职业" : label}" aria-selected="${heroJob.includes(id)}" role="tab">
+      <img class="task-icon-light-invert" src="${icon}" alt=""><span class="hero-filter-check">✓</span>
     </button>`).join("");
   const grid = selected.length
     ? selected.map(heroCardHTML).join("")
@@ -1060,16 +1204,20 @@ function renderRosterHeroes(heroes) {
     </div>
     <div class="hero-grid">${grid}</div>`;
   $("rosterHeroes").querySelectorAll(".hero-element-tab").forEach((button) => {
-    button.addEventListener("click", () => {
-      heroElement = button.dataset.heroElement;
+    button.addEventListener("click", LucimaActionWait.wrap(() => {
+      const value = button.dataset.heroElement, selected = heroElement.includes(value);
+      heroElement = value === 'all' ? ['all'] : (selected ? heroElement.filter(v => v !== value && v !== 'all') : [...heroElement.filter(v => v !== 'all'), value]);
+      if (!heroElement.length) heroElement = ['all'];
       renderRosterHeroes(heroes);
-    });
+    }));
   });
   $("rosterHeroes").querySelectorAll(".hero-job-tab").forEach((button) => {
-    button.addEventListener("click", () => {
-      heroJob = button.dataset.heroJob;
+    button.addEventListener("click", LucimaActionWait.wrap(() => {
+      const value = button.dataset.heroJob, selected = heroJob.includes(value);
+      heroJob = value === 'ALL' ? ['ALL'] : (selected ? heroJob.filter(v => v !== value && v !== 'ALL') : [...heroJob.filter(v => v !== 'ALL'), value]);
+      if (!heroJob.length) heroJob = ['ALL'];
       renderRosterHeroes(heroes);
-    });
+    }));
   });
 }
 
@@ -1086,14 +1234,16 @@ function itemCategoryOf(item) {
 
 function itemTileHTML(it) {
   return `
-    <div class="item-tile r${it.rank || 0}" data-item-id="${it.id}" title="${it.name || it.id}">
-      <div class="item-ic"><img src="/assets/items/${it.id}.png" alt="" loading="lazy"
-        onerror="this.style.display='none';this.parentNode.classList.add('noimg');this.parentNode.dataset.t=('${(it.name || it.id)}').slice(0,2)"></div>
+    <div class="item-tile r${it.rank || 0}" data-item-id="${filterEscape(it.id)}" title="${filterEscape(it.name || it.id)}">
+      <div class="item-ic" data-t="${filterEscape(String(it.name || it.id).slice(0,2))}"><img src="/assets/items/${encodeURIComponent(it.id)}.png" alt="" loading="lazy"
+        onerror="this.style.display='none';this.parentNode.classList.add('noimg')"></div>
+      ${it.label ? `<div class="item-label">${filterEscape(it.label)}</div>` : ''}
       <div class="item-cnt">${fmtNum(it.count)}</div>
     </div>`;
 }
 
 function renderRosterItems(items) {
+  if (!$('rosterItems')) return;
   const grouped = Object.fromEntries(ITEM_CATEGORIES.map(({ id }) => [id, []]));
   items.forEach((item) => grouped[itemCategoryOf(item)].push(item));
   const selectedItems = grouped[itemCategory] || [];
@@ -1109,16 +1259,17 @@ function renderRosterItems(items) {
     <div class="item-category-tabs" role="tablist" aria-label="物品分类">${tabs}</div>
     <div class="item-category-grid">${grid}</div>`;
   $("rosterItems").querySelectorAll(".item-category-tab").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", LucimaActionWait.wrap(() => {
       itemCategory = button.dataset.itemCategory;
       renderRosterItems(ACCOUNTS[activeAccount]?.roster?.items || items);
-    });
+    }));
   });
 }
 
 // Keep category controls, scroll position and unchanged image nodes in place
 // when a balance changes. A gain/loss of an item only rebuilds the item grid.
 function updateRosterItems(items) {
+  if (!$('itemCount')) return;
   $("itemCount").textContent = items.length;
   const root = $("rosterItems");
   const grid = root.querySelector(".item-category-grid");
@@ -1139,11 +1290,16 @@ function updateRosterItems(items) {
       if (count.textContent !== label) count.textContent = label;
       tile.title = item.name || item.id;
       tile.className = `item-tile r${item.rank || 0}`;
+      let name = tile.querySelector('.item-label');
+      if (item.label && !name) { name=document.createElement('div'); name.className='item-label'; tile.appendChild(name); }
+      if (name && name.textContent !== (item.label || '')) name.textContent = item.label || '';
+      if (name && !item.label) name.remove();
     });
   }
 }
 
 function applyRosterTab() {
+  if (!$('rosterHeroes')) return;
   document.querySelectorAll(".rtab").forEach((b) =>
     b.classList.toggle("active", b.dataset.rtab === rosterTab));
   $("rosterHeroes").classList.toggle("active", rosterTab === "heroes");
@@ -1153,25 +1309,31 @@ function applyRosterTab() {
 // ---------- 任务 ----------
 let TASKS = [];
 let TOGGLE_TASKS = [];
+let taskCatalogLoaded = false;
+let taskCatalogRequest = null;
 const TEST_ACTIVE_ACCOUNT_SS = "ark_test_active_account";
 const TASK_ICONS = {
+  claim_mail_all: "✉️",
+  chip_crafting:'🔧',vip_supplies:'🎁',
   month_signin: "📅", daily_achievement: "🎯", claim_mail: "✉️", friend_support: "🤝",
   reactor: "⚡", sf_potion: "🧪", sf_starforce: "⭐", sf_tesseract: "🔷",
   dispatch: "🎖️", shop_free: "🛒", shop_diamond: "💎", hunt_sweep: "⚔️", element_sweep: "🔮",
   activity_scene: "🎫", abyss_sweep: "🌌", free_summon: "🎰", store_buy: "🛍️",
-  star_source_shop: "🌈", customized_equip: "🔧", activity_vote: "🗳️",
+  star_source_shop: "🌈", customized_equip: "🔧",
 };
 // 部分任务改用游戏内物品图标（覆盖上面的 emoji）：动力转换=钻石、成长药剂=传说成长药剂、
 // 升星水晶=传说升星水晶、技能模块=技能模块、派遣任务=荣誉勋章、
 // 秘密商店刷新(免费)=金币、虚拟幻境=星源粉末、每日免费招募=招募契约、商店购买=荣誉勋章、
 // 竞技场NPC=旗帜（挑战就是扣旗帜，与基本信息页旗帜表盘同一个 StaticID 4）、每日体力=体力
 const TASK_ICON_IMG = {
+  chip_crafting:'EC14',vip_supplies:'3',
   send_meal: "3", reactor: "2", sf_potion: "103", sf_starforce: "106",
   sf_tesseract: "34", dispatch: "26", shop_free: "1",
   shop_diamond: "2", abyss_sweep: "25", free_summon: "5", store_buy: "26",
-  arena_npc: "4", star_source_shop: "109", activity_vote: "T03",
+  arena_npc: "4", arena_weekly_reward: "6", guild_war_reward: "6", star_source_shop: "109",
 };
 const TASK_ICON_UI = {
+  claim_mail_all: "mail.png",
   month_signin: "UI05_Icon_Monthly.png",
   daily_achievement: "DailyPoint.png",
   redeem_code: "GiftPack.png",
@@ -1210,112 +1372,11 @@ let activeAccount = null;      // 当前查看的账号 email
 let countdownTimer = null;     // 倒计时文案就地重算（每 30s，不发请求）
 let autoLogTimer = null;       // 后台日志轮询（每 1s，拉所有在线账号的新巡检日志）
 const AUTO_LOG_POLL_MS = 1000;
-let autoLogPollPending = false;
 // NEXT_CLAIMS 是"当前账号"nextClaims 的镜像，供 renderNextClaims 复用
 let NEXT_CLAIMS = {};
 
 function acc(email) { return ACCOUNTS[email || activeAccount]; }
 function activeAcc() { return ACCOUNTS[activeAccount]; }
-
-// 账号切换会重绘任务卡片。稳定的"选项"展开状态和只读选项响应按账号留在
-// 前端会话中，恢复浏览位置时不会改变任务配置或重新执行任务。
-function accountUiState(email = activeAccount) {
-  const account = ACCOUNTS[email];
-  if (!account) return null;
-  const state = account.uiState || (account.uiState = {});
-  state.panels ||= Object.create(null);
-  state.optionCache ||= Object.create(null);
-  return state;
-}
-
-function accountPanelExpanded(key, fallback = false, email = activeAccount) {
-  const panels = accountUiState(email)?.panels;
-  return panels && Object.prototype.hasOwnProperty.call(panels, key)
-    ? panels[key] === true : fallback;
-}
-
-function setAccountPanelExpanded(key, expanded, email = activeAccount) {
-  const state = accountUiState(email);
-  if (state) state.panels[key] = !!expanded;
-}
-
-function accountOptionCache(key, email = activeAccount) {
-  const cache = accountUiState(email)?.optionCache;
-  return cache && Object.prototype.hasOwnProperty.call(cache, key) ? cache[key] : null;
-}
-
-function setAccountOptionCache(key, value, email = activeAccount) {
-  const state = accountUiState(email);
-  if (state) state.optionCache[key] = value;
-}
-
-function bindAccountPanel(button, body, key, { label, onOpen, onRestore } = {}) {
-  if (!button || !body) return () => false;
-  const previous = button._accountPanelBinding;
-  if (previous) {
-    if (label) previous.label = label;
-    if (onOpen) previous.onOpen = onOpen;
-    if (onRestore) previous.onRestore = onRestore;
-    previous.restoreAndHydrate();
-    return previous.restoreAndHydrate;
-  }
-  const binding = button._accountPanelBinding = {
-    body, key, label: label || button.textContent.trim().replace(/\s*[▸▾]$/, ""), onOpen, onRestore,
-  };
-  const restore = () => {
-    const expanded = accountPanelExpanded(binding.key);
-    binding.body.classList.toggle("hidden", !expanded);
-    button.setAttribute("aria-expanded", String(expanded));
-    button.textContent = `${binding.label} ${expanded ? "▾" : "▸"}`;
-    return expanded;
-  };
-  const restoreAndHydrate = () => {
-    const expanded = restore();
-    // 切回账号只允许用已有缓存补回界面，绝不因恢复展开状态发起读取。
-    if (expanded && binding.onRestore) void binding.onRestore();
-    return expanded;
-  };
-  binding.restoreAndHydrate = restoreAndHydrate;
-  restoreAndHydrate();
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const expanded = binding.body.classList.contains("hidden");
-    setAccountPanelExpanded(binding.key, expanded);
-    restore();
-    if (expanded && binding.onOpen) void binding.onOpen();
-  });
-  return restoreAndHydrate;
-}
-
-// 标准任务卡片由这里统一接入。新增功能只要沿用 .has-body/.auto-body
-// 或 .shop-widget/.shop-body 及标题区的 mini 按钮，就自动获得按账号恢复展开状态。
-// 只有首次打开需要读取专属选项的卡片，才在自己的 bind 函数中补充 onOpen 行为。
-function accountPanelKey(root, group) {
-  const explicit = root.dataset.accountPanelKey;
-  if (explicit) return explicit;
-  const taskId = root.dataset.id || root.id.replace(/^(?:shop|starshop|customizedequip|sweep|abyss|act|store)-/, "");
-  return `${group}:${taskId}`;
-}
-
-function bindStandardAccountPanels(scope, group) {
-  if (!scope) return [];
-  return [...scope.querySelectorAll(".auto-item.has-body, .shop-widget")].map((root) => {
-    const body = [...root.children].find((node) => node.matches?.(".auto-body, .shop-body"));
-    const head = [...root.children].find((node) => node.matches?.(".auto-head, .shop-head"));
-    const button = [...(head?.children || [])].find((node) => node.matches?.("button.mini"));
-    return bindAccountPanel(button, body, accountPanelKey(root, group));
-  });
-}
-
-// 静态页面（如佣兵团）使用 aria-controls 连接按钮和内容区，也自动接入。
-function bindControlledAccountPanels(scope, group) {
-  if (!scope) return [];
-  return [...scope.querySelectorAll("button[aria-controls]")].map((button) => {
-    const body = document.getElementById(button.getAttribute("aria-controls"));
-    return bindAccountPanel(button, body, group + ":" + (body?.id || button.id));
-  });
-}
 
 // 绝对时刻 -> "MM-DD H:MM"（本地时区，月日补零、小时不补）
 function fmtClock(ms) {
@@ -1341,13 +1402,14 @@ function fmtRemain(diff) {
 // 免费刷商店说"刷新"而不是"领取"（它不是产出型任务）。档期来自货架
 // LastResetTime + 1h1s，见 backend/tasks.secret_shop_next_free。
 const NEXT_WORDS = {
+  chip_crafting:{ready:'可炼制',next:'下次检查'},vip_supplies:{ready:'可领取礼包',next:'下次检查'},
   month_signin: { ready: "可签到", next: "下次签到时间" },
   send_meal: { ready: "可发放至邮箱", next: "下次发放时间" },
   shop_free: { ready: "可免费刷新", next: "下次免费刷新" },
+  guild_war_reward: { ready: "待检查上次团战奖励", next: "下次检查" },
 };
 function fmtNextClaim(nc, taskId = "") {
   if (!nc) return "";
-  if (nc.waiting) return nc.waiting;
   if (nc.blocked) return nc.blocked;
   if (nc.note && !nc.retrying) return nc.note;
   let w = NEXT_WORDS[taskId] || { ready: "可领取", next: "下次领取时间" };
@@ -1401,8 +1463,8 @@ function renderNextClaims() {
   // 竞技场展开页里每个 NPC 的倒计时也要跟着走（同样只重算文案、不发请求）
   document.querySelectorAll("#autoList .auto-item.has-body").forEach((el) => {
     if (el.querySelector(".arena-row")) renderArenaList(el.dataset.id);
-    if (el.dataset.id === 'activity_vote') renderVotingProgress(el.dataset.id);
   });
+  renderArenaRewardStatus();
 }
 
 // 开关/参数改由后端按账号持有。前端读当前账号缓存，改动即 POST /api/toggles 同步。
@@ -1416,113 +1478,66 @@ async function syncToggles() {
   catch (e) { log(`保存开关失败：${e.message}`, "err"); }
 }
 
-// 按物品 ID 保存选择，避免将部分芯片反向展开为全部部位。
-function defaultShopWantedIds() {
-  return BUY_TARGETS.flatMap((target) => target.ids);
+// 选中的自动购买目标 key（存当前账号 params.shop_free.wanted 里，转成 key 展示）
+function getWantedKeys() {
+  const p = getAccParams();
+  const cfg = p.shop_free || {};
+  if (Array.isArray(cfg.wantedKeys)) return BUY_TARGETS.filter(b => cfg.wantedKeys.includes(b.key)).map(b => b.key);
+  const ids = cfg.wanted;
+  if (!Array.isArray(ids)) return BUY_TARGETS.map((b) => b.key);  // 默认全选
+  return BUY_TARGETS.filter((b) => b.ids.some((x) => ids.includes(x))).map((b) => b.key);
 }
-
-function wantedIds() {
-  const saved = getAccParams().shop_free?.wanted;
-  return Array.isArray(saved) ? saved.map(String) : defaultShopWantedIds();
+function shopFreeExcludedChips(email = activeAccount) {
+  const ids = BUY_TARGETS.find(target => target.key === "chip")?.ids || [];
+  const saved = ACCOUNTS[email]?.params?.shop_free?.excludedChipIds;
+  return Array.isArray(saved) ? [...new Set(saved.filter(id => ids.includes(id)))] : [];
 }
-
-function setWantedIds(ids) {
+function setWantedKeys(keys, excludedChipIds = shopFreeExcludedChips()) {
   const a = activeAcc(); if (!a) return;
-  a.params = { ...a.params, shop_free: { ...(a.params.shop_free || {}), wanted: [...ids] } };
+  const ids = [];
+  BUY_TARGETS.forEach((b) => {
+    if (keys.includes(b.key)) ids.push(...b.ids.filter(id => b.key !== "chip" || !excludedChipIds.includes(id)));
+  });
+  a.params = { ...a.params, shop_free: { ...(a.params.shop_free || {}),
+    wanted: ids, wantedKeys: [...keys], excludedChipIds: [...excludedChipIds] } };
   syncToggles();
 }
-
-// 免费/钻石商店共用部位选择控件；目标和部位信息均来自后端。
-function renderShopBuyTargets(id, selectedIds) {
-  const selected = new Set(selectedIds);
-  const options = BUY_TARGETS.map((target) => {
-    const input = `<input type="checkbox" data-shop-target="${target.key}" ${target.ids.every((sid) => selected.has(sid)) ? "checked" : ""}>`;
-    if (!target.parts?.length) {
-      return `<label class="bt-opt">${input}${checkboxUIHTML()}<span>${filterEscape(target.label)}</span></label>`;
-    }
-    const panelId = `shop-parts-${id}-${target.key}`;
-    return `<div class="shop-chip-group" data-shop-group="${target.key}">
-      <div class="bt-opt shop-chip-row">
-        <label class="shop-chip-master">${input}${checkboxUIHTML()}
-          <span class="shop-chip-copy"><span>${filterEscape(target.label)}</span>
-            <span class="shop-chip-summary" aria-live="polite"></span></span>
-        </label>
-        <button type="button" class="mini shop-chip-toggle" aria-controls="${panelId}" aria-expanded="false">部位 ▸</button>
-      </div>
-      <div class="shop-chip-picker hidden" id="${panelId}">
-        <div class="shop-chip-picker-head"><span>购买部位</span>
-          <button type="button" class="mini shop-chip-all">全选</button></div>
-        <div class="shop-chip-grid">${target.parts.map((part) => `<label class="bt-opt shop-chip-part">
-          <input type="checkbox" data-shop-part="${part.id}" ${selected.has(part.id) ? "checked" : ""}>
-          ${checkboxUIHTML()}<span>${filterEscape(part.label)}</span></label>`).join("")}</div>
-      </div>
-    </div>`;
-  }).join("");
-  return `<div class="bt-opts col shop-buy-targets">${options}</div>`;
-}
-
-function bindShopBuyTargets(root, getSelectedIds, saveSelectedIds) {
-  const scope = root.querySelector(".shop-buy-targets");
-  if (!scope) return;
-  const sync = () => {
-    const selected = new Set(getSelectedIds());
-    scope.querySelectorAll("[data-shop-target]").forEach((input) => {
-      const target = BUY_TARGETS.find((entry) => entry.key === input.dataset.shopTarget);
-      const count = target.ids.filter((sid) => selected.has(sid)).length;
-      input.checked = count === target.ids.length;
-      input.indeterminate = count > 0 && count < target.ids.length;
-      const group = input.closest(".shop-chip-group");
-      if (!group) return;
-      const summary = count === target.ids.length ? "全部部位" : !count ? "不购买芯片"
-        : target.parts.filter((part) => selected.has(part.id)).map((part) => part.label).join("、");
-      group.querySelector(".shop-chip-summary").textContent = [target.grade, summary].filter(Boolean).join(" · ");
-    });
-    scope.querySelectorAll("[data-shop-part]").forEach((input) => {
-      input.checked = selected.has(input.dataset.shopPart);
-    });
-  };
-  const update = (ids, checked) => {
-    const selected = new Set(getSelectedIds());
-    ids.forEach((sid) => checked ? selected.add(sid) : selected.delete(sid));
-    saveSelectedIds([...selected]);
-    sync();
-  };
-  scope.addEventListener("change", (event) => {
-    const input = event.target;
-    if (input.matches("[data-shop-target]")) {
-      const target = BUY_TARGETS.find((entry) => entry.key === input.dataset.shopTarget);
-      update(target.ids, input.checked);
-    } else if (input.matches("[data-shop-part]")) {
-      update([input.dataset.shopPart], input.checked);
-    }
+function wantedIds() {
+  const keys = getWantedKeys();
+  const excluded = shopFreeExcludedChips();
+  const ids = [];
+  BUY_TARGETS.forEach((b) => {
+    if (keys.includes(b.key)) ids.push(...b.ids.filter(id => b.key !== "chip" || !excluded.includes(id)));
   });
-  scope.querySelectorAll(".shop-chip-group").forEach((group) => {
-    bindAccountPanel(group.querySelector(".shop-chip-toggle"), group.querySelector(".shop-chip-picker"),
-      `shop-parts:${root.id}:${group.dataset.shopGroup}`, { label: "部位" });
-    group.querySelector(".shop-chip-all").addEventListener("click", () => {
-      const target = BUY_TARGETS.find((entry) => entry.key === group.dataset.shopGroup);
-      update(target.ids, true);
-    });
-  });
-  sync();
+  return ids;
 }
 
 async function loadTasks() {
-  const { toggle, manual, buyTargets } = await api("/api/tasks");
-  TOGGLE_TASKS = toggle;
-  TASKS = manual;
-  // 购买目标表以后端为准；缺失就报错，不本地兜一份默认值（那正是漏买芯片的根因）
-  if (!Array.isArray(buyTargets) || !buyTargets.length) {
-    log("购买目标表加载失败（后端未返回 buyTargets），自动购买目标不可用", "err");
-  } else {
-    BUY_TARGETS = buyTargets;
+  const email = activeAccount, account = ACCOUNTS[email];
+  if (!taskCatalogLoaded) {
+    if (!taskCatalogRequest) {
+      taskCatalogRequest = api("/api/tasks").then(({toggle, manual, buyTargets}) => {
+        TOGGLE_TASKS = toggle;
+        TASKS = manual;
+        // 购买目标只取后端目录，不在本地另造默认数据。
+        if (!Array.isArray(buyTargets) || !buyTargets.length) {
+          logTo(email, "购买目标表加载失败（后端未返回 buyTargets），自动购买目标不可用", "err");
+        } else BUY_TARGETS = buyTargets;
+        taskCatalogLoaded = true;
+      }).finally(() => { taskCatalogRequest = null; });
+    }
+    await taskCatalogRequest;
   }
-  renderAutoPanel(toggle);
-  renderManualPanel(manual);
+  // A late first-load response may belong to an account already switched away
+  // from or removed. Only its current login object may rebuild these controls.
+  if (email !== activeAccount || ACCOUNTS[email] !== account) return;
+  renderAutoPanel(TOGGLE_TASKS);
+  renderManualPanel(TASKS);
 }
 
 // 自动功能面板：开关；带额外配置的任务在自身选项中展示。
 function renderAutoPanel(toggle) {
+  if (!$('autoList')) return;
   const saved = getToggles();
   $("autoList").innerHTML = toggle
     .map((t) => {
@@ -1531,25 +1546,26 @@ function renderAutoPanel(toggle) {
         <div class="tinfo">
           <div class="tname">${t.name}</div>
           <div class="tdesc">${t.desc}</div>
-          <div class="tnext"></div>
+          <div class="tnext${t.ui === "arena_reward" ? " arena-reward-status" : ""}"></div>
         </div>`;
       // 带展开页的开关：外层必须是 div 而不是 label
       // ——<button>（"选项 ▸"）不能放在 <label> 里，点它会连带触发开关。
       // 开关本体单独包一层 <label> 保持点击区。
-      if (t.ui === "arena" || t.ui === "achievement" || t.ui === "redeem_code" || t.ui === "voting") {
+      if (t.ui === "arena" || t.ui === "achievement" || t.ui === "redeem_code" || t.ui === "arena_reward" || t.ui === "mail") {
         const achievement = t.ui === "achievement";
         const redeemCode = t.ui === "redeem_code";
-        const voting = t.ui === 'voting';
-        return `<div class="auto-item has-body ${on ? "on" : ""}" data-id="${t.id}" id="auto-${t.id}">
+        const arenaReward = t.ui === "arena_reward";
+        const mail = t.ui === "mail";
+        return `<div class="auto-item has-body ${arenaReward ? "arena-reward-widget " : ""}${on ? "on" : ""}" data-id="${t.id}" id="auto-${t.id}">
           <div class="auto-head">
             ${inner}
-            <button type="button" class="mini ${voting ? 'voting-toggle' : achievement ? "achievement-toggle" : (redeemCode ? "redeem-code-toggle" : "arena-toggle")}">选项 ▸</button>
+            <button type="button" class="mini ${arenaReward ? "arena-reward-toggle" : achievement ? "achievement-toggle" : (redeemCode ? "redeem-code-toggle" : mail ? "mail-toggle" : "arena-toggle")}">选项 ▸</button>
             <label class="switch-wrap">
               <input type="checkbox" class="switch-in" ${on ? "checked" : ""}>
               <div class="switch"></div>
             </label>
           </div>
-          <div class="auto-body hidden">${voting ? renderVotingOptions() : achievement ? renderAchievementOptions() : (redeemCode ? renderRedeemCodeOptions() : renderArenaBody(t))}</div>
+          <div class="auto-body hidden">${arenaReward ? renderArenaRewardOptions() : achievement ? renderAchievementOptions() : (redeemCode ? renderRedeemCodeOptions() : (mail ? renderMailOptions() : renderArenaBody(t)))}</div>
         </div>`;
       }
       if (t.wantsBuyTargets) {
@@ -1572,22 +1588,21 @@ function renderAutoPanel(toggle) {
       </label>`;
     })
     .join("");
-  // 所有标准自动任务卡片统一绑定展开状态；新增同结构卡片无需单独处理。
-  bindStandardAccountPanels($("autoList"), "auto");
 
   // 开关事件：更新当前账号缓存 + 同步后端 + 开启时立即跑一次
   document.querySelectorAll("#autoList .auto-item").forEach((el) => {
     const box = el.querySelector(".switch-in");
-    box.addEventListener("change", () => {
+    box.addEventListener("change", LucimaActionWait.wrap(() => {
       el.classList.toggle("on", box.checked);
       onToggleChange(el.dataset.id, box.checked);
-    });
+    }));
   });
   // 带展开页的开关：绑定各自的"选项"按钮和内部交互。
   toggle.forEach((t) => { if (t.ui === "arena") bindArenaWidget(t.id); });
   toggle.forEach((t) => { if (t.ui === "achievement") bindAchievementOptions(t.id); });
   toggle.forEach((t) => { if (t.ui === "redeem_code") bindRedeemCodeOptions(t.id); });
-  toggle.forEach((t) => { if (t.ui === 'voting') bindVotingOptions(t.id); });
+  toggle.forEach((t) => { if (t.ui === "arena_reward") bindArenaRewardWidget(t.id); });
+  toggle.forEach((t) => { if (t.ui === "mail") bindMailWidget(t.id); });
   toggle.forEach((t) => { if (t.wantsBuyTargets) bindShopFreeOptions(t.id); });
   renderNextClaims();
 }
@@ -1620,6 +1635,12 @@ function renderRedeemCodeOptions() {
 function bindRedeemCodeOptions(id) {
   const root = $(`auto-${id}`);
   if (!root) return;
+  const body = root.querySelector(".auto-body");
+  const toggle = root.querySelector(".redeem-code-toggle");
+  toggle.addEventListener("click", LucimaActionWait.wrap(() => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+  }));
 }
 
 function achievementCfg(email = activeAccount) {
@@ -1643,8 +1664,13 @@ function bindAchievementOptions(id) {
   if (!root) return;
   const email = activeAccount;
   const body = root.querySelector(".auto-body");
+  const toggle = root.querySelector(".achievement-toggle");
+  toggle.addEventListener("click", LucimaActionWait.wrap(() => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+  }));
   const inputs = [...body.querySelectorAll('input[type="checkbox"]')];
-  inputs.forEach((input) => input.addEventListener("change", async () => {
+  inputs.forEach((input) => input.addEventListener("change", LucimaActionWait.wrap(async () => {
     const account = ACCOUNTS[email];
     if (!account) return;
     const previous = { ...(account.params?.[id] || {}) };
@@ -1664,7 +1690,7 @@ function bindAchievementOptions(id) {
     } finally {
       inputs.forEach((entry) => { entry.disabled = false; });
     }
-  }));
+  })));
 }
 
 function shopFreeEquipCfg(email = activeAccount) {
@@ -1700,12 +1726,23 @@ function setShopFreeEquipCfg(patch) {
 }
 
 function renderShopFreeOptions(id) {
+  const wantedKeys = getWantedKeys();
+  const excludedChips = shopFreeExcludedChips();
   const equipCfg = shopFreeEquipCfg();
+  const options = BUY_TARGETS.map((target) => `<label class="bt-opt">
+    <input type="checkbox" data-free-wkey="${target.key}" value="${target.key}" ${wantedKeys.includes(target.key) ? "checked" : ""}>
+    ${checkboxUIHTML()}
+    <span>${target.label}</span>
+  </label>` + (target.key === "chip" ? `<div class="shop-chip-exclusions${wantedKeys.includes("chip") ? "" : " hidden"}">
+    <span class="shop-chip-hint">不购买以下选中部位（可多选）</span>
+    <div class="shop-chip-parts" role="group" aria-label="不购买的强化芯片部位">${(target.parts || []).map(part =>
+      `<label class="bt-opt shop-chip-part"><input type="checkbox" data-free-chip-exclude="${part.id}" ${excludedChips.includes(part.id) ? "checked" : ""}>${checkboxUIHTML()}<span>${part.label}</span></label>`).join("")}</div>
+  </div>` : "")).join("");
   return `<div class="shop-grid shop-free-grid">
     <div class="shop-left">
       <div class="shop-row col">
         <span class="shop-lbl">自动购买目标</span>
-        ${renderShopBuyTargets(id, wantedIds())}
+        <div class="bt-opts col">${options}</div>
       </div>
       <div class="shop-row col shop-free-equip-options">
         <label class="bt-opt shop-free-equip-toggle">
@@ -1736,19 +1773,35 @@ function bindShopFreeOptions(id) {
   const root = $(`auto-${id}`);
   if (!root) return;
   const body = root.querySelector(".auto-body");
-  bindShopBuyTargets(root, wantedIds, setWantedIds);
+  const toggle = root.querySelector(".shop-free-toggle");
+  toggle.addEventListener("click", LucimaActionWait.wrap(() => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+  }));
+  body.querySelectorAll('[data-free-wkey]').forEach((input) => {
+    input.addEventListener("change", LucimaActionWait.wrap(() => {
+      const keys = [...body.querySelectorAll('[data-free-wkey]:checked')]
+        .map((entry) => entry.value);
+      body.querySelector('.shop-chip-exclusions')?.classList.toggle('hidden', !keys.includes('chip'));
+      setWantedKeys(keys);
+    }));
+  });
+  body.querySelectorAll('[data-free-chip-exclude]').forEach((input) => input.addEventListener('change', LucimaActionWait.wrap(() => {
+    setWantedKeys(getWantedKeys(), [...body.querySelectorAll('[data-free-chip-exclude]:checked')]
+      .map(entry => entry.dataset.freeChipExclude));
+  })));
   const equipToggle = body.querySelector(".free-equip-on");
   const equipControls = body.querySelector(".shop-free-equip-controls");
-  equipToggle?.addEventListener("change", () => {
+  equipToggle?.addEventListener("change", LucimaActionWait.wrap(() => {
     equipControls?.classList.toggle("hidden", !equipToggle.checked);
     setShopFreeEquipCfg({ equipmentEnabled: equipToggle.checked });
-  });
+  }));
   const schemeSlot = body.querySelector(".shop-free-equip-scheme");
   if (schemeSlot) bindDropdown(schemeSlot, (schemeId) => setShopFreeEquipCfg({ equipmentSchemeId: schemeId }));
   body.querySelectorAll('input[name^="shop-free-equip-mode-"]').forEach((input) => {
-    input.addEventListener("change", () => {
+    input.addEventListener("change", LucimaActionWait.wrap(() => {
       if (input.checked) setShopFreeEquipCfg({ equipmentMode: input.value });
-    });
+    }));
   });
   const previous = activeAcc()?.freeShopResult;
   if (previous?.id === id) renderFreeShopResult(id, previous);
@@ -1786,16 +1839,17 @@ function renderFreeShopResult(id, state, email = activeAccount) {
   if (!area) return;
   area.classList.toggle("has-results", !!state?.legendaryMatches?.length);
   area.innerHTML = freeShopResultHTML(state);
-  area.querySelectorAll(".shop-free-buy").forEach((button) => button.addEventListener("click", async () => {
+  area.querySelectorAll(".shop-free-buy").forEach((button) => button.addEventListener("click", LucimaActionWait.wrap(async () => {
     const shelfIndex = Number(button.dataset.shelfIndex);
     const current = account?.freeShopResult;
     if (!account || !Number.isInteger(shelfIndex) || !current?.legendaryMatches?.length) return;
+    const card = current.legendaryMatches.find((item, index) => (Number.isInteger(item.index) ? item.index : index) === shelfIndex);
     const cardStates = { ...(current.cardStates || {}), [shelfIndex]: "buying" };
     const cardErrors = { ...(current.cardErrors || {}) };
     delete cardErrors[shelfIndex];
     renderFreeShopResult(id, { ...current, cardStates, cardErrors }, email);
     try {
-      const result = await api("/api/shop/buy", { account: email, index: shelfIndex });
+      const result = await api("/api/shop/buy", { account: email, index: shelfIndex, expectedEquipmentKey:card?.equipmentKey });
       if (result.status) applyStatus(email, result.status, result.nextClaims);
       const latest = account.freeShopResult || current;
       const nextStates = { ...(latest.cardStates || {}) };
@@ -1818,7 +1872,7 @@ function renderFreeShopResult(id, state, email = activeAccount) {
       renderFreeShopResult(id, { ...latest, cardStates: nextStates, cardErrors: nextErrors }, email);
       logTo(email, `${SHOP_FREE_TAG} 购买出错：${error.message}`, "err");
     }
-  }));
+  })));
 }
 
 function handleAutoTaskResult(result, prefix = "自动·", email = activeAccount, ts = null) {
@@ -1854,7 +1908,6 @@ function renderArenaBody(t) {
 
 // 单个 NPC 行的档期文案（沿用自动任务面板的时间格式：绝对时刻在前、倒计时在括号内）
 function arenaWhen(npc) {
-  if (npc.waiting) return { txt: npc.waiting, cls: "" };
   if (npc.waitingForLogin) return { txt: "等待登录同步刷新", cls: "" };
   const gate = Math.max(npc.nextMs || 0, npc.retryMs || 0);
   if (!gate) return { txt: "可挑战", cls: "ready" };
@@ -1882,11 +1935,11 @@ function renderArenaList(taskId) {
     })
     .join("");
   box.querySelectorAll(".arena-pick").forEach((cb) =>
-    cb.addEventListener("change", () => {
+    cb.addEventListener("change", LucimaActionWait.wrap(() => {
       const row = cb.closest(".arena-row");
       row.classList.toggle("on", cb.checked);
-      saveArenaPicks(taskId);
-    })
+      return saveArenaPicks(taskId);
+    }))
   );
   syncArenaAll(taskId);
 }
@@ -1910,7 +1963,7 @@ function bindArenaAll(taskId) {
   const all = $(`arenaAll-${taskId}`);
   if (!all) return;
   const cb = all.querySelector(".arena-pick-all");
-  cb.addEventListener("change", () => {
+  cb.addEventListener("change", LucimaActionWait.wrap(() => {
     // indeterminate（部分选中）时点一下当作"全选"，符合直觉
     const target = cb.indeterminate ? true : cb.checked;
     document.querySelectorAll(`#arenaList-${taskId} .arena-row`).forEach((row) => {
@@ -1919,8 +1972,8 @@ function bindArenaAll(taskId) {
       row.classList.toggle("on", target);
     });
     syncArenaAll(taskId);
-    saveArenaPicks(taskId);
-  });
+    return saveArenaPicks(taskId);
+  }));
 }
 
 async function saveArenaPicks(taskId) {
@@ -1959,9 +2012,8 @@ async function loadArenaOptions(taskId) {
   if (!root || !email) return false;
   const teamSlot = root.querySelector(".arena-team-slot");
   try {
-    // 切回账号时复用已读取的队伍和 NPC 列表，避免无意义的重复查询。
-    const st = ACCOUNTS[email]?.arena || await api(`/api/arena/options`);
-    if (activeAccount !== email || !ACCOUNTS[email] || !root.isConnected) return false;
+    const st = await api(`/api/arena/options`);
+    if (!ACCOUNTS[email]) return;
     ACCOUNTS[email].arena = st;
     const teamOpts = (st.teams || []).length
       ? st.teams.map((x) => ({ val: x.id, label: x.name }))
@@ -1980,7 +2032,6 @@ async function loadArenaOptions(taskId) {
     renderArenaList(taskId);
     return true;
   } catch (e) {
-    if (activeAccount !== email || !root.isConnected) return false;
     teamSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     const list = $(`arenaList-${taskId}`);
     if (list) list.innerHTML = `<div class="dd-loading err">加载失败：${e.message}</div>`;
@@ -1993,17 +2044,17 @@ function bindArenaWidget(id) {
   if (!root) return;
   const body = root.querySelector(".auto-body");
   const btn = root.querySelector(".arena-toggle");
-  bindAccountPanel(btn, body, `auto:${id}`, { onOpen: async () => {
-    if (!root.dataset.loaded) {
+  btn.addEventListener("click", LucimaActionWait.wrap(async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    body.classList.toggle("hidden");
+    btn.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
       // 只有加载成功才盖"已加载"戳——否则一次失败(未登录/网络抖动)会把面板永久
       // 钉在"加载失败"上，用户重新展开也不再重试。
       if (await loadArenaOptions(id)) root.dataset.loaded = "1";
     }
-  }, onRestore: async () => {
-    if (ACCOUNTS[activeAccount]?.arena && !root.dataset.loaded) {
-      if (await loadArenaOptions(id)) root.dataset.loaded = "1";
-    }
-  }});
+  }));
 }
 
 // 组装 params：给需要购买目标的任务塞 wanted
@@ -2012,6 +2063,7 @@ function toggleParams(ids) {
   ids.forEach((id) => {
     const meta = TOGGLE_TASKS.find((x) => x.id === id);
     if (meta?.ui === "achievement") p[id] = achievementCfg();
+    if (meta?.ui === "mail") p[id] = mailClaimConfig();
     if (meta && meta.wantsBuyTargets) {
       const equipCfg = shopFreeEquipCfg();
       const scheme = equipCfg.scheme;
@@ -2025,13 +2077,36 @@ function toggleParams(ids) {
   return p;
 }
 
+function mailClaimConfig(email = activeAccount) {
+  const value = ACCOUNTS[email]?.params?.claim_mail || {};
+  const minutes = Number(value.energyExpiryMinutes);
+  return { energyExpiryMinutes: Number.isFinite(minutes) ? Math.max(0, Math.min(10080, Math.round(minutes))) : 30 };
+}
+
+function renderMailOptions() {
+  const cfg = mailClaimConfig();
+  return `<div class="mail-claim-options"><label class="mail-claim-field"><span>含能源邮件在过期前</span><input class="mail-energy-window" type="number" min="0" max="10080" step="1" value="${cfg.energyExpiryMinutes}" aria-label="能源邮件倒计时分钟"><span>分钟领取</span></label><p class="tdesc">其他邮件直接领取；领取结果和等待中的能源邮件会写入日志。</p></div>`;
+}
+
+function bindMailWidget(id) {
+  const root = $(`auto-${id}`); if (!root) return;
+  const panel = root.querySelector(".auto-body"), toggle = root.querySelector(".mail-toggle"), input = root.querySelector(".mail-energy-window");
+  toggle.addEventListener("click", LucimaActionWait.wrap(() => { const hidden = panel.classList.toggle("hidden"); toggle.textContent = hidden ? "选项 ▸" : "选项 ▾"; toggle.setAttribute("aria-expanded", String(!hidden)); }));
+  input.addEventListener("change", LucimaActionWait.wrap(() => {
+    const value = Math.max(0, Math.min(10080, Number(input.value) || 0)); input.value = String(value);
+    const a = activeAcc(); if (!a) return;
+    a.params = { ...a.params, claim_mail: { ...(a.params.claim_mail || {}), energyExpiryMinutes: value } };
+    syncToggles(); if (a.toggles?.claim_mail) runToggleTasks(["claim_mail"], "设置·", true).then(() => refreshStatus(true));
+  }));
+}
+
 // 执行指定 toggle 任务集（ids 为空则不发请求）
 // quiet=true 时静默"未到时间/未满"的跳过项（skipped），只输出真正领到的——
 // 供每小时巡检用，避免每次刷一堆"还需 N 小时，跳过"的噪音。
 async function runToggleTasks(ids, prefix = "自动·", quiet = false) {
   if (!ids || !ids.length) return;
   // 竞技场和兑换码由后端逐项写日志，运行期间持续拉取已完成的结果。
-  const streamsResults = ids.includes("arena_npc") || ids.includes("redeem_code") || ids.includes('activity_vote');
+  const streamsResults = ids.includes("arena_npc") || ids.includes("redeem_code");
   const liveLogTimer = streamsResults ? setInterval(pollAutoLogs, 700) : null;
   try {
     const { results } = await api("/api/tasks/auto", { taskIds: ids, params: toggleParams(ids) });
@@ -2071,6 +2146,12 @@ const clampCount = (v) => Math.min(999, Math.max(1, parseInt(v) || 1));
 
 // 手动任务面板：普通任务=自带启动按钮的行；自定义 UI 任务(shop/sweep)=各自控件
 function renderManualPanel(tasks) {
+  if (!$('taskList')) return;
+  // Concurrent first-load callers can share the catalog request. Rebuilding
+  // the same mounted panel for each caller discards just-made selections.
+  const host = $('taskList'), account = activeAcc();
+  if (host._taskAccount === account && host._taskCatalog === tasks) return;
+  host._taskAccount = account; host._taskCatalog = tasks;
   $("taskList").innerHTML = tasks
     .map((t) => {
       if (t.ui === "shop") return renderShopWidget(t);
@@ -2078,7 +2159,11 @@ function renderManualPanel(tasks) {
       if (t.ui === "customizedequip") return renderCustomizedEquipWidget(t);
       if (t.ui === "sweep") return renderSweepWidget(t);
       if (t.ui === "activity") return renderActivityWidget(t);
+      if (t.ui === "activitystore") return renderActivityStoreWidget(t);
+      if (t.ui === "inventorymanagement") return renderInventoryManagement(t);
+      if (t.ui === "energymanagement") return renderEnergyManagement(t);
       if (t.ui === "abyss") return renderAbyssWidget(t);
+      if (t.ui === "intimacy") return renderIntimacyWidget(t);
       if (t.ui === "storebuy") return renderStoreWidget(t);
       // 普通任务：名称+描述在左，启动按钮在右（不再多选+统一执行）
       return `<div class="task-row">
@@ -2089,10 +2174,8 @@ function renderManualPanel(tasks) {
       </div>`;
     })
     .join("");
-  // 所有标准主动任务卡片统一绑定展开状态；功能 bind 只负责专属交互和选项加载。
-  bindStandardAccountPanels($("taskList"), "manual");
   document.querySelectorAll("#taskList .task-run").forEach((b) =>
-    b.addEventListener("click", () => runSingleTask(b.dataset.id, b))
+    b.addEventListener("click", LucimaActionWait.wrap(() => runSingleTask(b.dataset.id, b)))
   );
   tasks.forEach((t) => {
     if (t.ui === "shop") bindShopWidget(t.id);
@@ -2100,9 +2183,99 @@ function renderManualPanel(tasks) {
     if (t.ui === "customizedequip") bindCustomizedEquipWidget(t.id);
     if (t.ui === "sweep") bindSweepWidget(t.id);
     if (t.ui === "activity") bindActivityWidget(t.id);
+    if (t.ui === "activitystore") bindActivityStoreWidget(t.id);
+    if (t.ui === "inventorymanagement") bindInventoryManagement(t);
+    if (t.ui === "energymanagement") bindEnergyManagement(t);
     if (t.ui === "abyss") bindAbyssWidget(t.id);
+    if (t.ui === "intimacy") bindIntimacyWidget(t.id);
     if (t.ui === "storebuy") bindStoreWidget(t.id);
   });
+}
+
+// ---------- 竞技场周奖励（北京时间） ----------
+function arenaRewardConfig(email = activeAccount) {
+  const value = ACCOUNTS[email]?.params?.arena_weekly_reward || {};
+  return { enabled: false, rewardItem: "6", ...value };
+}
+
+function renderArenaRewardOptions() {
+  const cfg = arenaRewardConfig();
+  return `<div class="arena-reward-body">
+      <div class="shop-row col"><span class="shop-lbl">领取奖励（二选一）</span>
+        <div class="bt-opts" role="radiogroup" aria-label="竞技场领取奖励">${[["6", "黄票（神秘契约）"], ["2", "钻石"]].map(([value, label]) =>
+          `<label class="bt-opt"><input type="radio" name="arena-reward-item" value="${value}" ${cfg.rewardItem === value ? "checked" : ""}><span class="radio-box" aria-hidden="true"></span><span>${label}</span></label>`).join("")}</div>
+      </div>
+      <p class="arena-reward-hint">设置自动保存；应用需保持运行且账号在线，恢复或重试也仅在窗口内领取，窗口外不补领。</p>
+      <p class="arena-reward-hint">该功能因无法测试，使用后需要自己检查一下</p>
+      <span class="arena-reward-feedback" role="status"></span>
+  </div>`;
+}
+
+function renderArenaRewardStatus() {
+  const root = document.querySelector(".arena-reward-widget");
+  if (!root) return;
+  const cfg = arenaRewardConfig();
+  const state = NEXT_CLAIMS.arena_weekly_reward || cfg;
+  const slot = root.querySelector(".arena-reward-status");
+  const enabled = !!getToggles().arena_weekly_reward;
+  const reward = (state.rewardItem ?? cfg.rewardItem) === "2" ? "钻石" : "黄票";
+  let text = `${enabled ? "已开启" : "未开启"} · ${reward}`;
+  if (state.blocked) text += ` · ${state.blocked}`;
+  else if (enabled && state.nextMs) {
+    const diff = state.nextMs - Date.now();
+    const stamp = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(state.nextMs));
+    text += state.retrying ? ` · 失败重试：${stamp}` : diff <= 0 ? " · 等待领取" : ` · 下次：${stamp}`;
+  }
+  const receipt = state.lastReward || cfg.lastReward;
+  if (receipt?.claimedAtMs) {
+    const stamp = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(receipt.claimedAtMs));
+    const items = (receipt.items || []).map(item => `${item.name || `财物 ${item.itemStaticId}`} ${Number.isInteger(item.count) && item.count >= 0 ? `×${item.count}` : "（未返回数量）"}`).join("、");
+    const chosen = receipt.requestedItem === "2" ? "钻石" : "黄票";
+    text += ` · 上次成功领取：${stamp}（北京时间）· 实际奖励：${items || `未返回财物明细（本次选择：${chosen}），未返回数量`}`;
+  } else text += " · 上次成功领取：暂无本工具成功领取记录";
+  if (state.lastResult || cfg.lastResult) text += ` · 最近检查：${state.lastResult || cfg.lastResult}`;
+  slot.textContent = text;
+  slot.title = state.lastResult || cfg.lastResult || "";
+}
+
+function bindArenaRewardWidget(id) {
+  const root = $(`auto-${id}`);
+  if (!root) return;
+  const email = activeAccount, account = ACCOUNTS[email];
+  const toggle = root.querySelector(".arena-reward-toggle");
+  const body = root.querySelector(".arena-reward-body");
+  const panel = root.querySelector(".auto-body");
+  toggle.addEventListener("click", LucimaActionWait.wrap(() => {
+    const hidden = panel.classList.toggle("hidden");
+    toggle.textContent = hidden ? "选项 ▸" : "选项 ▾";
+    toggle.setAttribute("aria-expanded", String(!hidden));
+  }));
+  let revision = 0;
+  body.addEventListener("change", LucimaActionWait.wrap(() => {
+    const feedback = root.querySelector(".arena-reward-feedback");
+    const config = {
+      rewardItem: root.querySelector('input[name="arena-reward-item"]:checked')?.value };
+    const currentRevision = ++revision;
+    feedback.textContent = "保存中…";
+    // Serialize this account's edits, including when its widget was remounted.
+    account.arenaRewardSave = (account.arenaRewardSave || Promise.resolve()).catch(() => {}).then(async () => {
+      try {
+      const result = await api("/api/arena/reward/config", { account: email, config });
+      if (ACCOUNTS[email] !== account) return;
+      account.params = { ...account.params, arena_weekly_reward: result.params.arena_weekly_reward };
+      account.nextClaims = { ...account.nextClaims, arena_weekly_reward: result.arenaReward };
+      if (email === activeAccount) {
+        NEXT_CLAIMS = account.nextClaims;
+        renderArenaRewardStatus();
+      }
+      if (currentRevision === revision) feedback.textContent = "已自动保存";
+    } catch (error) {
+      if (currentRevision === revision) feedback.textContent = `保存失败：${error.message}`;
+      logTo(email, `竞技场奖励设置保存失败：${error.message}`, "err");
+    }
+    });
+  }));
+  renderArenaRewardStatus();
 }
 
 // 单个普通任务：点自己的按钮直接执行
@@ -2129,10 +2302,11 @@ async function runSingleTask(id, btn) {
 
 // ---------- 秘密商店刷新(钻石) 自定义控件 ----------
 // 配置按账号命名空间（不同账号刷商店偏好独立）
-const SHOP_LS = "ark_shop_diamond_cfg";  // {count, wantedIds:[StaticID], legOn, schemeId}
+const SHOP_LS = "ark_shop_diamond_cfg";  // {count, wanted:[key], legOn, schemeId}
 const shopLsKey = () => `${SHOP_LS}::${activeAccount || "_"}`;
 // 缺省全选：从后端下发的目标表推导，别再写死 key 列表
 // （后端加/改目标项时这里会自动跟上，不会悄悄漏掉新项）
+const allTargetKeys = () => BUY_TARGETS.map((b) => b.key);
 function getShopCfg() {
   const schemes = EQUIP_FILTER_SCHEMES_DATA;
   const fallbackId = schemes.find((scheme) => scheme.id === "plan-star-shop")?.id || schemes[0]?.id || "";
@@ -2140,26 +2314,38 @@ function getShopCfg() {
     const v = JSON.parse(frontendStorageGet(shopLsKey())) || {};
     return {
       count: v.count || 10,
-      // 旧版 wanted 保存目标 key；首次读取时展开为 ID，旧芯片选项仍表示全部部位。
-      wantedIds: Array.isArray(v.wantedIds) ? v.wantedIds.map(String)
-        : Array.isArray(v.wanted) ? BUY_TARGETS.filter((target) => v.wanted.includes(target.key)).flatMap((target) => target.ids)
-        : defaultShopWantedIds(),
+      wanted: Array.isArray(v.wanted) ? v.wanted : allTargetKeys(),
+      excludedChipIds: Array.isArray(v.excludedChipIds)
+        ? [...new Set(v.excludedChipIds.filter(id => BUY_TARGETS.find(item => item.key === 'chip')?.ids.includes(id)))] : [],
       legOn: !!v.legOn,
       schemeId: schemes.some((scheme) => scheme.id === v.schemeId) ? v.schemeId : fallbackId,
     };
   } catch {
-    return { count: 10, wantedIds: defaultShopWantedIds(), legOn: false, schemeId: fallbackId };
+    return { count: 10, wanted: allTargetKeys(), excludedChipIds: [], legOn: false, schemeId: fallbackId };
   }
 }
 function setShopCfg(patch) {
   frontendStorageSet(shopLsKey(), JSON.stringify({ ...getShopCfg(), ...patch }));
 }
 function shopWantedIds() {
-  return getShopCfg().wantedIds;
+  const {wanted: keys, excludedChipIds} = getShopCfg();
+  const ids = [];
+  BUY_TARGETS.forEach((b) => {
+    if (keys.includes(b.key)) ids.push(...b.ids.filter(id => b.key !== 'chip' || !excludedChipIds.includes(id)));
+  });
+  return ids;
 }
 
 function renderShopWidget(t) {
   const cfg = getShopCfg();
+  const opts = BUY_TARGETS.map(
+    (b) => `<label class="bt-opt"><input type="checkbox" data-wkey="${b.key}" ${cfg.wanted.includes(b.key) ? "checked" : ""}>${checkboxUIHTML()}<span>${b.label}</span></label>` +
+      (b.key === 'chip' ? `<div class="shop-chip-exclusions${cfg.wanted.includes('chip') ? '' : ' hidden'}">
+        <span class="shop-chip-hint">不购买以下选中部位（可多选）</span>
+        <div class="shop-chip-parts" role="group" aria-label="不购买的强化芯片部位">${(b.parts || []).map(part =>
+          `<label class="bt-opt shop-chip-part"><input type="checkbox" data-chip-exclude="${part.id}" ${cfg.excludedChipIds.includes(part.id) ? 'checked' : ''}>${checkboxUIHTML()}<span>${part.label}</span></label>`).join('')}</div>
+      </div>` : '')
+  ).join("");
   return `<div class="shop-widget" id="shop-${t.id}">
     <div class="shop-head">
       <div class="ticon">${taskIconHTML(t.id, "💎")}</div>
@@ -2180,7 +2366,7 @@ function renderShopWidget(t) {
           </div>
           <div class="shop-row col">
             <span class="shop-lbl">自动购买目标</span>
-            ${renderShopBuyTargets(t.id, cfg.wantedIds)}
+            <div class="bt-opts col">${opts}</div>
           </div>
           <div class="shop-row col">
             <label class="bt-opt"><input type="checkbox" class="leg-on" ${cfg.legOn ? "checked" : ""}>${checkboxUIHTML()}<span>85级传说装备</span></label>
@@ -2203,27 +2389,42 @@ function renderShopWidget(t) {
 function bindShopWidget(id) {
   const root = $(`shop-${id}`);
   if (!root) return;
+  const body = root.querySelector(".shop-body");
+  const toggle = root.querySelector(".shop-toggle");
+  toggle.addEventListener("click", LucimaActionWait.wrap(() => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+  }));
   const cntIn = root.querySelector(".shop-count");
   cntIn.addEventListener("input", () => { cntIn.value = cntIn.value.replace(/[^0-9]/g, "").slice(0, 3); });
   cntIn.addEventListener("blur", () => { cntIn.value = clampCount(cntIn.value); setShopCfg({ count: parseInt(cntIn.value) }); });
   root.querySelectorAll(".count-btn").forEach((btn) =>
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", LucimaActionWait.wrap(() => {
       cntIn.value = clampCount((parseInt(cntIn.value) || 10) + parseInt(btn.dataset.d));
       setShopCfg({ count: parseInt(cntIn.value) });
-    })
+    }))
   );
-  bindShopBuyTargets(root, shopWantedIds, (wantedIds) => setShopCfg({ wantedIds }));
+  root.querySelectorAll("[data-wkey]").forEach((cb) =>
+    cb.addEventListener("change", LucimaActionWait.wrap(() => {
+      const wanted = [...root.querySelectorAll("[data-wkey]:checked")].map((x) => x.dataset.wkey);
+      setShopCfg({ wanted });
+      root.querySelector('.shop-chip-exclusions')?.classList.toggle('hidden', !wanted.includes('chip'));
+    }))
+  );
+  root.querySelectorAll('[data-chip-exclude]').forEach(input => input.addEventListener('change', LucimaActionWait.wrap(() => {
+    setShopCfg({excludedChipIds:[...root.querySelectorAll('[data-chip-exclude]:checked')].map(node => node.dataset.chipExclude)});
+  })));
   const legOn = root.querySelector(".leg-on");
   const schemeWrap = root.querySelector(".shop-equip-scheme-wrap");
-  legOn.addEventListener("change", () => {
+  legOn.addEventListener("change", LucimaActionWait.wrap(() => {
     schemeWrap.classList.toggle("hidden", !legOn.checked);
     setShopCfg({ legOn: legOn.checked });
-  });
+  }));
   bindDropdown(root.querySelector(".shop-equip-scheme"), (schemeId) => setShopCfg({ schemeId }));
-  root.querySelector(".shop-start").addEventListener("click", () => {
+  root.querySelector(".shop-start").addEventListener("click", LucimaActionWait.wrap(() => {
     if (shopRunning[activeAccount]) requestSecretShopStop(id, activeAccount);
-    else runShopDiamond(id);
-  });
+    else return runShopDiamond(id);
+  }));
   const saved = activeAcc()?.secretShopResult;
   if (saved?.id === id) renderSecretShopState(id, saved);
   if (shopRunning[activeAccount]) {
@@ -2267,9 +2468,9 @@ function secretShopStateHTML(state) {
   if (state?.cards?.length) {
     const cardStates = state.cardStates || {};
     const buying = Object.values(cardStates).includes("buying");
-    return `<div class="star-source-result-head"><span>第 ${state.round} 次刷新命中</span>
+    return `<div class="star-source-result-head"><span>${state.notification ? '通知中的当前匹配装备' : `第 ${state.round} 次刷新命中`}</span>
       <div class="star-source-result-actions"><b>${state.cards.length} 件装备</b>
-        ${state.kind === "matched" ? `<button type="button" class="btn ghost secret-shop-skip"${buying ? " disabled" : ""}>跳过</button>` : ""}
+      ${state.kind === "matched" && !state.notification ? `<button type="button" class="btn ghost secret-shop-skip"${buying ? " disabled" : ""}>跳过</button>` : ""}
       </div></div>
       <div class="star-source-card-grid">${state.cards.map((card, cardIndex) => {
         const shelfIndex = Number.isInteger(card.index) ? card.index : cardIndex;
@@ -2353,7 +2554,7 @@ function bindSecretShopResultActions(id, email) {
   const area = $(`cardArea-${id}`);
   if (!area) return;
 
-  area.querySelector(".secret-shop-skip")?.addEventListener("click", () => {
+  area.querySelector(".secret-shop-skip")?.addEventListener("click", LucimaActionWait.wrap(() => {
     const current = account.secretShopResult;
     if (Object.values(current?.cardStates || {}).includes("buying")) return;
     const boughtCount = current.cards.reduce((count, card, cardIndex) => {
@@ -2361,9 +2562,9 @@ function bindSecretShopResultActions(id, email) {
       return count + (current.cardStates?.[shelfIndex] === "bought" ? 1 : 0);
     }, 0);
     resolveSecretShopPending(id, email, { action: "skip", count: boughtCount });
-  });
+  }));
 
-  area.querySelectorAll(".secret-shop-buy").forEach((button) => button.addEventListener("click", async () => {
+  area.querySelectorAll(".secret-shop-buy").forEach((button) => button.addEventListener("click", LucimaActionWait.wrap(async () => {
     const shelfIndex = Number(button.dataset.shelfIndex);
     let current = account.secretShopResult;
     if (!Number.isInteger(shelfIndex) || current?.kind !== "matched") return;
@@ -2374,7 +2575,7 @@ function bindSecretShopResultActions(id, email) {
     delete cardErrors[shelfIndex];
     renderSecretShopState(id, { ...current, cardStates, cardErrors }, email);
     try {
-      const result = await api("/api/shop/buy", { account: email, index: shelfIndex });
+      const result = await api("/api/shop/buy", { account: email, index: shelfIndex, expectedEquipmentKey:card?.equipmentKey });
       if (result.status) applyStatus(email, result.status, result.nextClaims);
       current = account.secretShopResult;
       const nextStates = { ...(current.cardStates || {}) };
@@ -2408,7 +2609,7 @@ function bindSecretShopResultActions(id, email) {
     if (shopStopRequested[email] && account.secretShopPending) {
       resolveSecretShopPending(id, email, { action: "stop", count: 0 });
     }
-  }));
+  })));
 }
 
 function waitForSecretShopDecision(id, state, email) {
@@ -2642,11 +2843,18 @@ const equipCardResizeObserver = typeof ResizeObserver !== "undefined"
   ? new ResizeObserver((entries) => entries.forEach((entry) => fitEquipCardShell(entry.target)))
   : null;
 const equipCardMutationObserver = typeof MutationObserver !== "undefined"
-  ? new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach((node) => {
-    if (node.nodeType !== 1) return;
+  ? new MutationObserver((records) => records.forEach((record) => {
+    record.removedNodes.forEach(node => {
+      if (node.nodeType !== 1) return;
+      const unobserve = shell => { equipCardResizeObserver?.unobserve(shell); delete shell.dataset.eqObserved; };
+      if (node.matches?.('.eq-card-shell')) unobserve(node);
+      node.querySelectorAll?.('.eq-card-shell').forEach(unobserve);
+    });
+    record.addedNodes.forEach((node) => {
+    if (node.nodeType !== 1 || !node.isConnected) return;
     if (node.matches?.(".eq-card-shell")) observeEquipCardShell(node);
     node.querySelectorAll?.(".eq-card-shell").forEach(observeEquipCardShell);
-  })))
+  }); }))
   : null;
 
 function fitEquipCardShell(shell) {
@@ -2719,21 +2927,21 @@ function renderPickArea(email) {
       <div class="card-hint">全部处理完后继续下一次刷新（剩余 ${remain} 张未决策）</div>
     </div>`;
   area.querySelectorAll(".cnav").forEach((b) =>
-    b.addEventListener("click", () => { pk.cur += parseInt(b.dataset.nav); renderPickArea(email); })
+    b.addEventListener("click", LucimaActionWait.wrap(() => { pk.cur += parseInt(b.dataset.nav); renderPickArea(email); }))
   );
-  area.querySelector(".card-skip").addEventListener("click", () => { pk.decided[pk.cur] = "skip"; pickNext(email); });
-  area.querySelector(".card-buy").addEventListener("click", async () => {
+  area.querySelector(".card-skip").addEventListener("click", LucimaActionWait.wrap(() => { pk.decided[pk.cur] = "skip"; pickNext(email); }));
+  area.querySelector(".card-buy").addEventListener("click", LucimaActionWait.wrap(async () => {
     const buyBtn = area.querySelector(".card-buy");
     buyBtn.disabled = true; buyBtn.textContent = "购买中…";
     const c2 = pk.cards[pk.cur];
     try {
-      const res = await api("/api/shop/buy", { account: email, index: c2.index });
+      const res = await api("/api/shop/buy", { account: email, index: c2.index, expectedEquipmentKey:c2.equipmentKey });
       if (res.status) applyStatus(email, res.status, res.nextClaims);
       if (res.ok) { logTo(email, `${SHOP_TAG} ${res.detail}`, "ok"); pk.decided[pk.cur] = "buy"; }
       else { logTo(email, `${SHOP_TAG} ${res.detail}`, "err"); pk.decided[pk.cur] = "skip"; }
     } catch (e) { logTo(email, `购买出错：${e.message}`, "err"); pk.decided[pk.cur] = "skip"; }
     pickNext(email);
-  });
+  }));
 }
 
 // 手选推进到下一张未决策；全部决策完 → 清状态 + 恢复空占位 + resolve（放行刷新循环）。
@@ -2761,10 +2969,6 @@ const STAR_SOURCE_SHOP_LS = "ark_star_source_shop_cfg";
 const starSourceShopLsKey = () => STAR_SOURCE_SHOP_LS + "::" + (activeAccount || "_");
 const starSourceRunning = {};
 const starSourceStopRequested = {};
-
-function starSourceHasPendingPurchase(state) {
-  return Object.values(state?.cardStates || {}).includes("buying");
-}
 
 function starSourceSchemeOptions() {
   return EQUIP_FILTER_SCHEMES_DATA.map((scheme) => ({
@@ -2794,12 +2998,12 @@ function setStarSourceShopCfg(patch) {
 
 function starSourceStateHTML(state) {
   if (state?.cards?.length) {
-    const title = "第 " + state.round + " 次刷新命中";
+    const title = state.notification ? "通知中的当前匹配装备" : "第 " + state.round + " 次刷新命中";
     const cardStates = state.cardStates || {};
-    const buying = starSourceHasPendingPurchase(state);
+    const buying = Object.values(cardStates).includes("buying");
     return '<div class="star-source-result-head"><span>' + title
       + '</span><div class="star-source-result-actions"><b>' + state.cards.length + ' 件装备</b>'
-      + (state.kind === "matched" ? '<button type="button" class="btn ghost star-source-skip"'
+      + (state.kind === "matched" && !state.notification ? '<button type="button" class="btn ghost star-source-skip"'
         + (buying ? ' disabled' : '') + '>跳过</button>' : '') + '</div></div>'
       + '<div class="star-source-card-grid">'
       + state.cards.map((card, cardIndex) => {
@@ -2829,10 +3033,6 @@ function starSourceStateHTML(state) {
     return '<div class="card-empty">' + icon + '<div class="ce-text">'
       + filterEscape(state.message || "刷新失败") + '</div></div>';
   }
-  if (state?.kind === "stopped") {
-    return '<div class="card-empty">' + icon + '<div class="ce-text">已停止刷新，已刷新 '
-      + state.total + ' 次</div></div>';
-  }
   if (state?.kind === "empty") {
     const summaries = [];
     if (state.purchasedMatches) summaries.push("已购买 " + state.purchasedMatches + " 件命中装备");
@@ -2854,8 +3054,6 @@ function renderStarSourceState(id, state, email = activeAccount) {
   area.classList.toggle("has-results", !!state?.cards?.length);
   area.innerHTML = starSourceStateHTML(state);
   bindStarSourceResultActions(id, email);
-  setStarSourceStartState(id, email, starSourceRunning[email]
-    ? (starSourceStopRequested[email] ? "stopping" : "running") : "idle");
 }
 
 function setStarSourceStartState(id, email, mode) {
@@ -2864,10 +3062,9 @@ function setStarSourceStartState(id, email, mode) {
   if (!button) return;
   const stopping = mode === "stopping";
   const active = mode === "running" || mode === "matched" || stopping;
-  const buying = starSourceHasPendingPurchase(ACCOUNTS[email]?.starSourceResult);
-  button.disabled = stopping || (!active && buying);
+  button.disabled = stopping;
   button.classList.toggle("task-stop-button", active);
-  button.textContent = stopping ? "停止中…" : active ? "停止" : buying ? "购买中…" : "▶ 开始刷新";
+  button.textContent = stopping ? "停止中…" : active ? "停止" : "▶ 开始刷新";
 }
 
 function resolveStarSourcePending(id, email, decision) {
@@ -2884,12 +3081,11 @@ function requestStarSourceStop(id, email) {
   if (!email || !starSourceRunning[email]) return;
   starSourceStopRequested[email] = true;
   const account = ACCOUNTS[email];
-  const buying = starSourceHasPendingPurchase(account?.starSourceResult);
+  const buying = Object.values(account?.starSourceResult?.cardStates || {}).includes("buying");
   if (!buying && account?.starSourcePending) {
     resolveStarSourcePending(id, email, { action: "stop" });
   } else {
     setStarSourceStartState(id, email, "stopping");
-    logTo(email, "[星源商店刷新] 已请求停止，等待当前操作结束", "warn");
   }
 }
 
@@ -2900,20 +3096,16 @@ function bindStarSourceResultActions(id, email) {
   const area = $("starSourceArea-" + id);
   if (!area) return;
 
-  area.querySelector(".star-source-skip")?.addEventListener("click", () => {
+  area.querySelector(".star-source-skip")?.addEventListener("click", LucimaActionWait.wrap(() => {
     const current = account.starSourceResult;
-    if (starSourceHasPendingPurchase(current)) return;
-    const resolved = resolveStarSourcePending(id, email, { action: "skip" });
-    if (!resolved && !starSourceRunning[email]) {
-      renderStarSourceState(id, { kind: "stopped", total: current.round }, email);
-    }
-  });
+    if (Object.values(current?.cardStates || {}).includes("buying")) return;
+    resolveStarSourcePending(id, email, { action: "skip" });
+  }));
 
-  area.querySelectorAll(".star-source-buy").forEach((button) => button.addEventListener("click", async () => {
+  area.querySelectorAll(".star-source-buy").forEach((button) => button.addEventListener("click", LucimaActionWait.wrap(async () => {
     const shopIndex = Number(button.dataset.shopIndex);
     let current = account.starSourceResult;
     if (!Number.isInteger(shopIndex) || current?.kind !== "matched") return;
-    if (["buying", "bought"].includes(current.cardStates?.[shopIndex])) return;
     const card = current.cards.find((item, index) =>
       (Number.isInteger(item.shopIndex) ? item.shopIndex : index) === shopIndex);
     const cardStates = { ...(current.cardStates || {}), [shopIndex]: "buying" };
@@ -2921,7 +3113,7 @@ function bindStarSourceResultActions(id, email) {
     delete cardErrors[shopIndex];
     renderStarSourceState(id, { ...current, cardStates, cardErrors }, email);
     try {
-      const result = await api("/api/star-source/buy", { account: email, index: shopIndex });
+      const result = await api("/api/star-source/buy", { account: email, index: shopIndex, expectedEquipmentKey:card?.equipmentKey });
       if (result.status) applyStatus(email, result.status, result.nextClaims);
       current = account.starSourceResult;
       const nextStates = { ...(current.cardStates || {}) };
@@ -2954,13 +3146,11 @@ function bindStarSourceResultActions(id, email) {
       delete nextStates[shopIndex];
       renderStarSourceState(id, { ...current, cardStates: nextStates, cardErrors: nextErrors }, email);
       logTo(email, "[星源商店刷新] 购买出错：" + error.message, "err");
-    } finally {
-      // 多件装备可同时购买，停止时必须等所有已发出的购买请求收尾。
-      if (starSourceStopRequested[email] && !starSourceHasPendingPurchase(account.starSourceResult)) {
-        resolveStarSourcePending(id, email, { action: "stop" });
-      }
     }
-  }));
+    if (starSourceStopRequested[email] && account.starSourcePending) {
+      resolveStarSourcePending(id, email, { action: "stop" });
+    }
+  })));
 }
 
 function waitForStarSourceSkip(id, state, email) {
@@ -2994,16 +3184,33 @@ function renderStarSourceShopWidget(task) {
     + '<button type="button" class="count-btn" data-d="-1">−</button>'
     + '<input type="text" inputmode="numeric" class="count-in star-source-count" value="' + cfg.count + '">'
     + '<span class="count-unit">次</span><button type="button" class="count-btn" data-d="1">+</button>'
-    + '</div></div><div class="shop-row col"><span class="shop-lbl">筛选方案</span>'
+    + '</div><span class="star-source-balance" title="当前星源"><img src="/assets/items/109.png" alt="星源"><b>'
+    + starSourceBalanceText() + '</b></span></div><div class="shop-row col"><span class="shop-lbl">筛选方案</span>'
     + dropdownHTML("star-source-scheme", options, cfg.schemeId, "暂无筛选方案")
     + '</div><button type="button" class="btn primary star-source-start">▶ 开始刷新</button></div>'
     + '<div class="shop-right"><div class="card-area star-source-card-area" id="starSourceArea-' + task.id + '">'
     + starSourceStateHTML() + '</div></div></div></div></div>';
 }
 
+function starSourceBalanceText(email = activeAccount) {
+  const value = ACCOUNTS[email]?.status?.currencies?.starSource;
+  return Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
+}
+function renderStarSourceBalance(email = activeAccount) {
+  if (email !== activeAccount) return;
+  const value = document.querySelector('.star-source-balance b');
+  if (value) value.textContent = starSourceBalanceText(email);
+}
+
 function bindStarSourceShopWidget(id) {
   const root = $("starshop-" + id);
   if (!root) return;
+  const body = root.querySelector(".shop-body");
+  const toggle = root.querySelector(".shop-toggle");
+  toggle.addEventListener("click", LucimaActionWait.wrap(() => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+  }));
   const countInput = root.querySelector(".star-source-count");
   countInput.addEventListener("input", () => {
     countInput.value = countInput.value.replace(/[^0-9]/g, "").slice(0, 3);
@@ -3013,23 +3220,23 @@ function bindStarSourceShopWidget(id) {
     setStarSourceShopCfg({ count: parseInt(countInput.value) });
   });
   root.querySelectorAll(".count-btn").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", LucimaActionWait.wrap(() => {
       countInput.value = clampCount((parseInt(countInput.value) || 10) + parseInt(button.dataset.d));
       setStarSourceShopCfg({ count: parseInt(countInput.value) });
-    });
+    }));
   });
   bindDropdown(root.querySelector(".star-source-scheme"), (schemeId) => {
     setStarSourceShopCfg({ schemeId });
   });
-  root.querySelector(".star-source-start").addEventListener("click", () => {
+  root.querySelector(".star-source-start").addEventListener("click", LucimaActionWait.wrap(() => {
     if (starSourceRunning[activeAccount]) {
       requestStarSourceStop(id, activeAccount);
       return;
     }
     countInput.value = clampCount(countInput.value);
     setStarSourceShopCfg({ count: parseInt(countInput.value) });
-    runStarSourceShop(id);
-  });
+    return runStarSourceShop(id);
+  }));
   const saved = activeAcc()?.starSourceResult;
   if (saved?.id === id) renderStarSourceState(id, saved);
   if (starSourceRunning[activeAccount]) {
@@ -3046,8 +3253,7 @@ function starSourceSchemeCanMatch(scheme) {
 
 async function runStarSourceShop(id) {
   const email = activeAccount;
-  if (!email || starSourceRunning[email]
-      || starSourceHasPendingPurchase(ACCOUNTS[email]?.starSourceResult)) return;
+  if (!email || starSourceRunning[email]) return;
   const cfg = getStarSourceShopCfg();
   const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === cfg.schemeId);
   const root = $("starshop-" + id);
@@ -3138,12 +3344,6 @@ async function runStarSourceShop(id) {
         stopped = true;
         break;
       }
-    }
-    if (stopped) {
-      if (!ACCOUNTS[email]?.starSourceResult?.cards?.length) {
-        renderStarSourceState(id, { kind: "stopped", total: completed }, email);
-      }
-      logTo(email, "[星源商店刷新] 已停止，已完成 " + completed + " 次刷新", "warn");
     }
     if (!failed && !stopped) {
       renderStarSourceState(id, {
@@ -3459,9 +3659,9 @@ function updateCustomizedEquipWidget(id, state, message = "") {
   });
   bindCustomizedSetButton(id);
   root.querySelectorAll(".customized-choice-btn").forEach((button) => {
-    button.addEventListener("click", () => customizedEquipAction(id, "chooseSub", {
+    button.addEventListener("click", LucimaActionWait.wrap(() => customizedEquipAction(id, "chooseSub", {
       accept: button.dataset.customizedChoice === "candidate",
-    }));
+    })));
   });
   const rewarded = customizedEquipIsRewarded(state);
   const status = rewarded ? { valid: true, message: "装备已领取" } : customizedEquipRuleStatus(state);
@@ -3477,10 +3677,10 @@ function bindCustomizedSetButton(id) {
   const button = root?.querySelector(".customized-set-button");
   const popover = root?.querySelector(".customized-set-popover");
   if (!button || !popover) return;
-  button.addEventListener("click", () => {
+  button.addEventListener("click", LucimaActionWait.wrap(() => {
     const open = popover.classList.toggle("hidden");
     button.setAttribute("aria-expanded", String(!open));
-  });
+  }));
 }
 
 async function customizedEquipAction(id, action, data = {}) {
@@ -3508,20 +3708,22 @@ function bindCustomizedEquipWidget(id) {
   if (!root) return;
   const body = root.querySelector(".shop-body");
   const toggle = root.querySelector(".customized-equip-toggle");
-  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
-    if (!root._customizedLoaded) {
+  toggle.addEventListener("click", LucimaActionWait.wrap(async () => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+    if (!body.classList.contains("hidden") && !root._customizedLoaded) {
       root._customizedLoaded = true;
       await customizedEquipAction(id, "query", { scheme: customizedEquipSchemeSnapshot() });
     }
-  }});
-  bindCustomizedSetButton(id);
-  root.querySelector(".customized-set-popover").addEventListener("click", (event) => {
-    const option = event.target.closest("[data-customized-set]");
-    if (option) customizedEquipAction(id, "chooseSet", { set: option.dataset.customizedSet });
-  });
-  root.querySelectorAll("[data-customized-reset]").forEach((button) => button.addEventListener("click", () => {
-    customizedEquipAction(id, "reset", { level: button.dataset.customizedReset });
   }));
+  bindCustomizedSetButton(id);
+  root.querySelector(".customized-set-popover").addEventListener("click", LucimaActionWait.wrap((event) => {
+    const option = event.target.closest("[data-customized-set]");
+    if (option) return customizedEquipAction(id, "chooseSet", { set: option.dataset.customizedSet });
+  }));
+  root.querySelectorAll("[data-customized-reset]").forEach((button) => button.addEventListener("click", LucimaActionWait.wrap(() => {
+    return customizedEquipAction(id, "reset", { level: button.dataset.customizedReset });
+  })));
   bindDropdown(root.querySelector(".customized-scheme"), (schemeId) => {
     setCustomizedEquipCfg({ schemeId });
     customizedEquipAction(id, "query", { scheme: customizedEquipSchemeSnapshot() });
@@ -3532,11 +3734,11 @@ function bindCustomizedEquipWidget(id) {
     count.value = clampCount(count.value);
     setCustomizedEquipCfg({ count: Number(count.value) });
   });
-  root.querySelector(".customized-equip-start").addEventListener("click", () => {
+  root.querySelector(".customized-equip-start").addEventListener("click", LucimaActionWait.wrap(() => {
     if (customizedEquipRunning[activeAccount]) requestCustomizedEquipStop(id, activeAccount);
-    else runCustomizedEquip(id);
-  });
-  root.querySelector(".customized-equip-reward").addEventListener("click", () => customizedEquipAction(id, "reward"));
+    else return runCustomizedEquip(id);
+  }));
+  root.querySelector(".customized-equip-reward").addEventListener("click", LucimaActionWait.wrap(() => customizedEquipAction(id, "reward")));
   updateCustomizedEquipWidget(id, {});
 }
 
@@ -3627,23 +3829,172 @@ function requestCustomizedEquipStop(id, email) {
   if (root) syncCustomizedEquipControls(root);
 }
 
+// ---------- 扫荡卖装与本轮收益（按账号、任务隔离） ----------
+const sweepSaleStates = new Map();
+const SALE_RESOURCES = [['1','金币'],['EC14','武器粉'],['EC24','头盔粉'],['EC34','铠甲粉'],['EC44','项链粉'],['EC54','戒指粉'],['EC64','靴子粉']];
+function sweepSaleState(id, email = activeAccount) {
+  const key = JSON.stringify([email, id]);
+  if (!sweepSaleStates.has(key)) sweepSaleStates.set(key, {enabled:false, initialized:false,
+    includeEpic85:false, sold:0, sales:{}, rewards:{}, since:0, running:false, finished:false, error:'', pending:Promise.resolve(), busy:false});
+  return sweepSaleStates.get(key);
+}
+function addSweepRewards(target, entries) {
+  for (const entry of entries || []) {
+    if (!entry?.id || !Number.isFinite(entry.count) || entry.count <= 0) continue;
+    const key = JSON.stringify([entry.kind || 'Item', String(entry.id)]);
+    target[key] = {...entry, count:(target[key]?.count || 0) + entry.count};
+  }
+}
+function sweepRewardText(entries) {
+  const suffix = {Equipment:'（装备）',Role:'（角色）',Artifact:'（羁绊）'};
+  return Object.values(entries).map(row => `${row.name || row.id}${suffix[row.kind] || ''} ×${row.count.toLocaleString('zh-CN')}`).join('、') || '无';
+}
+function sweepSaleHint(includeEpic85, id = '') {
+  const interval = id === 'activity_scene' && getActCfg().mode === 'progress' ? '每通关10关' : '每10把';
+  return `开始时、${interval}及结束时清理未强化、未锁定且未穿戴的装备；保留70级以上传说${includeEpic85 ? '，同时卖出85级史诗' : '及85级史诗'}。`;
+}
+function sweepSaleHTML(id, enabled, includeEpic85 = false) {
+  return `<div class="sweep-sale-control" data-sale-scope="${id}">
+    <div class="sweep-sale-options">
+    <label class="target-score-toggle"><input type="checkbox" role="switch" class="sweep-auto-sell" ${enabled ? 'checked' : ''}>
+      <span class="target-score-switch" aria-hidden="true"></span><span>自动贩卖装备</span></label>
+    <span class="sweep-sale-separator" aria-hidden="true">—</span>
+    <label class="target-score-toggle"><input type="checkbox" role="switch" class="sweep-sell-epic85" ${includeEpic85 ? 'checked' : ''}>
+      <span class="target-score-switch" aria-hidden="true"></span><span>含85级史诗</span></label>
+    </div>
+    <p class="sweep-sale-hint">${sweepSaleHint(includeEpic85,id)}</p>
+    <div class="sweep-sale-totals${enabled ? '' : ' hidden'}" aria-live="polite"></div>
+    <div class="sweep-sale-error" role="status"></div>
+  </div>`;
+}
+function renderSweepSale(id, email = activeAccount) {
+  if (email !== activeAccount) return;
+  const root = document.querySelector(`[data-sale-scope="${id}"]`);
+  if (!root) return;
+  const state = sweepSaleState(id, email);
+  const counts = Object.fromEntries(Object.values(state.sales).map(row => [row.id, row.count]));
+  root.querySelector('.sweep-sale-totals').innerHTML = `<span class="sweep-sale-caption">本轮贩卖 ${state.sold} 件${state.busy ? ' · 正在贩卖…' : ''}</span>` +
+    SALE_RESOURCES.map(([sid,label]) => `<span class="sweep-sale-resource">${label} <b>+${(counts[sid] || 0).toLocaleString('zh-CN')}</b></span>`).join('');
+  root.querySelector('.sweep-sale-error').textContent = state.error;
+  const input = root.querySelector('.sweep-auto-sell');
+  if (state.initialized) input.checked = state.enabled;
+  const include = root.querySelector('.sweep-sell-epic85');
+  if (include) {
+    if (state.initialized) include.checked = state.includeEpic85;
+    include.disabled = state.busy;
+  } else state.includeEpic85 = false;
+  root.querySelector('.sweep-sale-hint').textContent = sweepSaleHint(include?.checked === true,id);
+  root.querySelector('.sweep-sale-totals').classList.toggle('hidden', !input.checked);
+}
+function saveSweepSaleSetting(id, email, enabled, includeEpic85 = sweepSaleState(id, email).includeEpic85) {
+  if (id === 'activity_scene') setActCfg({autoSell:enabled,includeEpic85}, email);
+  else setSweepCfg(id, {autoSell:enabled,includeEpic85}, email);
+}
+function resetSweepSale(state) {
+  Object.assign(state, {sold:0, sales:{}, rewards:{}, since:0, finished:false, error:''});
+}
+function sellSweepEquipment(id, email, reason) {
+  const state = sweepSaleState(id, email);
+  state.pending = state.pending.then(async () => {
+    if (!state.enabled) return;
+    state.busy = true;
+    renderSweepSale(id, email);
+    try {
+      const result = await api('/api/sweep/equipment/sell', {account:email,includeEpic85:state.includeEpic85});
+      if (result.status) applyStatus(email, result.status, result.nextClaims);
+      state.sold += result.sold || 0;
+      addSweepRewards(state.sales, result.rewardSummary);
+      logTo(email, `[自动贩卖·${reason}] ${result.detail}`, result.ok ? 'ok' : 'err');
+      if (!result.ok) throw new Error(result.detail || '服务器未确认贩卖结果');
+    } catch (error) {
+      state.enabled = false;
+      state.error = `自动贩卖已暂停：${error.message}`;
+      saveSweepSaleSetting(id, email, false);
+      logTo(email, state.error, 'err');
+    } finally {
+      state.busy = false;
+      renderSweepSale(id, email);
+    }
+  });
+  return state.pending;
+}
+function bindSweepSale(root, id) {
+  const input = root.querySelector('.sweep-auto-sell');
+  if (!input) return;
+  const include = root.querySelector('.sweep-sell-epic85');
+  const initial = sweepSaleState(id);
+  if (!initial.initialized || !include) initial.includeEpic85 = include?.checked === true;
+  include?.addEventListener('change', LucimaActionWait.wrap(() => {
+    const email = activeAccount, state = sweepSaleState(id, email);
+    state.includeEpic85 = include.checked;
+    saveSweepSaleSetting(id, email, input.checked, state.includeEpic85);
+    renderSweepSale(id, email);
+  }));
+  input.addEventListener('change', LucimaActionWait.wrap(() => {
+    const email = activeAccount;
+    const state = sweepSaleState(id, email);
+    state.initialized = true;
+    state.enabled = input.checked;
+    state.error = '';
+    state.since = 0;
+    saveSweepSaleSetting(id, email, state.enabled);
+    renderSweepSale(id, email);
+  }));
+  renderSweepSale(id);
+}
+async function beginSweepRewards(id, email, enabled, includeEpic85 = false) {
+  const state = sweepSaleState(id, email);
+  await state.pending;
+  const restart = state.finished;
+  if (restart) resetSweepSale(state);
+  state.running = true;
+  state.since = 0;
+  if (!state.initialized) { state.enabled = !!enabled; state.includeEpic85 = includeEpic85 === true; }
+  state.initialized = true;
+  if (state.enabled) await sellSweepEquipment(id, email, '开始扫荡');
+  renderSweepSale(id, email);
+}
+async function recordSweepRewards(id, email, result, allowSale = true) {
+  const state = sweepSaleState(id, email);
+  addSweepRewards(state.rewards, result.rewardSummary);
+  for (const row of result.urgentCleanup?.results || []) addSweepRewards(state.rewards, row.rewardSummary);
+  if (result.ok && state.enabled && ++state.since >= 10 && allowSale) {
+    state.since = 0;
+    await sellSweepEquipment(id, email, '完成 10 把');
+  }
+}
+async function finishSweepRewards(id, email, taskName, done) {
+  const state = sweepSaleState(id, email);
+  await state.pending;
+  if (state.enabled) await sellSweepEquipment(id, email, '扫荡结束');
+  state.running = false;
+  state.finished = true;
+  const total = {};
+  addSweepRewards(total, Object.values(state.rewards));
+  addSweepRewards(total, Object.values(state.sales));
+  logTo(email, `[${taskName}·最终收益] 完成 ${done} 把；贩卖 ${state.sold} 件装备，卖装所得：${sweepRewardText(state.sales)}；全部获得（含关卡、紧急任务及卖装）：${sweepRewardText(total)}`, 'ok');
+  renderSweepSale(id, email);
+}
+
 // ---------- 扫荡自定义控件（讨伐扫荡 / 元素扫荡共用） ----------
 // 配置按 任务id + 账号 双重命名空间（多个扫荡任务各自独立；队伍 ID 各账号不同）
 const SWEEP_LS = "ark_sweep_cfg"; // {count, element, sceneId, teamId, quick}
-const sweepLsKey = (id) => `${SWEEP_LS}::${id}::${activeAccount || "_"}`;
-function getSweepCfg(id) {
+const sweepLsKey = (id, email = activeAccount) => `${SWEEP_LS}::${id}::${email || "_"}`;
+function getSweepCfg(id, email = activeAccount) {
   try {
-    const v = JSON.parse(frontendStorageGet(sweepLsKey(id))) || {};
+    const v = JSON.parse(frontendStorageGet(sweepLsKey(id, email))) || {};
     return {
       count: v.count || 5, element: v.element || "", sceneId: v.sceneId || "", teamId: v.teamId || "",
       quick: v.quick !== false,  // 默认勾选：使用快速战斗券
+      autoSell: v.autoSell === true,
+      includeEpic85: v.includeEpic85 === true,
     };
   } catch {
     return { count: 5, element: "", sceneId: "", teamId: "", quick: true };
   }
 }
-function setSweepCfg(id, patch) {
-  frontendStorageSet(sweepLsKey(id), JSON.stringify({ ...getSweepCfg(id), ...patch }));
+function setSweepCfg(id, patch, email = activeAccount) {
+  frontendStorageSet(sweepLsKey(id, email), JSON.stringify({ ...getSweepCfg(id, email), ...patch }));
 }
 // 元素 -> 主题色（讨伐与元素探索属性下拉的色点）
 const ELEMENT_COLOR = {
@@ -3654,6 +4005,18 @@ const ELEMENT_COLOR = {
 function dropdownHTML(cls, options, curVal, placeholder = "请选择") {
   const cur = options.find((o) => o.val === curVal) || options[0];
   const disabled = !options.length;
+  if (document.documentElement.dataset.rendering === 'stable' && /^(act-|sweep-)/.test(cls)) {
+    const plain = (label) => {
+      const template = document.createElement('template');
+      template.innerHTML = String(label || '');
+      return template.content.textContent || '';
+    };
+    return `<div class="dropdown ${cls}" data-val="${filterEscape(cur?.val || '')}">
+      <select class="dd-native dd-btn" aria-label="${filterEscape(placeholder)}" ${disabled ? 'disabled' : ''}>
+        ${options.map(o => `<option value="${filterEscape(o.val)}" ${o.val === cur?.val ? 'selected' : ''}>${filterEscape(plain(o.label))}</option>`).join('')}
+        ${disabled ? `<option>${filterEscape(placeholder)}</option>` : ''}
+      </select></div>`;
+  }
   const dot = (el) => (el ? `<span class="dd-dot" style="background:${ELEMENT_COLOR[el] || "var(--accent)"}"></span>` : "");
   const curLabel = cur ? `${dot(cur.element)}${cur.label}` : placeholder;
   const opts = options
@@ -3698,13 +4061,18 @@ function positionDropdown(root) {
 
 // 绑定一个下拉的交互：onPick(val) 回调
 function bindDropdown(root, onPick) {
+  const native = root.querySelector('.dd-native');
+  if (native) {
+    native.onchange = LucimaActionWait.wrap(() => { root.dataset.val = native.value; onPick(native.value); });
+    return;
+  }
   const btn = root.querySelector(".dd-btn");
   const menu = root.querySelector(".dd-menu");
   if (!btn || !menu) return;
   // Some controls (such as the equipment filter) keep the root node while
   // replacing its menu markup. Remove the previous button handler first.
   if (root._ddButtonRef && root._ddButtonHandler) {
-    root._ddButtonRef.removeEventListener("click", root._ddButtonHandler);
+    root._ddButtonRef.removeEventListener("click", LucimaActionWait.wrap(root._ddButtonHandler));
   }
   root._ddButtonRef = btn;
   root._ddOnPick = onPick;
@@ -3727,10 +4095,10 @@ function bindDropdown(root, onPick) {
       if (selected) menu.scrollTop = selected.offsetTop - (menu.clientHeight - selected.offsetHeight) / 2;
     }
   };
-  btn.addEventListener("click", root._ddButtonHandler);
+  btn.addEventListener("click", LucimaActionWait.wrap(root._ddButtonHandler));
   btn.setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
   menu.querySelectorAll(".dd-opt").forEach((opt) =>
-    opt.addEventListener("click", () => {
+    opt.addEventListener("click", LucimaActionWait.wrap(() => {
       const val = opt.dataset.val;
       root.dataset.val = val;
       root.querySelector(".dd-cur").innerHTML = opt.innerHTML;
@@ -3743,7 +4111,7 @@ function bindDropdown(root, onPick) {
       root.classList.remove("open");
       btn.setAttribute("aria-expanded", "false");
       root._ddOnPick?.(val);
-    })
+    }))
   );
 }
 
@@ -3789,11 +4157,14 @@ function renderSweepWidget(t) {
           <button type="button" class="count-btn" data-d="1">+</button>
         </div>
       </div>
+      <div class="sweep-ticket-sales">
       <label class="quick-ticket-toggle target-score-toggle sweep-quick-row">
         <input type="checkbox" role="switch" class="sweep-quick" ${cfg.quick ? "checked" : ""}>
         <span class="target-score-switch" aria-hidden="true"></span>
         <span>使用快速战斗券</span>
       </label>
+      ${t.sweepKind === 'hunt' ? sweepSaleHTML(t.id, cfg.autoSell, cfg.includeEpic85) : ''}
+      </div>
       <button type="button" class="btn primary sweep-start">▶ 开始扫荡</button>
       <div class="sweep-summary" id="sweepSummary-${t.id}"></div>
     </div>
@@ -3804,34 +4175,37 @@ async function bindSweepWidget(id) {
   const root = $(`sweep-${id}`);
   if (!root) return;
   const body = root.querySelector(".shop-body");
+  bindSweepSale(root, id);
   const toggle = root.querySelector(".sweep-toggle");
-  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
-    if (!root.dataset.loaded) await loadSweepOptions(id);
-  }, onRestore: async () => {
-    if (accountOptionCache(`sweep:${id}`) && !root.dataset.loaded) await loadSweepOptions(id);
-  }});
-  root.querySelector(".sweep-options-refresh").addEventListener("click", () => loadSweepOptions(id, true));
+  toggle.addEventListener("click", LucimaActionWait.wrap(async () => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
+      await loadSweepOptions(id);
+    }
+  }));
+  root.querySelector(".sweep-options-refresh").addEventListener("click", LucimaActionWait.wrap(() => loadSweepOptions(id)));
 
   const cntIn = root.querySelector(".sweep-count");
   cntIn.addEventListener("input", () => { cntIn.value = cntIn.value.replace(/[^0-9]/g, "").slice(0, 3); });
   cntIn.addEventListener("blur", () => { cntIn.value = clampCount(cntIn.value); setSweepCfg(id, { count: parseInt(cntIn.value) }); });
   root.querySelectorAll(".count-btn").forEach((btn) =>
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", LucimaActionWait.wrap(() => {
       cntIn.value = clampCount((parseInt(cntIn.value) || 5) + parseInt(btn.dataset.d));
       setSweepCfg(id, { count: parseInt(cntIn.value) });
-    })
+    }))
   );
 
   const quick = root.querySelector(".sweep-quick");
-  if (quick) quick.addEventListener("change", () => setSweepCfg(id, { quick: quick.checked }));
+  if (quick) quick.addEventListener("change", LucimaActionWait.wrap(() => setSweepCfg(id, { quick: quick.checked })));
 
-  root.querySelector(".sweep-start").addEventListener("click", () => {
+  root.querySelector(".sweep-start").addEventListener("click", LucimaActionWait.wrap(() => {
     if (sweepRunning[activeAccount]) {
       if (sweepRunningTask[activeAccount] === id) requestSweepStop(id, activeAccount);
       return;
     }
-    else runSweep(id);
-  });
+    else return runSweep(id);
+  }));
   if (sweepRunning[activeAccount] && sweepRunningTask[activeAccount] === id) {
     const button = root.querySelector(".sweep-start");
     const stopping = !!sweepStopRequested[activeAccount];
@@ -3841,13 +4215,10 @@ async function bindSweepWidget(id) {
   }
 }
 
-async function loadSweepOptions(id, refresh = false) {
+async function loadSweepOptions(id) {
   const root = $(`sweep-${id}`);
   if (!root || root.dataset.loading === "1") return;
   const kind = root.dataset.kind || "hunt";
-  const email = activeAccount;
-  const cacheKey = `sweep:${id}`;
-  const cached = !refresh && accountOptionCache(cacheKey, email);
   const elementSlot = root.querySelector(".sweep-element-slot");
   const sceneSlot = root.querySelector(".sweep-scene-slot");
   const teamSlot = root.querySelector(".sweep-team-slot");
@@ -3856,10 +4227,7 @@ async function loadSweepOptions(id, refresh = false) {
   refreshButton.disabled = true;
   refreshButton.classList.add("loading");
   try {
-    const options = cached || await api(`/api/sweep/options?kind=${encodeURIComponent(kind)}`);
-    if (activeAccount !== email || !root.isConnected) return;
-    if (!cached) setAccountOptionCache(cacheKey, options, email);
-    const { elements = [], scenes = [], teams = [] } = options;
+    const { elements = [], scenes, teams } = await api(`/api/sweep/options?kind=${encodeURIComponent(kind)}`);
     const cfg = getSweepCfg(id);
 
     const teamOpts = teams.length
@@ -3900,7 +4268,6 @@ async function loadSweepOptions(id, refresh = false) {
     bindDropdown(teamSlot.querySelector(".dropdown"), (v) => setSweepCfg(id, { teamId: v }));
     root.dataset.loaded = "1";
   } catch (e) {
-    if (activeAccount !== email || !root.isConnected) return;
     delete root.dataset.loaded;
     if (elementSlot) elementSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     sceneSlot.innerHTML = `<div class="dd-loading err">加载失败</div>`;
@@ -3936,8 +4303,11 @@ async function runSweep(id) {
   logTo(email, `开始${taskName}：${sceneName} × ${cfg.count} 次`);
   let done = 0;
   let stopped = false;
+  const trackSales = root.dataset.kind === 'hunt';
   try {
+    if (trackSales) await beginSweepRewards(id, email, cfg.autoSell, cfg.includeEpic85);
     for (let i = 1; i <= cfg.count; i++) {
+      if (trackSales) await sweepSaleState(id, email).pending;
       await waitRequestDelayBetweenIterations(i, () => sweepStopRequested[email]);
       if (sweepStopRequested[email]) {
         stopped = true;
@@ -3946,18 +4316,20 @@ async function runSweep(id) {
       const r = await api("/api/sweep/run", { account: email, sceneId: cfg.sceneId, teamId: cfg.teamId, quick: cfg.quick });
       if (r.status) applyStatus(email, r.status, r.nextClaims);
       logResult({ ...r, name: taskName }, `第${i}次·`, email);
+      if (r.ok) done++;
+      if (trackSales) await recordSweepRewards(id, email, r, !sweepStopRequested[email]);
       if (sweepStopRequested[email]) {
         stopped = true;
         break;
       }
       if (!r.ok) { logTo(email, `第 ${i} 次未获得掉落，停止扫荡`, "err"); break; }
-      done++;
     }
     if (stopped) logTo(email, `[${taskName}] 已停止，未继续后续请求`, "warn");
     if (summary && email === activeAccount) summary.textContent = `完成 ${done}/${cfg.count} 次`;
   } catch (e) {
     logTo(email, `扫荡出错：${e.message}`, "err");
   } finally {
+    if (trackSales) await finishSweepRewards(id, email, taskName, done);
     sweepRunning[email] = false;
     delete sweepRunningTask[email];
     delete sweepStopRequested[email];
@@ -3983,22 +4355,238 @@ function requestSweepStop(id, email) {
   }
 }
 
+// ---------- 自动刷亲密度 ----------
+const intimacyState = {};
+const intimacyRequests = {};
+const intimacyCancelling = {};
+const intimacyOptions = {};
+const intimacyPanels = {};
+
+function getIntimacyCfg(email = activeAccount) {
+  try {
+    const cfg = JSON.parse(frontendStorageGet(`ark_intimacy_cfg::${email}`)) || {};
+    const mains = Object.fromEntries(['upper', 'lower'].map(wave => [wave,
+      typeof cfg.mains?.[wave] === 'string' ? cfg.mains[wave] : null]));
+    return { mains, autoConfigure: !mains.upper || !mains.lower };
+  } catch { return {mains:{upper:null,lower:null},autoConfigure:true}; }
+}
+function setIntimacyCfg(patch, email = activeAccount) {
+  frontendStorageSet(`ark_intimacy_cfg::${email}`, JSON.stringify({...getIntimacyCfg(email), ...patch}));
+}
+function renderIntimacyConfiguration(id) {
+  const root = $(`intimacy-${id}`), email = activeAccount;
+  if (!root) return;
+  const panel = root.querySelector('.intimacy-config'), opened = !!intimacyPanels[email];
+  const toggle = root.querySelector('.intimacy-toggle');
+  toggle.textContent = opened ? '选项 ▾' : '选项 ▸';
+  toggle.setAttribute('aria-expanded', String(opened));
+  panel.classList.toggle('hidden', !opened);
+  if (!opened) { panel.replaceChildren(); panel._configurationHTML = ''; return; }
+  const cfg = getIntimacyCfg(email), data = intimacyOptions[email] || {};
+  const busy = !!(intimacyState[email]?.running || intimacyRequests[email] || intimacyCancelling[email]);
+  const html = `<div class="intimacy-main-grid">${['upper','lower'].map(wave => {
+    const member = intimacyState[email]?.running && intimacyState[email]?.progress?.teams?.[wave]?.find(row => row.carrier);
+    const rid = member?.roleId || cfg.mains[wave], role = data.roleMap?.[rid] || member;
+    const label = `${wave === 'upper' ? '上半' : '下半'}主角色`;
+    const name = role ? abyssRoleName(role) : rid || '自动选择';
+    return `<section class="abyss-wave"><div class="abyss-wave-title">${label}</div><button type="button" class="abyss-slot intimacy-main-slot${rid ? ' filled' : ''}" data-wave="${wave}" data-index="0" ${busy ? 'disabled' : ''} aria-label="${filterEscape(label + '：' + name)}">${role ? heroPortraitHTML({...role,name,avatar:abyssRoleAvatar(role)}) : rid ? `<span class="abyss-slot-label">${filterEscape(name)}</span>` : '<span class="abyss-slot-plus">＋</span>'}</button>${rid ? `<button type="button" class="mini intimacy-main-clear" data-wave="${wave}" ${busy ? 'disabled' : ''} aria-label="清除${label}">清除</button>` : ''}</section>`;
+  }).join('')}</div>
+  <p class="hint intimacy-config-hint">未配置主角色时自动配队。</p>
+  <button type="button" class="mini intimacy-refresh" ${data.loading ? 'disabled' : ''}>${data.loading ? '加载角色中…' : '刷新角色'}</button>
+  ${data.error ? `<p class="intimacy-error" role="status">${filterEscape(data.error)}，点击刷新角色重试。</p>` : ''}
+  <p class="loadout-safety-warning">自动配队或借装会调整装备与羁绊。为防止应用中途退出等情况导致装备未能归还，使用前建议先在游戏内保存好所有角色的装备方案。</p>`;
+  if (panel._configurationHTML !== html) { panel.innerHTML = html; panel._configurationHTML = html; }
+}
+async function loadIntimacyOptions(id, force = false) {
+  const email = activeAccount, previous = intimacyOptions[email];
+  if (previous?.loading) return previous.promise;
+  if (previous?.roles && !force) return previous;
+  const data = intimacyOptions[email] = {...previous,loading:true,error:''};
+  renderIntimacyConfiguration(id);
+  data.promise = (async () => {
+    try {
+      const result = await api(`/api/intimacy/options?account=${encodeURIComponent(email)}`);
+      data.roles = abyssRoleList(result);
+      data.roleMap = Object.fromEntries(data.roles.map(role => [abyssRoleId(role),role]));
+    } catch (error) { data.error = error.message; }
+    finally {
+      data.loading = false;
+      delete data.promise;
+      if (email === activeAccount) renderIntimacyConfiguration(id);
+    }
+    return data;
+  })();
+  return data.promise;
+}
+async function openIntimacyMainPicker(id, wave) {
+  const email = activeAccount, root = $(`intimacy-${id}`);
+  const data = await loadIntimacyOptions(id);
+  if (email !== activeAccount || !root?.isConnected || intimacyState[email]?.running || intimacyRequests[email] || data?.error) return;
+  return openAbyssPicker(id, wave, 0, 'intimacy');
+}
+
+function intimacyContentHTML(snapshot) {
+  const progress = snapshot?.progress;
+  if (!progress) return "";
+  const active = snapshot.running || snapshot.starting;
+  const failed = !progress.recoveryRequired && (progress.error || (snapshot.running === false && progress.ok === false && !progress.cancelled));
+  if (!active && !failed && !progress.recoveryRequired) return "";
+  const seen = new Set();
+  const members = (snapshot.running ? ["upper", "lower"].flatMap(wave => progress.teams?.[wave] || []) : [])
+    .filter(member => {
+      const key = member.staticId || member.roleId;
+      if (member.intimacyLevel == null || Number(member.intimacyLevel) >= 10 || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const portraits = members.length ? `<div class="intimacy-members" data-count="${members.length}" style="--intimacy-count:${members.length}" role="list" aria-label="亲密度未满10的上阵角色">${members.map((member) => {
+      const full = Number(member.intimacyLevel) >= 10;
+      const level = member.intimacyLevel == null ? "待同步" : filterEscape(member.intimacyLevel);
+      const exp = member.intimacyExp == null ? "—" : filterEscape(member.intimacyExp);
+      const max = member.intimacyMax > 0 ? filterEscape(member.intimacyMax) : "—";
+      const ratio = full ? 100 : member.intimacyMax > 0 ? Math.max(0, Math.min(100, member.intimacyExp / member.intimacyMax * 100)) : 0;
+      const label = filterEscape(member.name || member.staticId || "培养角色");
+      return `<article class="intimacy-member" role="listitem" aria-label="${label}" title="${label}">
+        ${member.avatar ? `<img src="${filterEscape(member.avatar)}" alt="" loading="lazy">` : '<span class="intimacy-avatar-placeholder" aria-hidden="true"></span>'}
+        <div class="intimacy-member-info"><small>亲密度${level}</small>
+        <span class="intimacy-exp">${full ? "已满" : `${exp}/${max}`}</span>
+        ${full || member.intimacyMax > 0 ? `<div class="intimacy-meter" role="progressbar" aria-label="${filterEscape(member.name || member.staticId)}亲密度进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(ratio)}"><span style="width:${ratio}%"></span></div>` : ""}</div></article>`;
+    }).join("")}</div>` : "";
+  const showStatus = active && (progress.waiting || !members.length ||
+    ['preparing', 'first_clear', 'planning', 'equipping', 'restoring'].includes(progress.phase));
+  return `${progress.recoveryRequired ? '<p class="intimacy-waiting" role="status">点击启动会先归还上次借用的装备与羁绊。</p>'
+    : failed ? `<p class="intimacy-error" role="status">${filterEscape(progress.message || "任务执行失败，请重试")}</p>`
+    : showStatus ? `<p class="intimacy-waiting" role="status">${filterEscape(progress.message || "正在同步，稍后自动继续")}</p>` : ""}${portraits}`;
+}
+
+function renderIntimacyWidget(t) {
+  const snapshot = intimacyState[activeAccount] || {};
+  const content = intimacyContentHTML(snapshot);
+  return `<div class="shop-widget intimacy-widget" id="intimacy-${t.id}">
+    <div class="shop-head"><div class="ticon"><svg class="ticon-svg" aria-hidden="true"><use href="#nav-heart"></use></svg></div>
+      <div class="tinfo"><div class="tname">${filterEscape(t.name)}</div><div class="tdesc">${filterEscape(t.desc)}</div></div>
+      <button type="button" class="mini intimacy-toggle" aria-expanded="false">选项 ▸</button>
+      <button type="button" class="mini intimacy-start${snapshot.running ? " task-stop-button" : ""}">${snapshot.running ? "中止" : "启动"}</button></div>
+    <div class="shop-body intimacy-config hidden"></div>
+    <div class="shop-body intimacy-body${content.trim() ? "" : " hidden"}" aria-live="polite">${content}</div>
+  </div>`;
+}
+
+function renderIntimacy(id) {
+  const root = $(`intimacy-${id}`);
+  if (!root) return;
+  const email = activeAccount, snapshot = intimacyState[email] || {};
+  const busy = intimacyRequests[email];
+  const button = root.querySelector('.intimacy-start');
+  button.textContent = intimacyCancelling[email] ? "中止并归还中…" : busy ? "处理中…" : snapshot.running ? "中止" : "启动";
+  button.disabled = !!(busy || intimacyCancelling[email]);
+  button.classList.toggle('task-stop-button', !!snapshot.running);
+  const body = root.querySelector('.intimacy-body');
+  const html = intimacyContentHTML(snapshot);
+  body.classList.toggle('hidden', !html.trim());
+  if (body._intimacyHTML !== html) { body.innerHTML = html; body._intimacyHTML = html; }
+  renderIntimacyConfiguration(id);
+}
+
+function applyIntimacy(email, snapshot) {
+  if (!snapshot || intimacyRequests[email]) return;
+  const previousRevision = intimacyState[email]?.revision;
+  if (Number.isSafeInteger(snapshot.revision) && Number.isSafeInteger(previousRevision)
+      && snapshot.revision < previousRevision) return;
+  if (Number.isSafeInteger(snapshot.revision) && snapshot.revision === previousRevision
+      && snapshot.running === intimacyState[email]?.running) return;
+  intimacyState[email] = snapshot;
+  if (!snapshot.running) delete intimacyCancelling[email];
+  if (email === activeAccount) document.querySelectorAll('.intimacy-widget').forEach(root => renderIntimacy(root.id.slice(9)));
+}
+
+async function refreshIntimacy(email) {
+  const account = ACCOUNTS[email];
+  if (!account || account.intimacySnapshotPending) return;
+  account.intimacySnapshotPending = true;
+  const action = intimacyRequests[email];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    // This reads the local worker snapshot; it never relogs into the game or
+    // waits on the account lock held by a running friendship battle.
+    const data = await api(`/api/intimacy/status?account=${encodeURIComponent(email)}`, null,
+      {signal: controller.signal});
+    if (ACCOUNTS[email] === account && action === intimacyRequests[email]) applyIntimacy(email, data.intimacy);
+  } catch { /* Keep the cached team; the next poll retries without blanking it. */ }
+  finally {
+    clearTimeout(timeout);
+    account.intimacySnapshotPending = false;
+  }
+}
+
+function bindIntimacyWidget(id) {
+  const root = $(`intimacy-${id}`);
+  root.querySelector('.intimacy-start').addEventListener('click', LucimaActionWait.wrap(() => toggleIntimacy(id)));
+  root.querySelector('.intimacy-toggle').addEventListener('click', LucimaActionWait.wrap(() => {
+    intimacyPanels[activeAccount] = !intimacyPanels[activeAccount];
+    renderIntimacyConfiguration(id);
+    if (intimacyPanels[activeAccount]) return loadIntimacyOptions(id);
+  }));
+  root.querySelector('.intimacy-config').addEventListener('click', LucimaActionWait.wrap(event => {
+    const slot = event.target.closest('.intimacy-main-slot');
+    if (slot && !slot.disabled) return openIntimacyMainPicker(id, slot.dataset.wave);
+    const clear = event.target.closest('.intimacy-main-clear');
+    if (clear && !clear.disabled) {
+      const cfg = getIntimacyCfg(); cfg.mains[clear.dataset.wave] = null;
+      setIntimacyCfg(cfg); renderIntimacyConfiguration(id);
+    }
+    if (event.target.closest('.intimacy-refresh')) return loadIntimacyOptions(id, true);
+  }));
+  renderIntimacy(id);
+}
+
+async function toggleIntimacy(id) {
+  const email = activeAccount;
+  if (!email || intimacyRequests[email] || intimacyCancelling[email]) return;
+  const stopping = intimacyState[email]?.running;
+  const cfg = getIntimacyCfg(email);
+  intimacyRequests[email] = {};
+  if (stopping) intimacyCancelling[email] = true;
+  else intimacyState[email] = {running: false, starting: true, progress: {phase: 'preparing', message: '正在启动自动刷亲密度', rounds: 0}};
+  renderIntimacy(id);
+  try {
+    const result = await api(`/api/intimacy/${stopping ? 'cancel' : 'start'}`,
+      stopping ? {account:email} : {account:email,...cfg});
+    intimacyState[email] = result.intimacy;
+    if (!result.intimacy?.running) delete intimacyCancelling[email];
+  } catch (error) {
+    delete intimacyCancelling[email];
+    const old = intimacyState[email] || {};
+    intimacyState[email] = {...old, starting: false, progress: {...old.progress, error: true, message: `${stopping ? '中止' : '启动'}失败：${error.message}`}};
+    logTo(email, `自动刷亲密度${stopping ? '中止' : '启动'}失败：${error.message}`, 'err');
+  } finally {
+    delete intimacyRequests[email];
+    if (email === activeAccount) renderIntimacy(id);
+  }
+}
+
 // ---------- 虚构深渊：两波自由配队 ----------
 // 这里只保存角色引用；开始时由后端按当前登录快照补齐装备/神器等战斗字段。
 const ABYSS_LS = "ark_abyss_cfg";
-const abyssLsKey = () => `${ABYSS_LS}::${activeAccount || "_"}`;
+const abyssLsKey = (email = activeAccount) => `${ABYSS_LS}::${email || "_"}`;
 const abyssRunning = {};
 const abyssCancelling = {};
 const abyssBattleState = {};
+const abyssAutoTeams = {};
+const abyssRecoveryPending = {};
+const abyssRecoveryWarnings = {};
+const abyssRestoring = {};
 const abyssRequests = {};
 const abyssRewarding = {};
 const abyssState = {};
+const abyssNotices = {};
 const abyssPickerFilters = new Map();
 let abyssPickerState = null;
 
-function getAbyssCfg() {
+function getAbyssCfg(email = activeAccount) {
   try {
-    const value = JSON.parse(frontendStorageGet(abyssLsKey())) || {};
+    const value = JSON.parse(frontendStorageGet(abyssLsKey(email))) || {};
     const wave = (key) => {
       const input = value[key];
       if (Array.isArray(input)) return Array.from({ length: 4 }, (_, i) => input[i] || null);
@@ -4010,9 +4598,9 @@ function getAbyssCfg() {
     return { sceneId: "", upper: [null, null, null, null], lower: [null, null, null, null], autoAdvance: false };
   }
 }
-function setAbyssCfg(patch) {
-  const current = getAbyssCfg();
-  frontendStorageSet(abyssLsKey(), JSON.stringify({ ...current, ...patch }));
+function setAbyssCfg(patch, email = activeAccount) {
+  const current = getAbyssCfg(email);
+  frontendStorageSet(abyssLsKey(email), JSON.stringify({ ...current, ...patch }));
 }
 function abyssRoleId(role) {
   const raw = role?.roleId ?? role?._id ?? role?.id ?? role?.RoleID ?? "";
@@ -4043,9 +4631,9 @@ function renderAbyssWidget(t) {
     <div class="shop-body hidden">
       <div class="shop-row col"><div class="act-option-head"><span class="shop-lbl">深渊关卡</span><button type="button" class="act-options-refresh abyss-options-refresh" title="重新加载深渊选项" aria-label="重新加载深渊选项"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button></div>
         <div class="dd-slot abyss-scene-slot"><div class="dd-loading">展开时加载…</div></div></div>
-      <details class="abyss-effects hidden" ${window.innerWidth > 680 ? "open" : ""}>
-        <summary><span>关卡特殊效果</span><span class="abyss-effects-scene"></span><svg class="abyss-effects-chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-chevron-down"></use></svg></summary>
-        <div class="abyss-effects-content" aria-live="polite"></div>
+      <details class="abyss-intel hidden" open>
+        <summary><span>情报</span><span class="abyss-intel-scene"></span><svg class="abyss-intel-chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-chevron-down"></use></svg></summary>
+        <div class="abyss-intel-content" aria-live="polite"></div>
       </details>
       <div class="abyss-team-grid">
         ${abyssWaveHTML(t.id, "upper", "上半", cfg.upper)}
@@ -4053,74 +4641,152 @@ function renderAbyssWidget(t) {
       </div>
       <label class="quick-ticket-toggle target-score-toggle abyss-auto-row">
         <input type="checkbox" role="switch" class="abyss-auto-advance" ${cfg.autoAdvance ? "checked" : ""} ${running || rewarding ? "disabled" : ""}>
-        <span class="target-score-switch" aria-hidden="true"></span><span>自动推关</span>
+        <span class="target-score-switch" aria-hidden="true"></span><span>自动推关 <small class="abyss-auto-hint">未选择角色时自动配队、配装；关卡需要医疗时自动带医疗。</small></span>
       </label>
+      <p class="loadout-safety-warning">自动配队或借装会调整装备与羁绊。为防止应用中途退出等情况导致装备未能归还，使用前建议先在游戏内保存好所有角色的装备方案。</p>
       <div class="abyss-actions">
         <button type="button" class="btn abyss-rewards" ${running || rewarding ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-gift"></use></svg><span>${rewarding ? "领取中…" : "奖励领取"}</span></button>
         <button type="button" class="btn primary abyss-start${running ? " task-stop-button" : ""}" ${cancelling || rewarding ? "disabled" : ""}>${cancelling ? "中止中…" : running ? "中止挑战" : "▶ 开始挑战"}</button>
       </div>
-      <div class="sweep-summary abyss-summary" id="abyssSummary-${t.id}"></div>
+      <div class="sweep-summary abyss-summary" id="abyssSummary-${t.id}" role="status" aria-live="polite" aria-atomic="true"></div>
       <div class="abyss-battle-progress${abyssBattleState[activeAccount] ? "" : " hidden"}" aria-label="战斗进度">${abyssBattleHTML(abyssBattleState[activeAccount])}</div>
     </div>
   </div>`;
 }
-function renderAbyssEffects(id) {
-  const root = $(`abyss-${id}`);
-  const host = root?.querySelector(".abyss-effects");
+function abyssEnemyTag(value, options, fallback) {
+  const option = options.find((item) => item.id === value && item.id !== "ALL");
+  return `<span class="abyss-enemy-tag">${option ? `<img src="${option.icon}" alt="">${filterEscape(option.label)}` : filterEscape(value === "Other" ? "其他" : fallback)}</span>`;
+}
+function abyssEffectsHTML(groups) {
+  if (!groups) return '<p class="abyss-effect-empty">关卡效果暂未提供</p>';
+  return [["bonuses", "增益"], ["restrictions", "限制"]].map(([group, title]) => {
+    const effects = groups[group] || [];
+    return `<div class="abyss-effect-group ${group}" role="group" aria-label="${title}"><span class="abyss-effect-label">${title}</span>
+      ${effects.length ? `<ul>${effects.map((effect) => `<li${effect.descriptionMissing ? ` class="abyss-effect-missing" title="效果编号：${filterEscape(effect.id)}"` : ""}>${filterEscape(effect.description)}</li>`).join("")}</ul>` : '<p class="abyss-effect-empty">无</p>'}
+    </div>`;
+  }).join("");
+}
+function renderAbyssIntel(id) {
+  const root = $(`abyss-${id}`), host = root?.querySelector(".abyss-intel");
   if (!host) return;
   const state = abyssState[id];
-  const scene = state?.account === activeAccount
-    ? state.scenes?.find((item) => item.id === getAbyssCfg().sceneId) : null;
+  const sceneId=abyssRunning[activeAccount]&&abyssBattleState[activeAccount]?.sceneId||getAbyssCfg().sceneId;
+  const scene = state?.account === activeAccount ? state.scenes?.find((item) => item.id === sceneId) : null;
+  const sceneKey = JSON.stringify([activeAccount, scene]);
+  if (host._sceneKey === sceneKey) return;
+  host._sceneKey = sceneKey;
+  const content = host.querySelector(".abyss-intel-content");
+  const expanded = new Map([...content.querySelectorAll(".abyss-enemy")].map((enemy) => [enemy.dataset.enemyKey, enemy.open]));
   host.classList.toggle("hidden", !scene);
-  const content = host.querySelector(".abyss-effects-content");
-  host.querySelector(".abyss-effects-scene").textContent = scene?.name || "";
-  if (!scene) { content.innerHTML = ""; return; }
-  if (!scene.effects) {
-    content.innerHTML = '<p class="abyss-effect-empty">关卡效果暂未提供</p>';
-    return;
-  }
-  content.innerHTML = [ ["upper", "上半"], ["lower", "下半"] ].map(([wave, label]) => {
-    const groups = scene.effects[wave] || {};
-    return `<section class="abyss-effect-wave" aria-label="${label}特殊效果"><h4>${label}</h4>
-      ${[ ["bonuses", "增益"], ["restrictions", "限制"] ].map(([group, title]) => {
-        const effects = groups[group] || [];
-        return `<div class="abyss-effect-group ${group}" role="group" aria-label="${title}">
-          ${effects.length ? `<ul>${effects.map((effect) => `<li${effect.descriptionMissing ? ` class="abyss-effect-missing" title="效果编号：${filterEscape(effect.id)}"` : ""}>${filterEscape(effect.description)}</li>`).join("")}</ul>` : '<p class="abyss-effect-empty">无</p>'}
-        </div>`;
-      }).join("")}</section>`;
+  host.querySelector(".abyss-intel-scene").textContent = scene?.name || "";
+  if (!scene) { content.replaceChildren(); return; }
+  content.innerHTML = [["upper", "上半"], ["lower", "下半"]].map(([wave, label]) => {
+    const enemies = scene.enemies?.[wave] || [];
+    return `<section class="abyss-intel-wave" data-wave="${wave}" aria-label="${label}情报"><h4>${label}</h4>
+      <div class="abyss-intel-effects" role="group" aria-label="${label}特殊效果"><h5>特殊效果</h5>${abyssEffectsHTML(scene.effects?.[wave])}</div>
+      <div class="abyss-intel-enemies" role="group" aria-label="${label}敌人信息"><h5>敌人信息<span>${enemies.length} 名敌人</span></h5>
+      ${enemies.length ? enemies.map((enemy, index) => {
+        const key = `${scene.id}:${wave}:${enemy.position}:${enemy.staticId}:${index}`;
+        const name = enemy.name || enemy.staticId || "未知敌人", skills = enemy.skills || [];
+        return `<details class="abyss-enemy" data-enemy-key="${filterEscape(key)}" data-enemy-id="${filterEscape(enemy.staticId)}" ${expanded.get(key) !== false ? "open" : ""}>
+          <summary><span class="abyss-enemy-avatar">${enemy.avatar ? `<img src="${filterEscape(enemy.avatar)}" alt="" loading="lazy">` : '<span aria-hidden="true">敌</span>'}</span>
+            <span class="abyss-enemy-identity"><span class="abyss-enemy-name"><strong>${filterEscape(name)}</strong><span class="abyss-enemy-kind${enemy.isBoss ? " boss" : ""}">${enemy.isBoss ? "BOSS" : "敌人"}</span>${enemy.level ? `<small>Lv${filterEscape(enemy.level)}</small>` : ""}</span>
+              <span class="abyss-enemy-tags" aria-label="属性与职业">${abyssEnemyTag(enemy.element, ENCYCLOPEDIA_ELEMENTS, "属性暂缺")}${abyssEnemyTag(enemy.job, ENCYCLOPEDIA_JOBS, "职业暂缺")}</span>
+            </span><svg class="abyss-intel-chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-chevron-down"></use></svg></summary>
+          <div class="abyss-enemy-skills"><p class="abyss-enemy-skill-note">${skills.length} 个技能 · 基础说明</p>
+            ${skills.length ? `<ol>${skills.map((skill, number) => `<li data-skill-id="${filterEscape(skill.id)}">
+              <div class="abyss-enemy-skill-title"><span class="abyss-enemy-skill-number">${number + 1}</span><strong>${filterEscape(skill.name || "未知技能")}</strong>${skill.type === "Passive" ? '<span class="abyss-enemy-skill-kind">被动</span>' : ""}${skill.hidden ? '<span class="abyss-enemy-skill-kind">特殊</span>' : ""}</div>
+              <p class="abyss-enemy-skill-description${skill.descriptionMissing ? " missing" : ""}">${filterEscape(skill.description || "该技能暂缺独立说明。")}</p>
+              ${skill.descriptionMissing ? `<code class="abyss-enemy-skill-id">${filterEscape(skill.id)}</code>` : ""}
+            </li>`).join("")}</ol>` : '<p class="abyss-effect-empty">技能资料暂缺</p>'}
+          </div></details>`;
+      }).join("") : '<p class="abyss-effect-empty">敌人资料暂缺</p>'}</div></section>`;
   }).join("");
 }
 function abyssBattleHTML(progress, labels = {}) {
   if (!progress) return "";
+  if(progress.phase&&progress.phase!=='battle')return `<div class="abyss-auto-progress" role="status">${filterEscape(progress.message||'自动推关准备中…')}${progress.attempt?`<small>本关第 ${filterEscape(progress.attempt)} / ${filterEscape(progress.attemptLimit||5)} 次挑战</small>`:''}</div>`;
   const cards = (members) => (members || []).map((member) => {
+    const pending = member.healthPending === true;
     const value = Number(member.hpPercent);
     const percent = member.dead || !Number.isFinite(value) ? 0 : Math.max(0, Math.min(100, value));
     const name = member.name || member.staticId || "未知角色";
-    const label = `${name}，生命 ${percent}%${member.dead ? "，已死亡" : ""}`;
+    const label = `${name}，${pending ? '生命同步中' : `生命 ${percent}%`}${member.dead ? "，已死亡" : ""}`;
     return `<div class="abyss-battle-member${member.dead ? " dead" : ""}" data-unit-id="${filterEscape(member.id)}" title="${filterEscape(label)}">
       ${heroPortraitHTML({ name: member.avatar ? name : "?", avatar: member.avatar })}
       <div class="abyss-hp-bar" role="progressbar" aria-label="${filterEscape(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div>
-      <span class="abyss-hp-percent">${percent}%</span>
+      <span class="abyss-hp-percent">${pending ? '同步中' : `${percent}%`}</span>
     </div>`;
   }).join("");
   const stage = /^MysteriousRealm_(\d+)$/.exec(String(progress.sceneId || ""));
   const sceneLabel = labels.sceneLabel ?? (stage ? `第 ${Number(stage[1])} 关` : "");
   const waveLabel = labels.waveLabel ?? (Number(progress.wave) === 1 ? "下半" : "上半");
+  const support = progress.support;
+  const supportLabel = support ? `<div class="abyss-auto-progress" role="status">好友替补：${filterEscape(support.name || support.staticId || '正在同步')}（${support.status === 'joined' ? '服务器确认已上场' : support.status === 'reserved' ? '已接收配置，待上场' : '等待服务器确认'}）</div>` : '';
   return `${sceneLabel ? `<div class="abyss-battle-scene">${filterEscape(sceneLabel)}</div>` : ""}<div class="abyss-battle-wave" aria-live="polite">${filterEscape(waveLabel)}</div>
-    <div class="abyss-battle-side enemies"><span class="abyss-battle-label">敌方</span><div class="abyss-battle-members">${cards(progress.enemies)}</div></div>
+    ${supportLabel}<div class="abyss-battle-side enemies"><span class="abyss-battle-label">敌方</span><div class="abyss-battle-members">${cards(progress.enemies)}</div></div>
     <div class="abyss-battle-side allies"><span class="abyss-battle-label">我方</span><div class="abyss-battle-members">${cards(progress.allies)}</div></div>`;
+}
+function renderBattleProgress(host, progress, labels = {}) {
+  if (!host) return;
+  const identity = members => (members || []).map(m => [m.id, m.staticId, m.name, m.avatar]);
+  const shape = progress && (!progress.phase || progress.phase === 'battle')
+    ? JSON.stringify([progress.sceneId, progress.wave, labels, progress.support,
+      identity(progress.allies), identity(progress.enemies)]) : null;
+  if (!shape || host._battleShape !== shape) {
+    const html = abyssBattleHTML(progress, labels);
+    if (host._battleHTML !== html) { host.innerHTML = html; host._battleHTML = html; }
+    host._battleShape = shape;
+  } else {
+    for (const camp of ['allies', 'enemies']) {
+      const nodes = host.querySelectorAll(`.${camp} .abyss-battle-member`);
+      (progress[camp] || []).forEach((member, index) => {
+        const node = nodes[index];
+        if (!node) return;
+        const pending = member.healthPending === true, value = Number(member.hpPercent);
+        const percent = member.dead || !Number.isFinite(value) ? 0 : Math.max(0, Math.min(100, value));
+        const healthKey = `${percent}:${pending}:${!!member.dead}`;
+        if (node._healthKey === healthKey) return;
+        node._healthKey = healthKey;
+        const name = member.name || member.staticId || '未知角色';
+        const label = `${name}，${pending ? '生命同步中' : `生命 ${percent}%`}${member.dead ? '，已死亡' : ''}`;
+        node.classList.toggle('dead', !!member.dead);
+        node.title = label;
+        const bar = node.querySelector('.abyss-hp-bar');
+        bar.setAttribute('aria-label', label); bar.setAttribute('aria-valuenow', String(percent));
+        bar.firstElementChild.style.width = `${percent}%`;
+        node.querySelector('.abyss-hp-percent').textContent = pending ? '同步中' : `${percent}%`;
+      });
+    }
+  }
+  host.classList.toggle('hidden', !progress);
+}
+function renderAbyssNotice(id) {
+  const host = $(`abyss-${id}`)?.querySelector('.abyss-summary');
+  if (!host) return;
+  const notice = abyssNotices[activeAccount] || {text:'',tone:'info'};
+  const warning = abyssRecoveryWarnings[activeAccount] || '';
+  const tone = warning && notice.tone !== 'error' ? 'error' : notice.tone;
+  host.textContent = [notice.text, warning].filter(Boolean).join('\n');
+  host.dataset.tone = tone;
+  host.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+  host.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+}
+function setAbyssNotice(id, email, text, tone = 'info') {
+  abyssNotices[email] = {text:String(text || ''),tone};
+  if (email === activeAccount) renderAbyssNotice(id);
+}
+function rejectAbyss(id, email, text) {
+  setAbyssNotice(id,email,text,'error');
+  logTo(email,text,'err');
 }
 function renderAbyssBattle(id) {
   const root = $(`abyss-${id}`);
   if (!root) return;
+  renderAbyssNotice(id);
   const progress = abyssBattleState[activeAccount];
   const host = root.querySelector(".abyss-battle-progress");
-  const html = abyssBattleHTML(progress);
-  if (host && host._battleHTML !== html) {
-    host.innerHTML = html;
-    host._battleHTML = html;
-    host.classList.toggle("hidden", !progress);
-  }
+  renderBattleProgress(host, progress);
   const button = root.querySelector(".abyss-start");
   if (button) {
     button.disabled = !!(abyssCancelling[activeAccount] || abyssRewarding[activeAccount]);
@@ -4137,14 +4803,63 @@ function renderAbyssBattle(id) {
     autoAdvance.checked = getAbyssCfg().autoAdvance;
     autoAdvance.disabled = !!(abyssRunning[activeAccount] || abyssRewarding[activeAccount]);
   }
+  const restoring=!!abyssRestoring[activeAccount],active=!!(abyssRunning[activeAccount]||abyssRewarding[activeAccount]||restoring);
+  if(autoAdvance)autoAdvance.disabled=active;
+  if(rewards)rewards.disabled=active;
+  if(button&&restoring)button.disabled=true;
+  root.querySelectorAll('.abyss-scene-slot button').forEach(node=>{if(node.dataset.abyssOriginalDisabled==null)node.dataset.abyssOriginalDisabled=String(node.disabled);node.disabled=active||node.dataset.abyssOriginalDisabled==='true';});
+  root.querySelectorAll('.abyss-slot').forEach(node=>node.disabled=active);
 }
 function applyAbyssBattle(email, battle) {
   if (!battle || typeof battle.running !== "boolean") return;
+  const keys = applyAbyssBattle._keys || (applyAbyssBattle._keys = {});
+  const key = JSON.stringify([battle, !!abyssRequests[email], !!abyssCancelling[email]]);
+  if (keys[email] === key) return;
+  keys[email] = key;
+  if (battle.progress?.recoveryWarning) abyssRecoveryWarnings[email]=battle.progress.recoveryWarning;
   abyssRunning[email] = !!(battle.running || abyssRequests[email]);
   if (!abyssRunning[email]) abyssCancelling[email] = false;
-  if (battle.running && battle.progress) abyssBattleState[email] = battle.progress;
-  else delete abyssBattleState[email];
-  if (email === activeAccount) document.querySelectorAll(".abyss-widget").forEach((root) => renderAbyssBattle(root.id.slice(6)));
+  if (battle.running && battle.progress){abyssBattleState[email] = battle.progress;if(battle.progress.autoConfigured){if(battle.progress.waves)abyssAutoTeams[email]=battle.progress.waves;else if(battle.progress.phase==='planning')delete abyssAutoTeams[email];}}
+  else {delete abyssBattleState[email];delete abyssAutoTeams[email];}
+  if (email === activeAccount) document.querySelectorAll(".abyss-widget").forEach((root) => {
+    const id=root.id.slice(6),state=abyssState[id],intel=battle.progress?.sceneIntel;
+    if(intel&&state?.account===email)state.scenes=[...state.scenes.filter(scene=>scene.id!==intel.id),{...state.scenes.find(scene=>scene.id===intel.id),...intel}];
+  });
+  if (battle.running && battle.progress) applyAbyssSceneProgress(email, battle.progress);
+  if (email === activeAccount) document.querySelectorAll(".abyss-widget").forEach((root) => {
+    const id=root.id.slice(6);
+    renderAbyssSlots(id);renderAbyssBattle(id);renderAbyssIntel(id);
+  });
+}
+function applyAbyssSceneProgress(email, progress) {
+  const sid = progress?.sceneId;
+  if (sid && (!Array.isArray(progress.scenes) || progress.scenes.some(scene => scene.id === sid))) setAbyssCfg({ sceneId: sid }, email);
+  if (email !== activeAccount) return;
+  document.querySelectorAll('.abyss-widget').forEach(root => {
+    const id = root.id.slice(6), state = abyssState[id];
+    if (!state || state.account !== email) return;
+    const saved = new Map(state.scenes.map(scene => [scene.id, scene]));
+    if (Array.isArray(progress?.scenes)) state.scenes = progress.scenes.map(scene => ({ ...saved.get(scene.id), ...scene }));
+    renderAbyssScenePicker(id);
+  });
+}
+function renderAbyssScenePicker(id) {
+  const root = $(`abyss-${id}`), state = abyssState[id];
+  if (!root || state?.account !== activeAccount) return;
+  const cfg = getAbyssCfg(), scenes = state.scenes;
+  const selected = scenes.some(scene => scene.id === cfg.sceneId) ? cfg.sceneId : scenes[0]?.id || '';
+  if (selected !== cfg.sceneId) setAbyssCfg({ sceneId: selected });
+  const slot = root.querySelector('.abyss-scene-slot');
+  const options = scenes.map(scene => ({ val: scene.id,
+    label: `<span class="abyss-scene-label"><span class="abyss-scene-name">${filterEscape(scene.name || scene.id)}</span>${abyssSceneStarsHTML(scene)}</span>` }));
+  const key = JSON.stringify([selected, options]);
+  if (slot._sceneKey === key) return;
+  slot._sceneKey = key;
+  slot.innerHTML = dropdownHTML('abyss-scene', options, selected, '暂无已解锁的虚构深渊关卡');
+  bindDropdown(slot.querySelector('.dropdown'), value => {
+    setAbyssCfg({ sceneId: value });
+    renderAbyssIntel(id);
+  });
 }
 function abyssSceneStarsHTML(scene) {
   const stars = Array.isArray(scene?.stars) ? scene.stars : [];
@@ -4167,6 +4882,17 @@ function abyssWaveHTML(id, wave, label, picks) {
   return `<section class="abyss-wave" data-wave="${wave}"><div class="abyss-wave-title"><span>${label}</span></div><div class="abyss-slots">${picks.map((roleId, index) => abyssSlotHTML(id, wave, index, roleId)).join("")}</div></section>`;
 }
 function abyssPicks(cfg) { return [...cfg.upper, ...cfg.lower].filter(Boolean); }
+function abyssPickerRoot(context = abyssPickerState) {
+  return context ? $(`${context.kind === 'intimacy' ? 'intimacy' : 'abyss'}-${context.id}`) : null;
+}
+function abyssPickerData(context = abyssPickerState) {
+  return context?.kind === 'intimacy' ? intimacyOptions[context.account] : abyssState[context?.id];
+}
+function abyssPickerCfg(context = abyssPickerState) {
+  if (context?.kind !== 'intimacy') return getAbyssCfg(context?.account);
+  const cfg = getIntimacyCfg(context.account);
+  return {upper:[cfg.mains.upper],lower:[cfg.mains.lower]};
+}
 function abyssPayload(cfg) {
   return { sceneId: cfg.sceneId, scene_id: cfg.sceneId, upper: cfg.upper, lower: cfg.lower,
     waves: { upper: cfg.upper, lower: cfg.lower }, autoAdvance: cfg.autoAdvance };
@@ -4199,14 +4925,14 @@ function abyssEnsurePicker() {
       <div class="abyss-picker-footer"><p class="abyss-picker-hint" role="status" aria-live="polite"></p><div class="abyss-picker-actions"><button type="button" class="btn primary" data-abyss-close>完成</button></div></div>
     </div>`;
   document.body.appendChild(modal);
-  modal.addEventListener("click", (event) => {
+  modal.addEventListener("click", LucimaActionWait.wrap((event) => {
     if (Date.now() < (abyssPickerState?.suppressClickUntil || 0)) { event.preventDefault(); return; }
     if (event.target.closest("[data-abyss-close]")) return closeAbyssPicker();
     const context = abyssPickerState;
     if (!context || context.account !== activeAccount) return closeAbyssPicker(false);
     const remove = event.target.closest("[data-abyss-remove-slot]");
     if (remove) {
-      const cfg = getAbyssCfg();
+      const cfg = abyssPickerCfg(context);
       cfg[remove.dataset.wave][Number(remove.dataset.index)] = null;
       context.wave = remove.dataset.wave;
       context.index = Number(remove.dataset.index);
@@ -4229,7 +4955,7 @@ function abyssEnsurePicker() {
       modal.querySelector(`[data-abyss-filter="${filter.dataset.abyssFilter}"][data-value="${filter.dataset.value}"]`)?.focus();
       return;
     }
-    if (event.target.closest("[data-abyss-filter-retry]")) return void loadAbyssPickerFilters(context);
+    if (event.target.closest("[data-abyss-filter-retry]")) return loadAbyssPickerFilters(context);
     const status = event.target.closest("[data-abyss-status-filter]");
     if (status && !status.disabled) {
       openCharacterStatusFilter({ trigger: status, statuses: context.filters.statuses, onApply: (statuses) => {
@@ -4240,10 +4966,10 @@ function abyssEnsurePicker() {
       return;
     }
     const button = event.target.closest(".abyss-role-option[data-role-id]");
-    if (!button || button.disabled || !$(`abyss-${context.id}`)?.isConnected) return;
+    if (!button || button.disabled || !abyssPickerRoot(context)?.isConnected) return;
     const next = button.dataset.roleId;
-    if (!(abyssState[context.id]?.roles || []).some((role) => abyssRoleId(role) === next)) return;
-    const updated = getAbyssCfg();
+    if (!(abyssPickerData(context)?.roles || []).some((role) => abyssRoleId(role) === next)) return;
+    const updated = abyssPickerCfg(context);
     const occupied = ["upper", "lower"].find((wave) => updated[wave].includes(next));
     if (occupied) {
       context.wave = occupied;
@@ -4251,19 +4977,27 @@ function abyssEnsurePicker() {
       updated[context.wave][context.index] = null;
     } else {
       if (context.index == null) return;
+      if (context.kind === 'intimacy') {
+        const data = abyssPickerData(context), sid = role => role?.staticId || role?.StaticID;
+        const other = context.wave === 'upper' ? 'lower' : 'upper';
+        if (updated[other][0] && sid(data.roleMap[updated[other][0]]) === sid(data.roleMap[next])) {
+          modal.querySelector('.abyss-picker-hint').textContent = '上半、下半不能选择相同主角色';
+          return;
+        }
+      }
       updated[context.wave][context.index] = next;
       advanceAbyssPickerSlot(context, updated);
     }
     commitAbyssPicker(updated);
     modal.querySelector(`.abyss-role-option[data-role-id="${next}"]`)?.focus({ preventScroll: true });
-  });
+  }));
   modal.addEventListener("dragstart", (event) => event.preventDefault());
   modal.addEventListener("pointerdown", (event) => {
     const context = abyssPickerState;
     if (!context || context.account !== activeAccount || !event.isPrimary || event.button !== 0 || context.drag
       || event.target.closest("[data-abyss-remove-slot]")) return;
     const slot = event.target.closest("[data-abyss-team-slot]");
-    if (!slot || !getAbyssCfg()[slot.dataset.wave][Number(slot.dataset.index)]) return;
+    if (!slot || !abyssPickerCfg(context)[slot.dataset.wave][Number(slot.dataset.index)]) return;
     context.drag = { source: { wave: slot.dataset.wave, index: Number(slot.dataset.index) }, slot,
       pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect: slot.getBoundingClientRect() };
     slot.setPointerCapture(event.pointerId);
@@ -4318,25 +5052,28 @@ function abyssEnsurePicker() {
   });
   return modal;
 }
-function openAbyssPicker(id, wave, index) {
+function openAbyssPicker(id, wave, index, kind = 'abyss') {
   const modal = abyssEnsurePicker();
+  modal.classList.toggle('intimacy-main-picker', kind === 'intimacy');
+  modal.querySelector('#abyssPickerTitle').textContent = kind === 'intimacy' ? '选择亲密度主角色' : '编辑深渊队伍';
   if (!abyssPickerFilters.has(activeAccount)) abyssPickerFilters.set(activeAccount, { element: "ALL", job: "ALL", statuses: [] });
-  const context = abyssPickerState = { id, wave, index, originWave: wave, originIndex: index, account: activeAccount, filters: abyssPickerFilters.get(activeAccount), returnFocus: document.activeElement, loading: !ENCYCLOPEDIA_STATE.index, metadata: new Map((ENCYCLOPEDIA_STATE.index || []).map((entry) => [entry.id, entry])) };
+  const context = abyssPickerState = { id, wave, index, kind, originWave: wave, originIndex: index, account: activeAccount, filters: abyssPickerFilters.get(activeAccount), returnFocus: document.activeElement, loading: !ENCYCLOPEDIA_STATE.index, metadata: new Map((ENCYCLOPEDIA_STATE.index || []).map((entry) => [entry.id, entry])) };
   renderAbyssPicker();
   modal.classList.remove("hidden");
   document.body.classList.add("abyss-picker-open");
   modal.querySelector(".scheme-import-close")?.focus();
-  void loadAbyssPickerFilters(context);
+  return loadAbyssPickerFilters(context);
 }
 function closeAbyssPicker(restoreFocus = true) {
   const context = abyssPickerState;
   cancelAbyssPickerDrag(context);
   if (ENCYCLOPEDIA_STATE.statusContext?.trigger?.closest("#abyssRolePicker")) closeEncyclopediaStatusFilter(false);
   $("abyssRolePicker")?.classList.add("hidden");
+  $('abyssRolePicker')?.querySelectorAll('.abyss-picker-list, .abyss-picker-teams').forEach(node => node.replaceChildren());
   document.body.classList.remove("abyss-picker-open");
   abyssPickerState = null;
   if (restoreFocus && context) {
-    const slot = $(`abyss-${context.id}`)?.querySelector(`.abyss-slot[data-wave="${context.originWave}"][data-index="${context.originIndex}"]`);
+    const slot = abyssPickerRoot(context)?.querySelector(`.abyss-slot[data-wave="${context.originWave}"][data-index="${context.originIndex}"]`);
     (slot || (context.returnFocus?.isConnected ? context.returnFocus : null))?.focus();
   }
 }
@@ -4360,8 +5097,8 @@ function renderAbyssPicker() {
   if (!context || !modal || context.account !== activeAccount) return;
   cancelAbyssPickerDrag(context);
   const { id, filters, metadata } = context;
-  const roles = abyssState[id]?.roles || [];
-  const cfg = getAbyssCfg(), positions = new Map();
+  const roles = abyssPickerData(context)?.roles || [];
+  const cfg = abyssPickerCfg(context), positions = new Map();
   for (const wave of ["upper", "lower"]) cfg[wave].forEach((roleId, index) => {
     if (roleId) positions.set(roleId, `${wave === "upper" ? "上" : "下"}${index + 1}`);
   });
@@ -4384,7 +5121,8 @@ function renderAbyssPicker() {
 }
 
 function advanceAbyssPickerSlot(context, cfg) {
-  const next = Array.from({ length: 4 }, (_, offset) => (context.index + 1 + offset) % 4).find((index) => !cfg[context.wave][index]);
+  const count = cfg[context.wave].length;
+  const next = Array.from({ length: count }, (_, offset) => (context.index + 1 + offset) % count).find((index) => !cfg[context.wave][index]);
   if (next != null) { context.index = next; return; }
   const other = context.wave === "upper" ? "lower" : "upper";
   const otherIndex = cfg[other].findIndex((roleId) => !roleId);
@@ -4395,15 +5133,20 @@ function advanceAbyssPickerSlot(context, cfg) {
 function commitAbyssPicker(cfg) {
   const context = abyssPickerState;
   if (!context || context.account !== activeAccount) return;
-  setAbyssCfg({ upper: cfg.upper, lower: cfg.lower });
-  renderAbyssSlots(context.id);
+  if (context.kind === 'intimacy') {
+    setIntimacyCfg({mains:{upper:cfg.upper[0],lower:cfg.lower[0]}},context.account);
+    renderIntimacyConfiguration(context.id);
+  } else {
+    setAbyssCfg({ upper: cfg.upper, lower: cfg.lower });
+    renderAbyssSlots(context.id);
+  }
   renderAbyssPicker();
 }
 
 function moveAbyssPickerSlot(source, target) {
   const context = abyssPickerState;
   if (!context || context.account !== activeAccount) return;
-  const cfg = getAbyssCfg();
+  const cfg = abyssPickerCfg(context);
   const roleId = cfg[source.wave][source.index];
   if (!roleId) return;
   cfg[source.wave][source.index] = cfg[target.wave][target.index];
@@ -4426,82 +5169,82 @@ function cancelAbyssPickerDrag(context = abyssPickerState) {
 function renderAbyssPickerTeams() {
   const context = abyssPickerState, modal = $("abyssRolePicker");
   if (!context || !modal || context.account !== activeAccount) return;
-  const cfg = getAbyssCfg();
+  const cfg = abyssPickerCfg(context);
   modal.querySelector(".abyss-picker-teams").innerHTML = ["upper", "lower"].map((wave) => {
     const label = wave === "upper" ? "上半" : "下半";
-    return `<section class="abyss-editor-wave" data-abyss-wave="${wave}"><div class="abyss-editor-wave-title"><strong>${label}</strong><small>${cfg[wave].filter(Boolean).length} / 4</small></div><div class="abyss-editor-slots">${cfg[wave].map((roleId, index) => {
-      const role = abyssState[context.id]?.roleMap?.[roleId];
+    return `<section class="abyss-editor-wave" data-abyss-wave="${wave}"><div class="abyss-editor-wave-title"><strong>${label}${context.kind === 'intimacy' ? '主角色' : ''}</strong><small>${cfg[wave].filter(Boolean).length} / ${cfg[wave].length}</small></div><div class="abyss-editor-slots">${cfg[wave].map((roleId, index) => {
+      const role = abyssPickerData(context)?.roleMap?.[roleId];
       const active = context.wave === wave && context.index === index;
       const name = role ? abyssRoleName(role) : roleId || "空槽";
       return `<div class="abyss-editor-cell"><button type="button" class="abyss-editor-slot${roleId ? " filled" : ""}${active ? " active" : ""}" data-abyss-team-slot data-wave="${wave}" data-index="${index}" aria-pressed="${active}" aria-label="${filterEscape(`${label}位置 ${index + 1}，${name}`)}" title="${filterEscape(name)}">${role ? heroPortraitHTML({ ...role, name, avatar: abyssRoleAvatar(role) }) : roleId ? `<span class="abyss-slot-label">${filterEscape(roleId)}</span>` : '<span class="abyss-slot-plus">＋</span>'}<span class="abyss-editor-position" aria-hidden="true">${index + 1}</span></button>${roleId ? `<button type="button" class="abyss-editor-remove" data-abyss-remove-slot data-wave="${wave}" data-index="${index}" aria-label="${filterEscape(`移除${label}位置 ${index + 1}的${name}`)}" title="移除角色"><svg aria-hidden="true"><use href="#ui-x"></use></svg></button>` : ""}</div>`;
     }).join("")}</div></section>`;
   }).join("");
   const hint = modal.querySelector(".abyss-picker-hint");
+  if (context.kind === 'intimacy') {
+    hint.textContent = context.index == null ? '主角色已选好。点击已选角色可移除，未选的半区可自动配队。' : `${context.wave === 'upper' ? '上半' : '下半'}主角色：点击角色选择；其余培养角色自动补齐。`;
+    return;
+  }
   hint.textContent = context.index == null ? "两队已满。可拖动调整位置，或点击已选角色移除。"
     : `${context.wave === "upper" ? "上半" : "下半"} ${context.index + 1}：${cfg[context.wave][context.index] ? "点击角色替换" : "点击角色加入"}；拖动队伍头像调整位置。`;
 }
 function renderAbyssSlots(id) {
   const root = $(`abyss-${id}`); if (!root) return;
   const cfg = getAbyssCfg();
+  const shown=abyssRunning[activeAccount]&&abyssAutoTeams[activeAccount]||cfg;
   root.querySelectorAll(".abyss-wave").forEach((waveEl) => {
     const wave = waveEl.dataset.wave;
-    waveEl.querySelector(".abyss-slots").innerHTML = cfg[wave].map((roleId, index) => abyssSlotHTML(id, wave, index, roleId)).join("");
+    const host = waveEl.querySelector('.abyss-slots');
+    const html = (shown[wave]||[]).map((roleId, index) => abyssSlotHTML(id, wave, index, roleId)).join('');
+    if (host._slotsHTML !== html) { host.innerHTML = html; host._slotsHTML = html; }
   });
-  root.querySelectorAll(".abyss-slot").forEach((slot) => slot.addEventListener("click", () => openAbyssPicker(id, slot.dataset.wave, Number(slot.dataset.index))));
+  root.querySelectorAll(".abyss-slot").forEach((slot) => {slot.disabled=!!(abyssRunning[activeAccount]||abyssRestoring[activeAccount]||abyssRewarding[activeAccount]);slot.onclick = LucimaActionWait.wrap(() => {if(!slot.disabled)return openAbyssPicker(id,slot.dataset.wave,Number(slot.dataset.index));});});
 }
 async function loadAbyssOptions(id, refresh = false) {
   const root = $(`abyss-${id}`); if (!root || (root.dataset.loading === "1" && !refresh)) return;
   const account = activeAccount;
-  const cacheKey = `abyss:${id}`;
-  const cached = !refresh && accountOptionCache(cacheKey, account);
   root.dataset.loading = "1";
   const sceneSlot = root.querySelector(".abyss-scene-slot"), refreshBtn = root.querySelector(".abyss-options-refresh");
   if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.classList.add("loading"); }
   try {
-    const data = cached || await api("/api/abyss/options");
+    const data = await api("/api/abyss/options");
     if (activeAccount !== account || !root.isConnected) return;
-    if (!cached) setAccountOptionCache(cacheKey, data, account);
+    abyssRecoveryPending[account]=!!data.recoveryPending;
     const scenes = Array.isArray(data.scenes) ? data.scenes : (Array.isArray(data.levels) ? data.levels : []);
     let cfg = getAbyssCfg();
+    const hasLocalConfig=frontendStorageGet(abyssLsKey())!=null;
     // 账号配置也保存在后端，首次在新设备打开时用后端快照恢复本地配队。
     // 已存在本地配置时优先保留用户当前浏览器里的编辑内容。
     const saved = data?.config;
     if (frontendStorageGet(abyssLsKey()) == null) cfg.autoAdvance = saved?.autoAdvance === true;
     if (!cfg.sceneId && saved?.sceneId) cfg.sceneId = saved.sceneId;
-    if (!cfg.upper.some(Boolean) && Array.isArray(saved?.waves?.upper)) {
+    if (!hasLocalConfig&&!cfg.upper.some(Boolean) && Array.isArray(saved?.waves?.upper)) {
       cfg.upper = Array.from({ length: 4 }, (_, i) => saved.waves.upper[i] || null);
     }
-    if (!cfg.lower.some(Boolean) && Array.isArray(saved?.waves?.lower)) {
+    if (!hasLocalConfig&&!cfg.lower.some(Boolean) && Array.isArray(saved?.waves?.lower)) {
       cfg.lower = Array.from({ length: 4 }, (_, i) => saved.waves.lower[i] || null);
     }
     setAbyssCfg(cfg);
     const autoAdvance = root.querySelector(".abyss-auto-advance");
     if (autoAdvance) autoAdvance.checked = cfg.autoAdvance;
-    const sceneOpts = scenes.map((scene) => ({
-      val: scene.id || scene.sceneId || scene.StaticID,
-      label: `<span class="abyss-scene-label"><span class="abyss-scene-name">${filterEscape(scene.name || scene.label || scene.id)}</span>${abyssSceneStarsHTML(scene)}</span>`,
-    }));
-    const sceneVal = cfg.sceneId && sceneOpts.some((s) => s.val === cfg.sceneId) ? cfg.sceneId : sceneOpts[0]?.val || "";
-    setAbyssCfg({ sceneId: sceneVal });
-    sceneSlot.innerHTML = dropdownHTML("abyss-scene", sceneOpts, sceneVal, "暂无已解锁的虚构深渊关卡");
-    bindDropdown(sceneSlot.querySelector(".dropdown"), (value) => {
-      setAbyssCfg({ sceneId: value });
-      renderAbyssEffects(id);
-    });
     const roles = abyssRoleList(data).length ? abyssRoleList(data) : (activeAcc()?.roster?.heroes || []);
     const roleMap = Object.fromEntries(roles.map((role) => [abyssRoleId(role), role]));
-    abyssState[id] = { roles, roleMap, scenes, account };
-    renderAbyssEffects(id);
+    abyssState[id] = { roles, roleMap, scenes: scenes.map(scene => ({...scene, id: scene.id || scene.sceneId || scene.StaticID,
+      name: scene.name || scene.label || scene.id})), account };
+    delete sceneSlot._sceneKey;
+    renderAbyssScenePicker(id);
+    renderAbyssIntel(id);
     renderAbyssSlots(id);
+    renderAbyssBattle(id);
     root.dataset.loaded = "1";
   } catch (error) {
     if (activeAccount !== account || !root.isConnected) return;
     sceneSlot.innerHTML = `<div class="dd-loading err">加载失败：${filterEscape(error.message)}</div>`;
     const roles = activeAcc()?.roster?.heroes || [];
     abyssState[id] = { roles, roleMap: Object.fromEntries(roles.map((role) => [abyssRoleId(role), role])), scenes: [], account };
-    renderAbyssEffects(id);
+    renderAbyssIntel(id);
     renderAbyssSlots(id);
     log(`加载虚构深渊选项失败：${error.message}`, "err");
+    setAbyssNotice(id,account,`读取关卡信息失败：${error.message}`,'error');
   } finally {
     root.dataset.loading = "0";
     if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.classList.remove("loading"); }
@@ -4510,36 +5253,26 @@ async function loadAbyssOptions(id, refresh = false) {
 function bindAbyssWidget(id) {
   const root = $(`abyss-${id}`); if (!root) return;
   const body = root.querySelector(".shop-body"), toggle = root.querySelector(".abyss-toggle");
-  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
-    if (!root.dataset.loaded) await loadAbyssOptions(id);
-  }, onRestore: async () => {
-    if (accountOptionCache(`abyss:${id}`) && !root.dataset.loaded) await loadAbyssOptions(id);
-  }});
-  root.querySelector(".abyss-options-refresh")?.addEventListener("click", () => loadAbyssOptions(id, true));
-  root.querySelector(".abyss-start")?.addEventListener("click", () => runAbyss(id));
-  root.querySelector(".abyss-rewards")?.addEventListener("click", () => claimAbyssRewards(id));
-  root.querySelector(".abyss-auto-advance")?.addEventListener("change", (event) => setAbyssCfg({ autoAdvance: event.target.checked }));
+  toggle.addEventListener("click", LucimaActionWait.wrap(async () => { body.classList.toggle("hidden"); toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾"; if (!body.classList.contains("hidden") && !root.dataset.loaded) await loadAbyssOptions(id); }));
+  root.querySelector(".abyss-options-refresh")?.addEventListener("click", LucimaActionWait.wrap(() => loadAbyssOptions(id, true)));
+  root.querySelector(".abyss-start")?.addEventListener("click", LucimaActionWait.wrap(() => runAbyss(id)));
+  root.querySelector(".abyss-rewards")?.addEventListener("click", LucimaActionWait.wrap(() => claimAbyssRewards(id)));
+  root.querySelector(".abyss-auto-advance")?.addEventListener("change", LucimaActionWait.wrap((event) => setAbyssCfg({ autoAdvance: event.target.checked })));
   renderAbyssBattle(id);
 }
 async function claimAbyssRewards(id) {
   const email = activeAccount;
-  if (!email || abyssRunning[email] || abyssRewarding[email]) return;
+  if (!email || abyssRunning[email] || abyssRewarding[email] || abyssRestoring[email]) return;
   abyssRewarding[email] = true;
   renderAbyssBattle(id);
   try {
     const result = await api("/api/abyss/rewards", { account: email });
     if (result.status) applyStatus(email, result.status, result.nextClaims);
     logResult({ ...result, name: "深渊奖励" }, "", email);
-    if (activeAccount === email) {
-      const summary = $(`abyss-${id}`)?.querySelector(".abyss-summary");
-      if (summary) summary.textContent = result.detail || (result.ok ? "奖励领取完成" : "奖励领取失败");
-    }
+    setAbyssNotice(id,email,result.detail || (result.ok ? '奖励领取完成' : '奖励领取失败'),result.ok?'success':'error');
   } catch (error) {
     logTo(email, `深渊奖励领取失败：${error.message}`, "err");
-    if (activeAccount === email) {
-      const summary = $(`abyss-${id}`)?.querySelector(".abyss-summary");
-      if (summary) summary.textContent = "奖励领取失败";
-    }
+    setAbyssNotice(id,email,`奖励领取失败：${error.message}`,'error');
   } finally {
     delete abyssRewarding[email];
     if (activeAccount === email) renderAbyssBattle(id);
@@ -4547,7 +5280,7 @@ async function claimAbyssRewards(id) {
 }
 async function runAbyss(id) {
   const email = activeAccount; if (!email) return;
-  if (abyssRewarding[email]) return;
+  if (abyssRewarding[email]||abyssRestoring[email]) return;
   if (abyssRunning[email]) {
     if (abyssCancelling[email]) return;
     abyssCancelling[email] = true;
@@ -4563,6 +5296,7 @@ async function runAbyss(id) {
     catch (error) {
       abyssCancelling[email] = false;
       logTo(email, `中止深渊失败：${error.message}`, "err");
+      setAbyssNotice(id,email,`中止挑战失败：${error.message}`,'error');
     } finally {
       if (activeAccount === email && !abyssCancelling[email]) {
         const current = $(`abyss-${id}`)?.querySelector(".abyss-start");
@@ -4572,29 +5306,35 @@ async function runAbyss(id) {
     return;
   }
   const cfg = getAbyssCfg();
-  if (!cfg.sceneId) return logTo(email, "请先选择深渊关卡", "err");
-  if (!cfg.upper.some(Boolean) || !cfg.lower.some(Boolean)) return logTo(email, "上半和下半都至少需要 1 名角色", "err");
-  const picks = abyssPicks(cfg); if (new Set(picks).size !== picks.length) return logTo(email, "上下半不能使用重复角色", "err");
-  const root = $(`abyss-${id}`), button = root?.querySelector(".abyss-start"), summary = root?.querySelector(".abyss-summary");
+  if (!cfg.sceneId) return rejectAbyss(id,email,'请先选择深渊关卡');
+  const automatic=cfg.autoAdvance&&!cfg.upper.some(Boolean)&&!cfg.lower.some(Boolean);
+  if (!automatic&&(!cfg.upper.some(Boolean)||!cfg.lower.some(Boolean)))return rejectAbyss(id,email,'请清空两队并开启自动推关，或为上下半各选择至少 1 名角色');
+  const picks = abyssPicks(cfg); if (new Set(picks).size !== picks.length) return rejectAbyss(id,email,'上下半不能使用重复角色');
+  const root = $(`abyss-${id}`), button = root?.querySelector(".abyss-start");
   const request = {};
   abyssRequests[email] = request;
   delete abyssBattleState[email];
-  if (summary) summary.textContent = "";
+  delete abyssRecoveryWarnings[email];
+  setAbyssNotice(id,email,'');
   abyssRunning[email] = true; if (button) { button.disabled = false; button.textContent = "中止挑战"; button.classList.add("task-stop-button"); }
   renderAbyssBattle(id);
   try {
     const result = await api("/api/abyss/run", { ...abyssPayload(cfg), account: email });
+    applyAbyssSceneProgress(email, { sceneId: result.result?.lastSceneId, scenes: result.result?.scenes });
+    abyssRecoveryPending[email]=!!result.result?.recoveryRequired;
+    if (result.result?.recoveryWarning) abyssRecoveryWarnings[email]=result.result.recoveryWarning;
     if (result.status) applyStatus(email, result.status, result.nextClaims);
     logResult({ ...result, name: (TASKS.find((task) => task.id === id) || {}).name || "虚构深渊" }, "", email);
-    if (summary?.isConnected && activeAccount === email) summary.textContent = result.detail || (result.ok ? "挑战完成" : "挑战失败");
+    setAbyssNotice(id,email,result.detail || (result.ok ? '挑战完成' : '挑战失败'),result.ok?'success':'error');
   } catch (error) {
     logTo(email, `虚构深渊执行失败：${error.message}`, "err");
-    if (summary?.isConnected && activeAccount === email) summary.textContent = "执行失败";
+    setAbyssNotice(id,email,`挑战失败：${error.message || '网络连接中断，请检查网络后刷新账号状态'}`,'error');
   } finally {
     if (abyssRequests[email] === request) delete abyssRequests[email];
     abyssRunning[email] = false;
     abyssCancelling[email] = false;
     delete abyssBattleState[email];
+    delete abyssAutoTeams[email];
     if (activeAccount === email) {
       renderAbyssBattle(id);
       if ($(`abyss-${id}`)?.dataset.loaded === "1") await loadAbyssOptions(id, true);
@@ -4602,13 +5342,396 @@ async function runAbyss(id) {
   }
 }
 
+async function restoreAbyssAssets(id){
+  const email=activeAccount;if(!email||abyssRunning[email]||abyssRestoring[email]||abyssRewarding[email])return;
+  abyssRestoring[email]=true;renderAbyssBattle(id);
+  try{
+    const result=await api('/api/abyss/restore',{account:email});abyssRecoveryPending[email]=!!result.recoveryPending;
+    logResult({...result,name:'深渊借装恢复'},'',email);
+    setAbyssNotice(id,email,result.detail,result.ok?'success':'error');
+  }catch(error){logTo(email,`装备恢复未完成：${error.message}`,'err');setAbyssNotice(id,email,`装备与羁绊恢复失败：${error.message}`,'error');}
+  finally{abyssRestoring[email]=false;if(email===activeAccount)renderAbyssBattle(id);}
+}
+
+// ---------- 角色、羁绊管理与活动商店 ----------
+function inventoryManagementUsageText(kind) {
+  const usage = ACCOUNTS[activeAccount]?.status?.inventoryManagement?.[kind] || {};
+  const number = key => Number.isInteger(usage[key]) && usage[key] >= 0 ? usage[key] : '--';
+  return `当前背包占用 ${number('count')}/${number('capacity')}，空位 ${number('space')}，保管仓库 ${number('library')}`;
+}
+
+function renderInventoryManagementUsage() {
+  for (const kind of ['roles', 'bonds']) {
+    const node = $(`manage-${kind}`)?.querySelector('.management-usage');
+    if (node) node.textContent = `；${inventoryManagementUsageText(kind)}`;
+  }
+}
+
+function renderInventoryManagement(t) {
+  const kind = t.managementKind || (t.id === 'character_management' ? 'roles' : 'bonds');
+  const saved = JSON.parse(frontendStorageGet(`ark_management::${activeAccount}::${kind}`) || '{}');
+  const note = kind === 'roles'
+    ? '仅处理初始三星、四星团员（小水盾西尔维纳除外）；同名自动锁 1 个。想保留多个，请先在游戏内加锁。'
+    : '仅处理三星、四星羁绊；同名自动补锁至设定数量，优先喂满已锁羁绊（满破＝等级上限 30），满破后贩卖多余羁绊。想多保留请先在游戏内加锁。';
+  const flow = '先整理当前背包；勾选取回后按空位从临时保管舱取回，背包满时自动再整理。';
+  return `<div class="shop-widget" id="manage-${kind}"><div class="shop-head">
+    <div class="ticon">${taskIconHTML(t.id, kind === 'roles' ? '👥' : '🔗')}</div>
+    <div class="tinfo"><div class="tname">${t.name}</div><div class="tdesc">${t.desc}<span class="management-usage">；${inventoryManagementUsageText(kind)}</span></div></div>
+    <button type="button" class="mini management-toggle">选项 ▸</button></div>
+    <div class="shop-body hidden"><p class="management-note">${note} ${flow}</p>
+    <label class="bt-opt compact-check"><input type="checkbox" class="management-retrieve" ${saved.retrieveLibrary ? 'checked' : ''}>${checkboxUIHTML()}<span>取回临时保管舱</span></label>
+    ${kind === 'bonds' ? `<div class="management-counts">${[4,3].map(star => `<label>${star}星满破保留<input type="number" min="1" max="99" step="1" data-keep="${star}" value="${Math.max(1,Math.min(99,Number(saved['keep'+star]) || 2))}" aria-label="${star}星羁绊满破保留张数">张</label>`).join('')}</div>` : ''}
+    <button type="button" class="btn primary management-run">${kind === 'roles' ? '传送团员' : '贩卖羁绊'}</button>
+    <div class="sweep-summary management-summary" role="status"></div></div></div>`;
+}
+
+const managementRunning = {};
+function bindInventoryManagement(t) {
+  const kind = t.managementKind || (t.id === 'character_management' ? 'roles' : 'bonds');
+  const root = $(`manage-${kind}`), email = activeAccount;
+  root.querySelector('.management-toggle').onclick = LucimaActionWait.wrap(event => {
+    const hidden = root.querySelector('.shop-body').classList.toggle('hidden');
+    event.target.textContent = hidden ? '选项 ▸' : '选项 ▾';
+  });
+  const inputs = [...root.querySelectorAll('[data-keep]')];
+  const options = () => {
+    const value = Object.fromEntries(inputs.map(input => ['keep'+input.dataset.keep, Number(input.value)]));
+    if (root.querySelector('.management-retrieve')?.checked === true) value.retrieveLibrary = true;
+    return value;
+  };
+  inputs.forEach(input => input.onchange = LucimaActionWait.wrap(() => {
+    input.value = Math.max(1, Math.min(99, Math.floor(Number(input.value) || 2)));
+    frontendStorageSet(`ark_management::${email}::${kind}`, JSON.stringify(options()));
+  }));
+  root.querySelector('.management-retrieve')?.addEventListener('change', LucimaActionWait.wrap(() => {
+    frontendStorageSet(`ark_management::${email}::${kind}`, JSON.stringify(options()));
+  }));
+  const button = root.querySelector('.management-run');
+  button.disabled = !!managementRunning[email];
+  if (managementRunning[email]) root.querySelector('.management-summary').textContent = '当前账号正在整理，请等待结果';
+  button.onclick = LucimaActionWait.wrap(async () => {
+    if (managementRunning[email]) return;
+    managementRunning[email] = true;
+    root.querySelectorAll('input, .management-run').forEach(node => node.disabled = true);
+    const summary = root.querySelector('.management-summary');
+    const runOptions = options();
+    summary.style.removeProperty('color');
+    summary.textContent = runOptions.retrieveLibrary ? '正在整理背包并循环取回保管舱…' : '正在同步背包并整理…';
+    try {
+      const result = await api('/api/inventory/manage', {account: email, kind, options: runOptions});
+      if (result.status) applyStatus(email, result.status, result.nextClaims);
+      logResult({...result, name:t.name}, '', email);
+      summary.textContent = result.detail;
+      summary.style.color = result.ok ? 'var(--ok)' : 'var(--err)';
+      if (ACCOUNTS[email]) ACCOUNTS[email].roster = null;
+    } catch (error) { summary.textContent = error.message; summary.style.color = 'var(--err)'; logTo(email, `[${t.name}] ${error.message}`, 'err'); }
+    finally {
+      delete managementRunning[email];
+      if (ACCOUNTS[email]) ACCOUNTS[email].roster = null;
+      void refreshAccountStatus(email);
+      if (activeAccount === email) document.querySelectorAll('[id^="manage-"] input, [id^="manage-"] .management-run').forEach(node => node.disabled = false);
+    }
+  });
+}
+
+const energyOptionsData = {};
+const energyBuying = {};
+const energyOptionsRevisions = {};
+let energyExchangeContext = null;
+function renderEnergyManagement(t) {
+  return `<div class="shop-widget" id="energy-management"><div class="shop-head"><div class="ticon">${taskIconHTML(t.id,'⚡')}</div><div class="tinfo"><div class="tname">${t.name}</div><div class="tdesc">${t.desc}</div></div><button type="button" class="mini energy-toggle">选项 ▸</button></div><div class="shop-body hidden"><div class="energy-options">正在读取可兑换体力项目…</div></div></div>`;
+}
+function bindEnergyManagement() {
+  const root=$('energy-management');
+  root.querySelector('.energy-toggle').onclick=LucimaActionWait.wrap(event=>{const closed=root.querySelector('.shop-body').classList.toggle('hidden');event.target.textContent=closed?'选项 ▸':'选项 ▾';});
+  loadEnergyOptions();
+}
+async function loadEnergyOptions(){
+  const email=activeAccount,root=$('energy-management'); if(!root||!email)return;
+  const account=ACCOUNTS[email],revision=energyOptionsRevisions[email]||0;
+  try{const data=await api(`/api/energy/options?account=${encodeURIComponent(email)}`);if(ACCOUNTS[email]===account && revision===(energyOptionsRevisions[email]||0))applyEnergyOptions(email,data);}
+  catch(error){if(email===activeAccount && root.isConnected)root.querySelector('.energy-options').textContent=`读取失败：${error.message}`;}
+}
+function paintEnergyOptions(){
+  const root=$('energy-management'),items=energyOptionsData[activeAccount]||[];if(!root)return;
+  root.querySelector('.energy-options').innerHTML=items.map(row=>`<div class="energy-option"><div><b>${filterEscape(row.currencyName)}</b><small>当前数量：<strong>${fmtNum(row.current || 0)}</strong></small><small>消耗 ${row.price} → 获得 ${row.gain} ${filterEscape(row.resultName || '体力')}</small></div><button type="button" class="mini energy-buy" data-energy-id="${filterEscape(row.id)}">兑换</button></div>`).join('')||'<span class="management-note">当前没有可兑换的体力项目</span>';
+  root.querySelectorAll('.energy-buy').forEach(button=>{button.disabled=!!energyBuying[activeAccount];button.onclick=LucimaActionWait.wrap(()=>openEnergyExchange(button.dataset.energyId));});
+}
+
+function applyEnergyOptions(email, data) {
+  if (Array.isArray(data.energyOptions)) energyOptionsData[email] = data.energyOptions;
+  if (data.status) applyStatus(email, data.status, data.nextClaims);
+  if (email === activeAccount) paintEnergyOptions();
+}
+
+function ensureEnergyExchangeModal() {
+  let modal = $('energyExchangeModal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'energyExchangeModal';
+  modal.className = 'scheme-import-modal energy-exchange-modal hidden';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'energyExchangeTitle');
+  modal.innerHTML = `<button type="button" class="scheme-import-backdrop" data-energy-close tabindex="-1" aria-label="取消兑换"></button>
+    <div class="scheme-import-dialog energy-exchange-dialog" tabindex="-1">
+      <div class="scheme-import-head"><h3 id="energyExchangeTitle">兑换商品</h3></div>
+      <div class="energy-exchange-body"></div>
+      <p class="energy-exchange-message" role="status" aria-live="polite"></p>
+      <div class="scheme-import-actions"><button type="button" class="scheme-import-cancel" data-energy-close>取消</button><button type="button" class="scheme-import-confirm energy-exchange-confirm" disabled>确认兑换</button></div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.querySelectorAll('[data-energy-close]').forEach(button => button.onclick = LucimaActionWait.wrap(() => closeEnergyExchange()));
+  modal.querySelector('.energy-exchange-confirm').onclick = LucimaActionWait.wrap(confirmEnergyExchange);
+  modal.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeEnergyExchange(); }
+    if (event.key !== 'Tab') return;
+    const focusable = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled)')].filter(node => node.tabIndex >= 0);
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (!first) { event.preventDefault(); return; }
+    if (event.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement))) { event.preventDefault(); first.focus(); }
+  });
+  return modal;
+}
+
+function closeEnergyExchange(force = false) {
+  const context = energyExchangeContext;
+  if (!context || (context.busy && !force)) return;
+  energyExchangeContext = null;
+  $('energyExchangeModal')?.classList.add('hidden');
+  document.body.classList.remove('energy-exchange-open');
+  if (!force && context.email === activeAccount) document.querySelector(`[data-energy-id="${context.sid}"]`)?.focus({preventScroll:true});
+}
+
+async function openEnergyExchange(sid) {
+  const email = activeAccount, account = ACCOUNTS[email];
+  if (!account || energyBuying[email] || energyExchangeContext?.busy) return;
+  const modal = ensureEnergyExchangeModal();
+  const context = {email, account, sid, row:null, count:1, busy:false};
+  energyExchangeContext = context;
+  modal.querySelector('.energy-exchange-body').replaceChildren();
+  modal.querySelector('.energy-exchange-body').inert = false;
+  modal.querySelector('.scheme-import-cancel').disabled = false;
+  modal.querySelector('.energy-exchange-message').textContent = '正在读取可兑换数量…';
+  modal.querySelector('.energy-exchange-confirm').disabled = true;
+  modal.classList.remove('hidden');
+  document.body.classList.add('energy-exchange-open');
+  modal.querySelector('.scheme-import-cancel').focus({preventScroll:true});
+  try {
+    const data = await api(`/api/energy/options?account=${encodeURIComponent(email)}`);
+    if (ACCOUNTS[email] !== account) return;
+    applyEnergyOptions(email, data);
+    if (energyExchangeContext !== context || email !== activeAccount) return;
+    const row = data.energyOptions?.find(item => item.id === sid);
+    if (!row || !Number.isSafeInteger(row.maxBuy) || row.maxBuy < 0) throw new Error('可兑换数量未同步，请重新打开');
+    context.row = row;
+    const maximum = row.maxBuy;
+    context.count = maximum > 0 ? 1 : 0;
+    modal.querySelector('.energy-exchange-body').innerHTML = `
+      <div class="energy-exchange-product"><img src="/assets/items/${filterEscape(row.item)}.png" alt=""><div><b>每份 ${row.gain} ${filterEscape(row.resultName)}</b><small>当前${filterEscape(row.currencyName)}：${fmtNum(row.current)}</small></div></div>
+      ${row.daily ? `<p class="energy-exchange-limit">每日可购买 ${row.dailyLimit == null ? '待同步' : row.dailyLimit} 次 · 剩余可购买 ${row.remaining == null ? '待同步' : row.remaining} 次</p>` : ''}
+      <div class="energy-exchange-quantity"><span>兑换份数</span><div><input id="energyExchangeCount" type="number" inputmode="numeric" min="${maximum ? 1 : 0}" max="${maximum}" step="1" value="${context.count}" aria-label="兑换份数"><span> / ${fmtNum(maximum)}</span></div></div>
+      <div class="energy-exchange-controls"><button type="button" class="mini" data-energy-min>最少</button><button type="button" class="mini" data-energy-minus aria-label="减少一份">−1</button><input class="energy-exchange-range" type="range" min="${maximum ? 1 : 0}" max="${Math.max(1,maximum)}" value="${context.count}" step="1" aria-label="调整兑换份数"><button type="button" class="mini" data-energy-plus aria-label="增加一份">+1</button><button type="button" class="mini" data-energy-max>最多</button></div>
+      <div class="energy-exchange-totals"><span>合计消耗 <img src="/assets/items/${filterEscape(row.currency)}.png" alt=""><b class="energy-exchange-cost"></b> ${filterEscape(row.currencyName)}</span><span>获得 <b class="energy-exchange-gain"></b> ${filterEscape(row.resultName)}</span></div>`;
+    const count = $('energyExchangeCount'), range = modal.querySelector('.energy-exchange-range');
+    const update = value => { context.count = maximum ? Math.max(1, Math.min(maximum, Math.floor(Number(value) || 1))) : 0; updateEnergyExchangeQuantity(context); };
+    count.oninput = () => update(count.value);
+    range.oninput = () => update(range.value);
+    modal.querySelector('[data-energy-min]').onclick = LucimaActionWait.wrap(() => update(1));
+    modal.querySelector('[data-energy-minus]').onclick = LucimaActionWait.wrap(() => update(context.count - 1));
+    modal.querySelector('[data-energy-plus]').onclick = LucimaActionWait.wrap(() => update(context.count + 1));
+    modal.querySelector('[data-energy-max]').onclick = LucimaActionWait.wrap(() => update(maximum));
+    modal.querySelector('.energy-exchange-message').textContent = row.reason || `当前最多可兑换 ${fmtNum(maximum)} 份`;
+    updateEnergyExchangeQuantity(context);
+  } catch (error) {
+    if (energyExchangeContext === context) modal.querySelector('.energy-exchange-message').textContent = `读取失败：${error.message}`;
+  }
+}
+
+function updateEnergyExchangeQuantity(context) {
+  if (energyExchangeContext !== context || !context.row) return;
+  const modal = $('energyExchangeModal'), {row, count, busy} = context;
+  $('energyExchangeCount').value = count;
+  modal.querySelector('.energy-exchange-range').value = count;
+  modal.querySelector('.energy-exchange-cost').textContent = fmtNum(count * row.price);
+  modal.querySelector('.energy-exchange-gain').textContent = fmtNum(count * row.gain);
+  modal.querySelectorAll('.energy-exchange-body input, .energy-exchange-body button').forEach(node => node.disabled = busy || !row.maxBuy);
+  modal.querySelectorAll('[data-energy-min], [data-energy-minus]').forEach(node => node.disabled = busy || count <= 1);
+  modal.querySelectorAll('[data-energy-max], [data-energy-plus]').forEach(node => node.disabled = busy || count >= row.maxBuy);
+  modal.querySelector('.energy-exchange-confirm').disabled = busy || !row.maxBuy;
+}
+
+async function confirmEnergyExchange() {
+  const context = energyExchangeContext;
+  if (!context?.row?.maxBuy || context.busy || context.email !== activeAccount || ACCOUNTS[context.email] !== context.account) return;
+  const {email, account, sid, count} = context, modal = $('energyExchangeModal');
+  context.busy = true;
+  energyBuying[email] = true;
+  energyOptionsRevisions[email] = (energyOptionsRevisions[email] || 0) + 1;
+  updateEnergyExchangeQuantity(context);
+  modal.querySelector('.scheme-import-cancel').disabled = true;
+  modal.querySelector('.energy-exchange-dialog').focus({preventScroll:true});
+  modal.querySelector('.energy-exchange-message').textContent = '正在兑换，请稍候…';
+  let succeeded = false;
+  try {
+    const result = await api('/api/energy/buy', {account:email, commodityId:sid, count});
+    if (ACCOUNTS[email] !== account) return;
+    if (result.ok !== true) throw new Error(result.detail || '兑换结果未确认，请刷新账号核对');
+    applyEnergyOptions(email, result);
+    logTo(email, result.detail, 'ok');
+    succeeded = true;
+    if (energyExchangeContext === context) { context.busy = false; closeEnergyExchange(); }
+  } catch (error) {
+    if (ACCOUNTS[email] === account) logTo(email, `体力管理：${error.message}`, 'err');
+    if (energyExchangeContext === context) {
+      modal.querySelector('.energy-exchange-message').textContent = `${error.message}；请关闭弹框后重新打开核对数量`;
+      // A failed or uncertain purchase must be refreshed before another submit.
+      modal.querySelector('.energy-exchange-body').inert = true;
+    }
+  } finally {
+    energyOptionsRevisions[email] = (energyOptionsRevisions[email] || 0) + 1;
+    delete energyBuying[email];
+    context.busy = false;
+    if (energyExchangeContext === context) {
+      modal.querySelector('.scheme-import-cancel').disabled = false;
+      modal.querySelector('.scheme-import-cancel').focus({preventScroll:true});
+    }
+    if (email === activeAccount) paintEnergyOptions();
+    if (succeeded && email === activeAccount && !energyExchangeContext) document.querySelector(`[data-energy-id="${sid}"]`)?.focus({preventScroll:true});
+  }
+}
+window.addEventListener('lucima:account-change', () => closeEnergyExchange(true));
+
+const activityStoreData = {}, activityStoreRequests = {}, activityStoreSaveQueues = {}, activityStoreRevisions = {}, activityStorePending = {}, activityStoreBuying = {};
+function renderActivityStoreWidget(t) {
+  return `<div class="shop-widget" id="activity-store"><div class="shop-head">
+    <div class="ticon">${taskIconHTML(t.id, '🛍️')}</div><div class="tinfo"><div class="tname">${t.name}</div><div class="tdesc">${t.desc}</div></div>
+    <button type="button" class="mini activity-store-toggle">选项 ▸</button></div>
+    <div class="shop-body hidden"><p class="management-note">限购商品默认买满；开启“买完停止”后，勾选商品买齐即停止，剩余积分自动换金币。</p>
+    <button type="button" class="mini activity-store-refresh">刷新商店</button><div class="activity-store-content">正在读取当期商店…</div></div></div>`;
+}
+
+function bindActivityStoreWidget() {
+  const root = $('activity-store');
+  root.querySelector('.activity-store-toggle').onclick = LucimaActionWait.wrap(event => {
+    const hidden = root.querySelector('.shop-body').classList.toggle('hidden');
+    event.target.textContent = hidden ? '选项 ▸' : '选项 ▾';
+  });
+  root.querySelector('.activity-store-refresh').onclick = LucimaActionWait.wrap(() => loadActivityStore(true));
+  if (activityStoreData[activeAccount]) paintActivityStore();
+  void loadActivityStore();
+}
+
+function applyActivityStore(email, snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.shops) || activityStorePending[email]) return;
+  activityStoreData[email] = snapshot;
+  if (email !== activeAccount) return;
+  paintActivityStore(); updateActivityStoreStop('activity_scene');
+}
+
+async function loadActivityStore(refresh = false) {
+  const email = activeAccount;
+  if (!email) return;
+  if (activityStoreRequests[email]) return activityStoreRequests[email];
+  const revision = activityStoreRevisions[email] || 0;
+  activityStoreRequests[email] = (async () => {
+    try {
+      const result = await api(`/api/activity/store/options?account=${encodeURIComponent(email)}`);
+      if (revision === (activityStoreRevisions[email] || 0)) applyActivityStore(email, result.activityStore);
+    } catch (error) {
+      if (email === activeAccount && $('activity-store')) $('activity-store').querySelector('.activity-store-content').textContent = `读取失败：${error.message}，请点击刷新商店重试`;
+      if (refresh) logTo(email, `[活动商店] ${error.message}`, 'err');
+    } finally { delete activityStoreRequests[email]; }
+  })();
+  return activityStoreRequests[email];
+}
+
+function updateActivityStoreStop(id) {
+  const root = $(`act-${id}`);
+  if (!root) return;
+  const cfg = getActCfg(), family = (cfg.sceneId.match(/^(BH\d+)_/) || [])[1];
+  const shop = activityStoreData[activeAccount]?.shops?.find(row => row.family === family);
+  const done = !!shop?.stop && cfg.mode !== 'progress';
+  root.classList.toggle('act-store-done', done);
+  root.querySelector('.act-store-complete')?.classList.toggle('hidden', !done);
+  const scene = root.querySelector('.act-scene-slot');
+  if (scene) { scene.inert = done || !!actRunning[activeAccount] || !!actProgressRunning[activeAccount]; scene.setAttribute('aria-disabled',String(done)); }
+  const button = root.querySelector('.act-start');
+  if (button && !actRunning[activeAccount] && !actProgressRunning[activeAccount]) button.disabled = done;
+}
+
+function paintActivityStore() {
+  const root = $('activity-store'), data = activityStoreData[activeAccount];
+  if (!root || !data) return;
+  const host = root.querySelector('.activity-store-content'), email = activeAccount;
+  host.innerHTML = data.shops.length ? data.shops.map(shop => `<section class="activity-store-section" data-store="${filterEscape(shop.id)}" ${activityStoreBuying[email] ? 'inert' : ''}>
+    <b>${filterEscape(shop.name)}</b><p class="management-note activity-store-currency"><span>${filterEscape(shop.currencyName)}：</span><strong>${shop.balance}</strong>${shop.complete ? ' · 当前所需商品已购满' : ''}</p>
+    <label class="bt-opt compact-check"><input type="checkbox" class="activity-store-stop" ${shop.config.stopWhenBought ? 'checked' : ''}>${checkboxUIHTML()}<span>买完停止<small class="activity-store-stop-note">（买完后将自动停止扫荡）</small></span></label>
+    <div class="activity-store-goods">${shop.goods.filter(row => row.item !== '1').map(row => `<div class="activity-store-good${row.limit != null && row.remaining === 0 ? ' sold-out' : ''}" aria-disabled="${row.limit != null && row.remaining === 0}">
+      <label class="bt-opt"><input type="checkbox" data-store-item="${filterEscape(row.id)}" ${row.selected ? 'checked' : ''} ${row.limit != null && row.remaining === 0 ? 'disabled' : ''}>${checkboxUIHTML()}<span>${filterEscape(row.name)}<small>${row.price} 积分／份${row.limit == null ? ' · 不限购' : ' · 剩余 '+row.remaining+'/'+row.limit+' 份'}</small></span></label>
+      ${row.limit == null ? `<label class="activity-store-target"><span>目标份数</span><input type="number" class="activity-store-quantity" data-quantity="${filterEscape(row.id)}" min="1" max="999999" step="1" value="${row.target}" aria-label="${filterEscape(row.name)}目标份数"></label>` : ''}</div>`).join('')}</div>
+    <div class="activity-store-actions"><button type="button" class="btn primary activity-store-buy" ${activityStoreBuying[email] ? 'disabled' : ''}>保存并购买</button></div></section>`).join('') : '<p class="management-note">当前没有开放的活动商店</p>';
+  host.querySelectorAll('[data-store]').forEach(section => {
+    const store = section.dataset.store;
+    const saveSelection = () => {
+      const items = [...section.querySelectorAll('[data-store-item]:checked')].map(node => node.dataset.storeItem);
+      const quantities = Object.fromEntries([...section.querySelectorAll('[data-quantity]')].map(node => {
+        node.value = Math.max(1,Math.min(999999,Math.floor(Number(node.value) || 1)));
+        return [node.dataset.quantity, Number(node.value)];
+      }));
+      const options = {items, quantities, stopWhenBought:section.querySelector('.activity-store-stop').checked};
+      const revision = activityStoreRevisions[email] = (activityStoreRevisions[email] || 0) + 1;
+      activityStorePending[email] = revision;
+      activityStoreSaveQueues[email] = (activityStoreSaveQueues[email] || Promise.resolve()).catch(() => {}).then(async () => {
+        try {
+          const result = await api('/api/activity/store/config', {account:email, store, options});
+          if (revision === activityStoreRevisions[email]) {
+            delete activityStorePending[email]; applyActivityStore(email,result.activityStore);
+          }
+          if (result.status) applyStatus(email,result.status,result.nextClaims);
+          for (const line of result.storePurchases?.lines || []) logTo(email, `[活动商店] 已购买 ${line}`, 'ok');
+        } catch (error) {
+          logTo(email, `[活动商店] 设置保存失败：${error.message}`, 'err');
+          if (revision === activityStoreRevisions[email]) {
+            delete activityStorePending[email]; void loadActivityStore(true);
+          }
+          throw error;
+        }
+      });
+      // Mark handled for browsers, while preserving rejection for a sweep
+      // waiting on the same promise (it must not use unsaved selections).
+      activityStoreSaveQueues[email].catch(() => {});
+      return activityStoreSaveQueues[email];
+    };
+    section.addEventListener('change', LucimaActionWait.wrap(saveSelection));
+    section.querySelector('.activity-store-buy').onclick = LucimaActionWait.wrap(async event => {
+      if (activityStoreBuying[email]) return;
+      activityStoreBuying[email] = true;
+      section.inert = true;
+      const button = event.currentTarget; button.disabled = true;
+      try {
+        await saveSelection();
+        const result = await api('/api/activity/store/buy', {account:email,store});
+        applyActivityStore(email,result.activityStore);
+        if (result.status) applyStatus(email,result.status,result.nextClaims);
+        logResult({...result,name:'活动商店'},'',email);
+      } catch (error) { logTo(email, `[活动商店] ${error.message}`, 'err'); }
+      finally {
+        delete activityStoreBuying[email];
+        if (email === activeAccount) paintActivityStore();
+      }
+    });
+  });
+}
+
 // ---------- 活动关卡自定义控件（含助战好友选择） ----------
 // 配置按账号命名空间（关卡/队伍/助战 各账号不同）
 const ACT_LS = "ark_activity_cfg"; // {count, sceneId, teamId, supportCuid, quick, urgentEnabled, urgentSpecializations}
-const actLsKey = () => `${ACT_LS}::${activeAccount || "_"}`;
-function getActCfg() {
+const actLsKey = (email = activeAccount) => `${ACT_LS}::${email || "_"}`;
+function getActCfg(email = activeAccount) {
   try {
-    const v = JSON.parse(frontendStorageGet(actLsKey())) || {};
+    const v = JSON.parse(frontendStorageGet(actLsKey(email))) || {};
     const legacyUrgent = ["gold", "catalyst"].includes(v.urgentSpecialization)
       ? [v.urgentSpecialization] : ["gold", "catalyst"];
     const urgentSpecializations = Array.isArray(v.urgentSpecializations)
@@ -4618,6 +5741,8 @@ function getActCfg() {
       count: v.count || 5, sceneId: v.sceneId || "", teamId: v.teamId || "",
       mode: v.mode === "progress" ? "progress" : "sweep", family: v.family || "",
       supportCuid: v.supportCuid || "", quick: v.quick !== false,
+      autoSell: v.autoSell === true,
+      includeEpic85: v.includeEpic85 === true,
       urgentEnabled: v.urgentEnabled !== false,
       urgentSpecializations,
     };
@@ -4629,8 +5754,8 @@ function getActCfg() {
     };
   }
 }
-function setActCfg(patch) {
-  frontendStorageSet(actLsKey(), JSON.stringify({ ...getActCfg(), ...patch }));
+function setActCfg(patch, email = activeAccount) {
+  frontendStorageSet(actLsKey(email), JSON.stringify({ ...getActCfg(email), ...patch }));
 }
 
 function closeActivityUrgentHelp(scope = document) {
@@ -4644,18 +5769,19 @@ function renderActivityWidget(t) {
   return `<div class="shop-widget sweep-host" id="act-${t.id}">
     <div class="shop-head">
       <div class="ticon">${taskIconHTML(t.id, "🎫")}</div>
-      <div class="tinfo"><div class="tname">${t.name}</div><div class="tdesc">${t.desc}</div></div>
+      <div class="tinfo"><div class="tname">${t.name}</div><div class="tdesc">${t.desc}<span class="act-store-complete hidden">（当前所需商品已购满）</span></div></div>
       <button type="button" class="mini act-toggle">选项 ▸</button>
     </div>
     <div class="shop-body hidden">
       <div class="act-option-head"><div class="b-tabs act-tabs" role="tablist" aria-label="活动关卡模式">
         <button type="button" class="b-tab${cfg.mode !== "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode !== "progress"}" data-act-mode="sweep">扫荡</button>
-        <button type="button" class="b-tab${cfg.mode === "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "progress"}" data-act-mode="progress">自动推关</button>
+        <button type="button" class="b-tab${cfg.mode === "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "progress"}" data-act-mode="progress">自动推图</button>
       </div><button type="button" class="act-options-refresh" title="重新加载活动关卡选项" aria-label="重新加载活动关卡选项"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button></div>
       <div class="shop-row col act-progress-only${cfg.mode === "progress" ? "" : " hidden"}">
         <span class="shop-lbl">活动</span>
         <div class="dd-slot act-family-slot"><div class="dd-loading">加载中…</div></div>
-        <p class="act-progress-hint">从首个未通关关卡继续，直至当前已开放的最后一关。剧情关自动使用指定队伍。</p>
+        <p class="act-progress-hint">从首个未通关关卡继续；第13关自动配队，失败自动换队，最多5次。</p>
+        <p class="loadout-safety-warning">自动配队或借装会调整装备与羁绊。为防止应用中途退出等情况导致装备未能归还，使用前建议先在游戏内保存好所有角色的装备方案。</p>
       </div>
       <div class="shop-row col">
         <div class="act-option-head">
@@ -4680,11 +5806,14 @@ function renderActivityWidget(t) {
           <button type="button" class="count-btn" data-d="1">+</button>
         </div>
       </div>
-      <label class="quick-ticket-toggle target-score-toggle act-quick-row">
-        <input type="checkbox" role="switch" class="act-quick" ${cfg.quick ? "checked" : ""}>
-        <span class="target-score-switch" aria-hidden="true"></span>
+      <div class="sweep-ticket-sales act-ticket-sales">
+      <label class="bt-opt compact-check quick-ticket-toggle act-quick-row">
+        <input type="checkbox" class="act-quick" ${cfg.quick ? "checked" : ""}>
+        ${checkboxUIHTML()}
         <span>使用快速战斗券</span>
       </label>
+      ${sweepSaleHTML(t.id, cfg.autoSell, cfg.includeEpic85)}
+      </div>
       <div class="act-urgent-control${cfg.urgentEnabled ? " enabled" : ""}">
         <label class="act-urgent-toggle target-score-toggle">
           <input type="checkbox" role="switch" class="act-urgent-enabled" ${cfg.urgentEnabled ? "checked" : ""}>
@@ -4701,7 +5830,7 @@ function renderActivityWidget(t) {
             <button type="button" class="act-urgent-help" data-urgent-help="gold" aria-label="查看金币特化说明" aria-expanded="false" title="查看说明">
               <svg aria-hidden="true"><use href="#ui-circle-help"></use></svg>
             </button>
-            <p class="act-urgent-help-text hidden" data-urgent-help-text="gold">发现赏金任务时立即完成；其它任务最多暂存两个以提高目标出现概率，本轮活动结束后统一清理。</p>
+            <p class="act-urgent-help-text hidden" data-urgent-help-text="gold">赏金任务立即完成；其它任务最多暂存两个，活动结束后清理。</p>
           </div>
           <div class="act-urgent-option${cfg.urgentSpecializations.includes("catalyst") ? " selected" : ""}">
             <label class="act-urgent-choice">
@@ -4712,7 +5841,7 @@ function renderActivityWidget(t) {
             <button type="button" class="act-urgent-help" data-urgent-help="catalyst" aria-label="查看催化剂特化说明" aria-expanded="false" title="查看说明">
               <svg aria-hidden="true"><use href="#ui-circle-help"></use></svg>
             </button>
-            <p class="act-urgent-help-text hidden" data-urgent-help-text="catalyst">发现催化剂任务时立即完成；其它任务最多暂存两个以提高目标出现概率，本轮活动结束后统一清理。</p>
+            <p class="act-urgent-help-text hidden" data-urgent-help-text="catalyst">催化剂任务立即完成；其它任务最多暂存两个，活动结束后清理。</p>
           </div>
         </div>
       </div>
@@ -4729,11 +5858,29 @@ const actProgressRequests = {};
 const actProgressState = {};
 const actProgressStopping = {};
 
+function syncActivityFamilyProgress(id) {
+  const root = $(`act-${id}`), progress = actProgressState[activeAccount];
+  if (!root || !progress || !Number.isInteger(progress.completed) || !Number.isInteger(progress.total)) return;
+  const family = progress.family || getActCfg().family;
+  root.querySelectorAll('.act-family-count').forEach(node => {
+    if (node.dataset.family !== family) return;
+    const text = `已通关 ${progress.completed}/${progress.total}`;
+    if (node.textContent !== text) node.textContent = text;
+  });
+  root.querySelectorAll('.act-family select option').forEach(option => {
+    if (option.value === family) option.textContent = option.textContent.replace(/已通关 \d+\/\d+/, `已通关 ${progress.completed}/${progress.total}`);
+  });
+}
+
 function updateActivityMode(id) {
   const root = $(`act-${id}`);
   if (!root) return;
   const running = !!actProgressRunning[activeAccount];
   const progress = running || getActCfg().mode === "progress";
+  root.querySelector('.act-ticket-sales').classList.toggle('act-progress-sales', progress);
+  root.querySelector('.sweep-auto-sell').disabled = running;
+  root.querySelector('.sweep-sell-epic85').disabled = running;
+  root.querySelector('.sweep-sale-hint').textContent = sweepSaleHint(root.querySelector('.sweep-sell-epic85').checked, id);
   root.querySelectorAll(".act-sweep-only").forEach((node) => node.classList.toggle("hidden", progress));
   root.querySelectorAll(".act-progress-only").forEach((node) => node.classList.toggle("hidden", !progress));
   root.querySelectorAll("[data-act-mode]").forEach((button) => {
@@ -4744,7 +5891,7 @@ function updateActivityMode(id) {
   });
   const button = root.querySelector(".act-start");
   if (progress) {
-    button.textContent = running ? (actProgressStopping[activeAccount] ? "停止中…" : "停止推关") : "▶ 开始推关";
+    button.textContent = running ? (actProgressStopping[activeAccount] ? "停止中…" : "停止推图") : "▶ 开始推图";
     button.disabled = !!actProgressStopping[activeAccount];
     button.classList.toggle("task-stop-button", running);
   } else if (!actRunning[activeAccount]) {
@@ -4763,22 +5910,37 @@ function updateActivityMode(id) {
     const wave = state.battle ? ` · 第 ${Number(state.battle.wave) + 1} 波` : "";
     status.textContent = `已通关 ${state.completed}/${state.total}${state.stageName ? ` · ${state.stageName}` : ""}${wave} · ${state.detail || ""}`;
   }
+  syncActivityFamilyProgress(id);
   const battle = progress && running ? state?.battle : null;
   const host = root.querySelector(".act-battle-progress");
-  const html = battle ? abyssBattleHTML(battle, { sceneLabel: state.stageName || "",
-    waveLabel: `第 ${Number(battle.wave) + 1} 波` }) : "";
-  if (host._battleHTML !== html) {
-    host.innerHTML = html;
-    host._battleHTML = html;
-  }
-  host.classList.toggle("hidden", !battle);
+  renderBattleProgress(host, battle, { sceneLabel: state?.stageName || "",
+    waveLabel: `第 ${Number(battle?.wave) + 1} 波` });
+  if (typeof updateActivityStoreStop === 'function') updateActivityStoreStop(id);
 }
 
 function applyActivityProgress(email, snapshot) {
   if (!snapshot) return;
+  const keys = applyActivityProgress._keys || (applyActivityProgress._keys = {});
+  const key = JSON.stringify([snapshot, !!actProgressRequests[email], !!actProgressStopping[email]]);
+  if (keys[email] === key) return;
+  keys[email] = key;
   actProgressRunning[email] = !!(snapshot.running || actProgressRequests[email]);
   if (!actProgressRunning[email]) delete actProgressStopping[email];
   if (snapshot.progress) actProgressState[email] = snapshot.progress;
+  const sales = snapshot.progress?.equipmentSales;
+  if (sales) {
+    const state = sweepSaleState('activity_scene', email);
+    const saleKey = JSON.stringify(sales);
+    if (state.serverSaleKey !== saleKey) {
+      state.serverSaleKey = saleKey;
+      Object.assign(state, {initialized: true, enabled: sales.enabled === true, sold: sales.sold || 0,
+        busy: !!sales.busy, error: sales.error || '', sales: {},
+        running: !!snapshot.running, finished: !snapshot.running});
+      addSweepRewards(state.sales, sales.rewardSummary);
+      if (sales.error) saveSweepSaleSetting('activity_scene', email, false);
+      renderSweepSale('activity_scene', email);
+    }
+  }
   if (activeAccount === email) updateActivityMode("activity_scene");
 }
 
@@ -4795,27 +5957,35 @@ async function runActivityProgress(id) {
   const cfg = getActCfg();
   if (!cfg.family || !cfg.teamId) return log("请先选择活动和队伍", "err");
   const request = {};
+  let finished = null;
   actProgressRequests[email] = request;
+  sweepSaleState(id, email).serverSaleKey = null;
   actProgressRunning[email] = true;
-  delete actProgressState[email];
+  if (actProgressState[email]?.family && actProgressState[email].family !== cfg.family) delete actProgressState[email];
   updateActivityMode(id);
-  logTo(email, "开始活动自动推关", "info");
+  logTo(email, "开始活动自动推图", "info");
   try {
     const result = await api("/api/activity/progress/run", { account: email, family: cfg.family,
-      teamId: cfg.teamId, supportCuid: cfg.supportCuid || null });
-    applyActivityProgress(email, result.activityProgress);
+      teamId: cfg.teamId, supportCuid: cfg.supportCuid || null, autoSell: cfg.autoSell === true,
+      includeEpic85: cfg.includeEpic85 === true });
+    finished = result;
+    applyActivityProgress(email, result.progress ? {running:false,progress:result.progress} : result.activityProgress);
     if (result.status) applyStatus(email, result.status, result.nextClaims);
-    logResult({ ...result, name: "活动自动推关" }, "", email);
-    if (result.lines?.length && result.detail) logTo(email, `[活动自动推关] ${result.detail}`, result.ok ? "ok" : "warn");
+    logResult({ ...result, name: "活动自动推图" }, "", email);
+    if (result.lines?.length && result.detail) logTo(email, `[活动自动推图] ${result.detail}`, result.ok ? "ok" : "warn");
     if (actProgressState[email]) actProgressState[email] = { ...actProgressState[email], battle: null, detail: result.detail };
   } catch (error) {
-    logTo(email, `活动自动推关：${error.message}`, "err");
+    logTo(email, `活动自动推图：${error.message}`, "err");
     actProgressState[email] = { ...(actProgressState[email] || {completed: 0, total: "—"}), battle: null, detail: error.message };
   } finally {
     if (actProgressRequests[email] === request) delete actProgressRequests[email];
     actProgressRunning[email] = false;
     delete actProgressStopping[email];
+    const progress = actProgressState[email];
+    const complete = finished?.ok && !finished.recoveryRequired && progress?.total > 0 && progress.completed >= progress.total;
+    if (complete) setActCfg({mode:'sweep', sceneId:finished.lastSceneId || progress.sceneId || getActCfg(email).sceneId},email);
     if (email === activeAccount) updateActivityMode(id);
+    if (email === activeAccount && finished && $(`act-${id}`)?.dataset.loaded === '1') await loadActivityOptions(id,true);
     refreshAccountStatus(email);
   }
 }
@@ -4835,7 +6005,7 @@ function supportCardHTML(f, selected, fav = false, offline = false) {
   const star = `<button type="button" class="sup-star${fav ? " on" : ""}" data-cuid="${f.cuid}"
     title="${fav ? "取消收藏" : "加入收藏夹"}">${fav ? "★" : "☆"}</button>`;
   const off = offline ? `<span class="sup-off" title="当前不在助战列表，将使用收藏时保存的数据">存档</span>` : "";
-  return `<div class="sup-card${selected ? " sel" : ""}" data-cuid="${f.cuid}">
+  return `<div class="sup-card${selected ? " sel" : ""}" role="button" tabindex="0" aria-pressed="${selected}" data-cuid="${f.cuid}">
     <div class="hero-pic">${av}${lv}${grade}</div>
     <div class="sup-meta">
       <div class="sup-name"><span class="sup-nm">${f.name || "(无名)"}</span>${off}</div>
@@ -4849,58 +6019,62 @@ function supportCardHTML(f, selected, fav = false, offline = false) {
 async function bindActivityWidget(id) {
   const root = $(`act-${id}`);
   if (!root) return;
+  if (typeof loadActivityStore === 'function') void loadActivityStore();
+  bindSweepSale(root, id);
   const body = root.querySelector(".shop-body");
   const toggle = root.querySelector(".act-toggle");
   const sceneRow = root.querySelector(".act-scene-slot").closest(".shop-row");
   const countRow = root.querySelector(".act-count").closest(".shop-row");
   [sceneRow, countRow, root.querySelector(".act-quick-row"), root.querySelector(".act-urgent-control")]
     .forEach((node) => node.classList.add("act-sweep-only"));
-  root.querySelectorAll("[data-act-mode]").forEach((button) => button.addEventListener("click", () => {
+  root.querySelectorAll("[data-act-mode]").forEach((button) => button.addEventListener("click", LucimaActionWait.wrap(() => {
     if (actRunning[activeAccount] || actProgressRunning[activeAccount]) return;
     setActCfg({ mode: button.dataset.actMode });
     updateActivityMode(id);
-  }));
+  })));
   updateActivityMode(id);
-  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
-    if (!root.dataset.loaded) await loadActivityOptions(id);
-  }, onRestore: async () => {
-    if (accountOptionCache(`activity:${id}`) && !root.dataset.loaded) await loadActivityOptions(id);
-  }});
+  toggle.addEventListener("click", LucimaActionWait.wrap(async () => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
+      await loadActivityOptions(id);
+    }
+  }));
 
-  root.querySelector(".act-options-refresh").addEventListener("click", () => loadActivityOptions(id, true));
+  root.querySelector(".act-options-refresh").addEventListener("click", LucimaActionWait.wrap(() => loadActivityOptions(id, true)));
 
   const cntIn = root.querySelector(".act-count");
   cntIn.addEventListener("input", () => { cntIn.value = cntIn.value.replace(/[^0-9]/g, "").slice(0, 3); });
   cntIn.addEventListener("blur", () => { cntIn.value = clampCount(cntIn.value); setActCfg({ count: parseInt(cntIn.value) }); });
   root.querySelectorAll(".count-btn").forEach((btn) =>
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", LucimaActionWait.wrap(() => {
       cntIn.value = clampCount((parseInt(cntIn.value) || 5) + parseInt(btn.dataset.d));
       setActCfg({ count: parseInt(cntIn.value) });
-    })
+    }))
   );
 
   const quick = root.querySelector(".act-quick");
-  if (quick) quick.addEventListener("change", () => setActCfg({ quick: quick.checked }));
+  if (quick) quick.addEventListener("change", LucimaActionWait.wrap(() => setActCfg({ quick: quick.checked })));
 
   const urgentControl = root.querySelector(".act-urgent-control");
   const urgentToggle = root.querySelector(".act-urgent-enabled");
   const urgentModes = root.querySelector(".act-urgent-modes");
-  urgentToggle.addEventListener("change", () => {
+  urgentToggle.addEventListener("change", LucimaActionWait.wrap(() => {
     urgentControl.classList.toggle("enabled", urgentToggle.checked);
     urgentModes.classList.toggle("hidden", !urgentToggle.checked);
     if (!urgentToggle.checked) closeActivityUrgentHelp(root);
     setActCfg({ urgentEnabled: urgentToggle.checked });
-  });
+  }));
   root.querySelectorAll("[data-urgent-mode]").forEach((input) => {
-    input.addEventListener("change", () => {
+    input.addEventListener("change", LucimaActionWait.wrap(() => {
       input.closest(".act-urgent-option")?.classList.toggle("selected", input.checked);
       const modes = [...root.querySelectorAll("[data-urgent-mode]:checked")]
         .map((item) => item.dataset.urgentMode);
       setActCfg({ urgentSpecializations: modes });
-    });
+    }));
   });
   root.querySelectorAll("[data-urgent-help]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", LucimaActionWait.wrap(() => {
       const text = root.querySelector(`[data-urgent-help-text="${button.dataset.urgentHelp}"]`);
       const willOpen = text?.classList.contains("hidden");
       closeActivityUrgentHelp(root);
@@ -4909,14 +6083,14 @@ async function bindActivityWidget(id) {
         text.classList.remove("hidden");
         button.setAttribute("aria-expanded", "true");
       }
-    });
+    }));
   });
 
-  root.querySelector(".act-start").addEventListener("click", () => {
-    if (actProgressRunning[activeAccount] || getActCfg().mode === "progress") runActivityProgress(id);
+  root.querySelector(".act-start").addEventListener("click", LucimaActionWait.wrap(() => {
+    if (actProgressRunning[activeAccount] || getActCfg().mode === "progress") return runActivityProgress(id);
     else if (actRunning[activeAccount]) requestActivityStop(id, activeAccount);
-    else runActivity(id);
-  });
+    else return runActivity(id);
+  }));
   if (actRunning[activeAccount]) {
     const button = root.querySelector(".act-start");
     const stopping = !!actStopRequested[activeAccount];
@@ -4932,30 +6106,36 @@ async function loadActivityOptions(id, refresh = false) {
   const sceneSlot = root.querySelector(".act-scene-slot");
   const teamSlot = root.querySelector(".act-team-slot");
   const supSlot = root.querySelector(".act-support-slot");
+  if (!root.querySelector('.act-support-search')) supSlot.insertAdjacentHTML('beforebegin','<input type="search" class="act-support-search" placeholder="搜索好友昵称或 UID" aria-label="搜索好友昵称或 UID">');
   const refreshButton = root.querySelector(".act-options-refresh");
   const email = activeAccount;
-  const cacheKey = `activity:${id}`;
-  const cached = !refresh && accountOptionCache(cacheKey, email);
+  const loadSeq = (root._activityOptionsSeq || 0) + 1;
+  root._activityOptionsSeq = loadSeq;
   root.dataset.loading = "1";
-  refreshButton.disabled = true;
-  refreshButton.classList.add("loading");
-  if (refresh || (!root.dataset.loaded && !cached)) {
+  if (refreshButton) { refreshButton.disabled = true; refreshButton.classList.add("loading"); }
+  const wasLoaded = root.dataset.loaded === '1';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 35000);
+  if (!wasLoaded) {
     root.querySelector(".act-family-slot").innerHTML = `<div class="dd-loading">加载中…</div>`;
     sceneSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
     teamSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
     supSlot.innerHTML = `<div class="dd-loading">加载中…</div>`;
   }
   try {
-    const options = cached || await api("/api/activity/options");
-    if (activeAccount !== email || !root.isConnected) return false;
-    if (!cached) setAccountOptionCache(cacheKey, options, email);
-    const { scenes = [], teams = [], supports = [], favorites = [], activities = [] } = options;
+    const { scenes, teams, supports, favorites, activities = [] } = await api(`/api/activity/options?account=${encodeURIComponent(email)}`, undefined, {signal:controller.signal});
+    if (activeAccount !== email || !root.isConnected || root._activityOptionsSeq !== loadSeq) return false;
     const cfg = getActCfg();
+    const progress = actProgressState[email];
+    const summary = progress && activities.find(activity => activity.id === (progress.family || cfg.family));
+    if (summary && Number.isInteger(summary.completed) && Number.isInteger(summary.total)) {
+      actProgressState[email] = {...progress, completed:Math.max(progress.completed || 0,summary.completed), total:Math.max(progress.completed || 0,summary.total)};
+    }
     const familySlot = root.querySelector(".act-family-slot");
     const family = activities.some((a) => a.id === cfg.family) ? cfg.family : activities[0]?.id || "";
     setActCfg({ family });
     familySlot.innerHTML = dropdownHTML("act-family", activities.length
-      ? activities.map((a) => ({ val: a.id, label: `${a.name} · 已通关 ${a.completed}/${a.total}` }))
+      ? activities.map((a) => ({ val: a.id, label: `${filterEscape(a.name)} · <span class="act-family-count" data-family="${filterEscape(a.id)}">已通关 ${a.completed}/${a.total}</span>` }))
       : [{ val: "", label: "（当前没有开放的活动）" }], family);
     bindDropdown(familySlot.querySelector(".dropdown"), (v) => setActCfg({ family: v }));
 
@@ -4973,28 +6153,46 @@ async function loadActivityOptions(id, refresh = false) {
 
     sceneSlot.innerHTML = dropdownHTML("act-scene", sceneOpts, sceneVal);
     teamSlot.innerHTML = dropdownHTML("act-team", teamOpts, teamVal);
-    bindDropdown(sceneSlot.querySelector(".dropdown"), (v) => setActCfg({ sceneId: v }));
+    bindDropdown(sceneSlot.querySelector(".dropdown"), (v) => { setActCfg({ sceneId: v }); updateActivityMode(id); });
     bindDropdown(teamSlot.querySelector(".dropdown"), (v) => setActCfg({ teamId: v }));
 
+    // The saved friend may not be on this refresh's random recommendation list.
+    const saved = cfg.supportCuid;
+    if (saved && ![...(supports || []), ...(favorites || [])].some(f => String(f.cuid) === String(saved))) {
+      try {
+        const found = await api(`/api/activity/support/search?account=${encodeURIComponent(email)}&q=${encodeURIComponent(saved)}`, undefined, {signal:controller.signal});
+        if (activeAccount !== email || !root.isConnected || root._activityOptionsSeq !== loadSeq) return false;
+        (supports || []).push(...(found.supports || []));
+      } catch (error) { if (error.name !== 'AbortError') logTo(email, `读取上次助战失败：${error.message}`, 'err'); }
+    }
     renderSupportPicker(id, supports || [], favorites || []);
+    const searchInput = root.querySelector('.act-support-search');
+    if (searchInput?.value.trim()) searchInput.oninput();
     root.dataset.loaded = "1";
+    updateActivityMode(id);
     return true;
   } catch (e) {
-    if (activeAccount !== email || !root.isConnected) return false;
+    if (activeAccount !== email || !root.isConnected || root._activityOptionsSeq !== loadSeq) return false;
+    if (wasLoaded) {
+      logTo(email, `刷新活动选项失败，已保留原选项：${e.name === 'AbortError' ? '请求超时' : e.message}`, 'err');
+      return false;
+    }
     delete root.dataset.loaded;
     sceneSlot.innerHTML = `<div class="act-load-error"><span>加载失败</span><button type="button" class="act-options-retry">重新加载</button></div>`;
     teamSlot.innerHTML = `<div class="dd-loading err">等待重新加载</div>`;
     supSlot.innerHTML = `<div class="dd-loading err">等待重新加载</div>`;
     const familySlot = root.querySelector(".act-family-slot");
     familySlot.innerHTML = `<div class="act-load-error"><span>加载失败</span><button type="button" class="act-options-retry">重新加载</button></div>`;
-    familySlot.querySelector(".act-options-retry").addEventListener("click", () => loadActivityOptions(id, true));
-    sceneSlot.querySelector(".act-options-retry")?.addEventListener("click", () => loadActivityOptions(id, true));
+    familySlot.querySelector(".act-options-retry").addEventListener("click", LucimaActionWait.wrap(() => loadActivityOptions(id, true)));
+    sceneSlot.querySelector(".act-options-retry")?.addEventListener("click", LucimaActionWait.wrap(() => loadActivityOptions(id, true)));
     log(`加载活动关卡选项失败：${e.message}`, "err");
     return false;
   } finally {
-    delete root.dataset.loading;
-    refreshButton.disabled = false;
-    refreshButton.classList.remove("loading");
+    clearTimeout(timeout);
+    if (root._activityOptionsSeq === loadSeq) {
+      delete root.dataset.loading;
+      if (refreshButton) { refreshButton.disabled = false; refreshButton.classList.remove("loading"); }
+    }
   }
 }
 
@@ -5003,24 +6201,43 @@ async function loadActivityOptions(id, refresh = false) {
 // 只出现在收藏组、不在下面重复。最近一次拉到的选项缓存下来，星标增删后可就地重渲染
 // 而不用重发请求；缓存按账号分键，换号不会串用上一个号的收藏夹。
 const ACT_SUPPORTS = {};   // `${taskId}::${email}` -> {supports, favorites}
-const actSupKey = (id) => `${id}::${activeAccount || "_"}`;
+const actSupKey = (id, email = activeAccount) => `${id}::${email || "_"}`;
 
-function renderSupportPicker(id, supports, favorites) {
-  const root = $(`act-${id}`);
+function renderSupportPicker(id, supports, favorites, {search = false} = {}) {
+  const root = $(`act-${id}`), email = activeAccount;
   if (!root) return;
-  const supSlot = root.querySelector(".act-support-slot");
-  ACT_SUPPORTS[actSupKey(id)] = { supports, favorites };
-  const favs = favorites || [];
-  const favIds = new Set(favs.map((f) => String(f.cuid)));
-  const rest = supports.filter((f) => !favIds.has(String(f.cuid)));
-  const cfg = getActCfg();
-  // 存的 cuid 既不在收藏夹也不在助战列表则清空（好友变动/取消收藏）
-  const pickable = [...favs, ...rest].map((f) => String(f.cuid));
-  const cur = cfg.supportCuid && pickable.includes(String(cfg.supportCuid))
-    ? String(cfg.supportCuid) : "";
-  setActCfg({ supportCuid: cur });
+  const supSlot = root.querySelector('.act-support-slot'), key = actSupKey(id, email);
+  const cache = ACT_SUPPORTS[key] ||= {allSupports: [], allFavorites: []};
+  if (!search) { cache.allSupports = supports; cache.allFavorites = favorites; }
+  Object.assign(cache, {supports, favorites});
+  const input = root.querySelector('.act-support-search');
+  if (input) input.oninput = () => {
+    const query = input.value.trim(), sequence = input._searchSeq = (input._searchSeq || 0) + 1;
+    clearTimeout(input._searchTimer);
+    input._searchAbort?.abort();
+    renderSupportPicker(id, cache.allSupports, cache.allFavorites, {search:true});
+    if (!query) return;
+    input._searchTimer = setTimeout(async () => {
+      const controller = input._searchAbort = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      try {
+        const found = await api(`/api/activity/support/search?account=${encodeURIComponent(email)}&q=${encodeURIComponent(query)}`, undefined, {signal:controller.signal});
+        if (activeAccount !== email || !root.isConnected || input._searchSeq !== sequence) return;
+        renderSupportPicker(id, found.supports || [], found.favorites || [], {search:true});
+      } catch (error) {
+        if (input._searchSeq === sequence && error.name !== 'AbortError') logTo(email, `搜索助战好友失败：${error.message}`, 'err');
+      } finally { clearTimeout(timeout); }
+    }, 180);
+  };
+  const query = (input?.value || '').trim().toLocaleLowerCase();
+  const matches = f => !query || `${f.name} ${f.cuid} ${f.hero?.name || ''}`.toLocaleLowerCase().includes(query);
+  const favs = (favorites || []).filter(matches);
+  const favIds = new Set(favs.map(f => String(f.cuid)));
+  const rest = (supports || []).filter(f => !favIds.has(String(f.cuid)) && matches(f));
+  // Filtering or a random server list must never erase the saved friend.
+  const cur = String(getActCfg(email).supportCuid || '');
 
-  const none = `<div class="sup-card sup-none${cur ? "" : " sel"}" data-cuid=""><div class="sup-none-txt">不使用助战</div></div>`;
+  const none = `<div class="sup-card sup-none${cur ? "" : " sel"}" role="button" tabindex="0" aria-pressed="${!cur}" data-cuid=""><div class="sup-none-txt">不使用助战</div></div>`;
   let html = "";
   if (favs.length) {
     html += `<div class="sup-group">★ 收藏夹</div><div class="sup-grid">${
@@ -5031,22 +6248,29 @@ function renderSupportPicker(id, supports, favorites) {
     ? `<div class="sup-grid">${none}${rest.map((f) => supportCardHTML(f, String(f.cuid) === cur)).join("")}</div>`
     : `<div class="sup-grid">${none}</div><div class="sup-empty">助战列表里的好友都已收藏</div>`;
   if (!favs.length && !rest.length) {
-    html = `<div class="sup-empty">暂无可选助战好友（需先在游戏内加好友）</div>`;
+    html = `<div class="sup-grid">${none}</div><div class="sup-empty">${query ? '未找到匹配的可用好友助战' : '暂无可选助战好友，可搜索昵称或 UID'}</div>`;
   }
   supSlot.innerHTML = html;
 
   supSlot.querySelectorAll(".sup-card").forEach((card) =>
-    card.addEventListener("click", () => {
-      supSlot.querySelectorAll(".sup-card").forEach((c) => c.classList.toggle("sel", c === card));
+    card.addEventListener("click", LucimaActionWait.wrap(() => {
+      supSlot.querySelectorAll(".sup-card").forEach((c) => {
+        c.classList.toggle("sel", c === card);
+        c.setAttribute('aria-pressed', String(c === card));
+      });
       setActCfg({ supportCuid: card.dataset.cuid || "" });
-    })
+    }))
   );
+  supSlot.querySelectorAll('.sup-card').forEach(card => card.addEventListener('keydown', event => {
+    if (event.target !== card || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault(); card.click();
+  }));
   // 星标：阻止冒泡（否则会连带选中该卡）
   supSlot.querySelectorAll(".sup-star").forEach((btn) =>
-    btn.addEventListener("click", (ev) => {
+    btn.addEventListener("click", LucimaActionWait.wrap((ev) => {
       ev.stopPropagation();
-      toggleSupportFav(id, btn.dataset.cuid, btn.classList.contains("on"), btn);
-    })
+      return toggleSupportFav(id, btn.dataset.cuid, btn.classList.contains("on"), btn);
+    }))
   );
 }
 
@@ -5059,14 +6283,18 @@ async function toggleSupportFav(id, cuid, isFav, btn) {
     if (isFav) {
       await api("/api/support/unfavorite", { account: email, cuid });
       cache.favorites = (cache.favorites || []).filter((f) => String(f.cuid) !== String(cuid));
+      cache.allFavorites = (cache.allFavorites || []).filter((f) => String(f.cuid) !== String(cuid));
       logTo(email, `已从收藏夹移除助战 UID ${cuid}`);
     } else {
       const r = await api("/api/support/favorite", { account: email, cuid });
       cache.favorites = [...(cache.favorites || []), r.favorite]
         .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+      cache.allFavorites = [...(cache.allFavorites || []).filter(f => String(f.cuid) !== String(cuid)), r.favorite];
       logTo(email, `已收藏助战 ${r.favorite.name || cuid}（${r.favorite.hero?.name || ""}）`);
     }
-    renderSupportPicker(id, cache.supports, cache.favorites);
+    if (email === activeAccount) {
+      renderSupportPicker(id, cache.supports, cache.favorites, {search:true});
+    }
   } catch (e) {
     btn.disabled = false;
     logTo(email, `收藏助战失败：${e.message}`, "err");
@@ -5098,7 +6326,7 @@ async function runActivity(id) {
   startBtn.disabled = false;
   startBtn.classList.add("task-stop-button");
   startBtn.textContent = "停止";
-  const sceneName = (root.querySelector(".act-scene .dd-cur")?.textContent || cfg.sceneId).trim();
+  const sceneName = (root.querySelector(".act-scene select")?.selectedOptions[0]?.textContent || root.querySelector(".act-scene .dd-cur")?.textContent || cfg.sceneId).trim();
   const supName = cfg.supportCuid
     ? (root.querySelector(".sup-card.sel .sup-name")?.textContent || "").trim() : "";
   const urgentModeNames = cfg.urgentSpecializations.map((mode) => mode === "catalyst" ? "催化剂特化" : "金币特化");
@@ -5108,7 +6336,11 @@ async function runActivity(id) {
   let stopped = false;
   let urgentSpecializations = cfg.urgentEnabled ? [...cfg.urgentSpecializations] : null;
   try {
+    if (typeof activityStoreSaveQueues !== 'undefined') await activityStoreSaveQueues[email];
+    await beginSweepRewards(id, email, cfg.autoSell, cfg.includeEpic85);
     for (let i = 1; i <= cfg.count; i++) {
+      if (typeof activityStoreSaveQueues !== 'undefined') await activityStoreSaveQueues[email];
+      await sweepSaleState(id, email).pending;
       await waitRequestDelayBetweenIterations(i, () => actStopRequested[email]);
       if (actStopRequested[email]) {
         stopped = true;
@@ -5119,8 +6351,17 @@ async function runActivity(id) {
         supportCuid: cfg.supportCuid || null, quick: cfg.quick,
         urgentSpecializations,
       });
+      if (r.activityStore && typeof applyActivityStore === 'function') applyActivityStore(email, r.activityStore);
       if (r.status) applyStatus(email, r.status, r.nextClaims);
       logResult({ ...r, name: taskName }, `第${i}次·`, email);
+      if (r.ok && !r.skipped) done++;
+      for (const line of r.storePurchases?.lines || []) logTo(email, `[活动商店] 已购买 ${line}`, 'ok');
+      await recordSweepRewards(id, email, r, !actStopRequested[email]);
+      if (r.storeStop) {
+        stopped = true;
+        logTo(email, '[活动商店] 当前所需商品已购满，已自动停止活动扫荡；剩余积分按 1 积分档兑换金币', 'ok');
+        break;
+      }
       if (actStopRequested[email]) {
         stopped = true;
         break;
@@ -5133,7 +6374,6 @@ async function runActivity(id) {
         }
       }
       if (!r.ok) { logTo(email, `第 ${i} 次未获得掉落，停止扫荡`, "err"); break; }
-      done++;
     }
     if (stopped) logTo(email, `[${taskName}] 已停止，未继续后续请求`, "warn");
     if (summary && email === activeAccount) summary.textContent = `完成 ${done}/${cfg.count} 次`;
@@ -5147,6 +6387,7 @@ async function runActivity(id) {
         });
         if (cleanup.status) applyStatus(email, cleanup.status, cleanup.nextClaims);
         logActivityUrgentResults(cleanup, "紧急任务·", email);
+        for (const row of cleanup.results || []) addSweepRewards(sweepSaleState(id, email).rewards, row.rewardSummary);
         if (cleanup.ok && !(cleanup.results || []).length) {
           logTo(email, "[紧急任务] 最终清理完成，当前没有待处理任务", "ok");
         }
@@ -5154,6 +6395,7 @@ async function runActivity(id) {
         logTo(email, `紧急任务最终清理失败：${error.message}`, "err");
       }
     }
+    await finishSweepRewards(id, email, taskName, done);
     actRunning[email] = false;
     delete actStopRequested[email];
     if (email === activeAccount && startBtn.isConnected) {
@@ -5214,6 +6456,7 @@ function applyStateSyncMeta(email, data) {
 async function reloadStoreAfterStateSync(email) {
   delete STORE_DATA[email];
   if (email !== activeAccount) return;
+  if ($('activity-store')) void loadActivityStore(true);
   const root = $("store-store_buy");
   if (!root || !root.dataset.loaded) return;
   const body = root.querySelector(".shop-body");
@@ -5242,32 +6485,31 @@ async function bindStoreWidget(id) {
   if (!root) return;
   const body = root.querySelector(".shop-body");
   const toggle = root.querySelector(".store-toggle");
-  bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
-    if (!root.dataset.loaded) {
+  toggle.addEventListener("click", LucimaActionWait.wrap(async () => {
+    body.classList.toggle("hidden");
+    toggle.textContent = body.classList.contains("hidden") ? "选项 ▸" : "选项 ▾";
+    if (!body.classList.contains("hidden") && !root.dataset.loaded) {
       await loadStoreOptions(id);
       root.dataset.loaded = "1";
     }
-  }, onRestore: async () => {
-    if (STORE_DATA[activeAccount] && !root.dataset.loaded) {
-      await loadStoreOptions(id);
-      root.dataset.loaded = "1";
-    }
-  }});
+  }));
 }
 
-async function loadStoreOptions(id, refresh = false) {
+async function loadStoreOptions(id, email = activeAccount) {
   const root = $(`store-${id}`);
+  // 状态刷新会重绘任务列表。购买完成后才返回的货架请求不能再假定
+  // 原来的商店组件仍挂在页面上，否则会把一次已成功的购买误报为前端异常。
+  if (!root || id !== "store_buy" || email !== activeAccount) return;
   const pane = root.querySelector(".store-panes");
-  const email = activeAccount;
+  if (!pane) return;
   try {
-    const data = !refresh && STORE_DATA[email] ? STORE_DATA[email] : await api("/api/store/options");
-    if (activeAccount !== email || !root.isConnected) return;
+    const data = await api(`/api/store/options?account=${encodeURIComponent(email)}`);
     STORE_DATA[email] = data;
     applyStateSyncMeta(email, data);
+    if (email !== activeAccount || $(`store-${id}`) !== root || !root.isConnected) return;
     renderStorePanes(id);
   } catch (e) {
-    if (activeAccount !== email || !root.isConnected) return;
-    pane.innerHTML = `<div class="dd-loading err">加载失败</div>`;
+    if (pane.isConnected) pane.innerHTML = `<div class="dd-loading err">加载失败</div>`;
     logTo(email, `加载商店货架失败：${e.message}`, "err");
   }
 }
@@ -5294,7 +6536,9 @@ function storeTotals() {
 
 function renderStorePanes(id) {
   const root = $(`store-${id}`);
+  if (!root) return;
   const pane = root.querySelector(".store-panes");
+  if (!pane) return;
   const data = STORE_DATA[activeAccount];
   if (!data) { pane.innerHTML = `<div class="dd-loading">加载中…</div>`; return; }
 
@@ -5356,23 +6600,23 @@ function renderStorePanes(id) {
 
   if (cur.id !== cfg.tab) setStoreCfg({ tab: cur.id });
   pane.querySelectorAll(".b-tab").forEach((b) =>
-    b.addEventListener("click", () => { setStoreCfg({ tab: b.dataset.tab }); renderStorePanes(id); })
+    b.addEventListener("click", LucimaActionWait.wrap(() => { setStoreCfg({ tab: b.dataset.tab }); renderStorePanes(id); }))
   );
   const goodsById = {};
   data.stores.forEach((s) => s.goods.forEach((g) => { goodsById[g.id] = g; }));
   // 点卡片：勾选/取消。勾选时份数默认买满剩余额度
   pane.querySelectorAll(".b-card").forEach((c) =>
-    c.addEventListener("click", () => {
+    c.addEventListener("click", LucimaActionWait.wrap(() => {
       const gid = c.dataset.gid;
       const p = { ...getStoreCfg().picks };
       if (p[gid]) delete p[gid]; else p[gid] = storeDefaultQty(goodsById[gid]);
       setStoreCfg({ picks: p });
       renderStorePanes(id);
-    })
+    }))
   );
   // 步进器：改份数（同时把该档勾上）；stopPropagation 免得冒泡成"点卡片=取消勾选"
   pane.querySelectorAll(".b-step button").forEach((b) =>
-    b.addEventListener("click", (e) => {
+    b.addEventListener("click", LucimaActionWait.wrap((e) => {
       e.stopPropagation();
       const gid = b.closest(".b-step").dataset.gid;
       const p = { ...getStoreCfg().picks };
@@ -5380,10 +6624,10 @@ function renderStorePanes(id) {
       p[gid] = Math.min(99, Math.max(1, cur + parseInt(b.dataset.d)));
       setStoreCfg({ picks: p });
       renderStorePanes(id);
-    })
+    }))
   );
   const start = pane.querySelector(".store-start");
-  if (start) start.addEventListener("click", () => runStoreBuy(id));
+  if (start) start.addEventListener("click", LucimaActionWait.wrap(() => runStoreBuy(id)));
 }
 
 // 购买：一次请求把所选各档交给后端顺序买（后端逐档独立处理，单档失败不影响其余）
@@ -5396,19 +6640,24 @@ async function runStoreBuy(id) {
   if (!list.length) return log("请先选择要购买的商品", "err");
   const root = $(`store-${id}`);
   const taskName = (TASKS.find((x) => x.id === id) || {}).name || "商店购买";
-  const btn = root.querySelector(".store-start");
+  const btn = root?.querySelector(".store-start");
   storeRunning[email] = true;
   if (btn) { btn.disabled = true; btn.textContent = "购买中…"; }
   logTo(email, `开始${taskName}：${list.length} 档`);
   try {
     const r = await api("/api/store/buy", { account: email, picks: list });
-    if (r.status) applyStatus(email, r.status, r.nextClaims);
     logResult({ ...r, name: taskName }, "", email);
-    // 买完货架的已购次数变了，重新拉一次让卡片状态跟服务器一致
-    if (email === activeAccount) {
-      await loadStoreOptions(id);
-      const sum = $(`storeSummary-${id}`);
-      if (sum) sum.textContent = r.detail || "";
+    // The purchase is committed. A detached view must never turn its successful
+    // result into a purchase error (or encourage another purchase).
+    try {
+      if (r.status) applyStatus(email, r.status, r.nextClaims);
+      if (email === activeAccount) {
+        await loadStoreOptions(id, email);
+        const sum = $(`storeSummary-${id}`);
+        if (sum) sum.textContent = r.detail || "";
+      }
+    } catch (error) {
+      logTo(email, `购买结果已返回，页面刷新失败：${error.message}`, "err");
     }
   } catch (e) {
     logTo(email, `商店购买出错：${e.message}`, "err");
@@ -5417,7 +6666,7 @@ async function runStoreBuy(id) {
     if (email === activeAccount && btn && btn.isConnected) {
       btn.disabled = false; btn.textContent = "▶ 开始购买";
     }
-    refreshAccountStatus(email);
+    void refreshAccountStatus(email).catch(() => {});
   }
 }
 
@@ -5442,6 +6691,8 @@ function applyStatus(email, status, nextClaims, arena, connection, redeemCodes) 
   }
   if (email === activeAccount) {
     if (status) renderStatus(status);
+    if (status) renderInventoryManagementUsage();
+    if (status) renderStarSourceBalance(email);
     if (nextClaims) { NEXT_CLAIMS = nextClaims; renderNextClaims(); }
     if (arena) renderArenaList("arena_npc");
   }
@@ -5523,7 +6774,6 @@ function updateAccountConnectionIndicator(email) {
   const connected = account.connection?.connected !== false;
   const label = connected ? "已连接：游戏会话正常"
     : account.connection?.reason === "duplicate_login" ? "已断开：账号在其它地方登录"
-    : account.connection?.reason === "maintenance" ? connectionBlockedMessage(account.connection)
     : "已断开：游戏会话已断开";
   const item = [...box.querySelectorAll(".acc-item")]
     .find((element) => element.dataset.email === email);
@@ -5613,27 +6863,22 @@ function renderAccountSwitcher() {
   box.innerHTML = html;
   emails.forEach(updateAccountConnectionIndicator);
 
-  $("accCurrentBtn").onclick = (e) => { e.stopPropagation(); $("accPop").classList.toggle("hidden"); };
+  $("accCurrentBtn").onclick = LucimaActionWait.wrap((e) => { e.stopPropagation(); $("accPop").classList.toggle("hidden"); });
   box.querySelectorAll(".acc-item").forEach((el) => {
-    el.addEventListener("click", (e) => {
+    el.addEventListener("click", LucimaActionWait.wrap((e) => {
       if (e.target.closest(".acc-x")) return;
       $("accPop").classList.add("hidden");
       switchAccount(el.dataset.email);
-    });
+    }));
   });
   box.querySelectorAll(".acc-x").forEach((b) =>
-    b.addEventListener("click", async (e) => {
+    b.addEventListener("click", LucimaActionWait.wrap((e) => {
       e.stopPropagation();
       const email = b.dataset.del;
-      const confirmed = await openConfirmDialog({
-        title: "删除账号？",
-        message: `将下线 ${email}，并清除其登录令牌与开关设置。`,
-        returnFocus: b,
-      });
-      if (confirmed) await accDelete(email);
-    })
+      if (confirm(`确定删除账号 ${email}？将下线并清除其登录令牌与开关设置。`)) return accDelete(email);
+    }))
   );
-  $("accAddBtn").onclick = () => { $("accPop").classList.add("hidden"); openAddAccount(); };
+  $("accAddBtn").onclick = LucimaActionWait.wrap(() => { $("accPop").classList.add("hidden"); openAddAccount(); });
 }
 
 // 打开"添加账号"（复用登录视图，作为叠加层；有在线账号时显示"取消"）
@@ -5651,6 +6896,21 @@ function openAddAccount() {
 
 // 登录页"已保存账号"快捷选择：有 Token 时留空密码即可恢复登录。
 let SAVED_ACCTS = [];   // 来自 /api/accounts 的存档列表
+const LAST_LOGIN_ACCOUNT_KEY = "last_login_account";
+function rememberLastLoginAccount(email) {
+  if (email) frontendStorageSet(LAST_LOGIN_ACCOUNT_KEY, email);
+}
+// 登录页默认填入上一次成功登录的账号；账号已删除或不在存档列表时不填。
+function fillLastLoginAccount() {
+  const input = $("account");
+  if (!input || input.value.trim()) return;
+  const email = (frontendStorageGet(LAST_LOGIN_ACCOUNT_KEY) || "").trim();
+  if (!email) return;
+  const item = savedAccount(email);
+  if (!item) return;
+  input.value = email;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
 function savedAccount(account) {
   return SAVED_ACCTS.find((a) => a.account === account);
 }
@@ -5672,16 +6932,32 @@ function renderSavedAccounts() {
     return;
   }
   if (caret) caret.classList.remove("hidden");
-  box.innerHTML = items.map((a) => {
-    const email = filterEscape(a.account);
-    const name = a.name ? filterEscape(a.name) : "";
-    return `<div class="sa-opt" data-email="${email}" data-hastoken="${a.hasToken && !a.tokenError ? 1 : 0}" data-tokenerror="${a.tokenError ? 1 : 0}">
-       <span class="sa-meta"><span class="sa-em" title="${email}">${email}</span>${name ? `<span class="sa-name" title="${name}">${name}</span>` : ""}</span>
-       <button type="button" class="sa-del" data-del="${email}" title="删除已保存的账号">✕</button>
-     </div>`;
-  }).join("");
+  box.replaceChildren(...items.map((a) => {
+    const row = document.createElement("div");
+    row.className = "sa-opt";
+    row.dataset.email = a.account;
+    row.dataset.hastoken = a.hasToken && !a.tokenError ? "1" : "0";
+    row.dataset.tokenerror = a.tokenError ? "1" : "0";
+    const email = document.createElement("span");
+    email.className = "sa-em";
+    email.textContent = a.account;
+    email.title = a.account;
+    const name = document.createElement("span");
+    name.className = "sa-name";
+    name.textContent = a.name || "未记录角色名";
+    name.title = a.name || "登录成功后记录角色名";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "sa-del";
+    remove.dataset.del = a.account;
+    remove.title = "删除已保存的账号";
+    remove.setAttribute("aria-label", `删除已保存账号 ${a.account}`);
+    remove.textContent = "✕";
+    row.append(email, name, remove);
+    return row;
+  }));
   box.querySelectorAll(".sa-opt").forEach((row) =>
-    row.addEventListener("click", (e) => {
+    row.addEventListener("click", LucimaActionWait.wrap((e) => {
       if (e.target.closest(".sa-del")) return;  // 点叉是删除，不填充
       $("account").value = row.dataset.email;
       $("password").value = "";
@@ -5693,30 +6969,28 @@ function renderSavedAccounts() {
         $("password").focus();
       }
       $("savedAccts").classList.add("hidden");
-    })
+    }))
   );
   box.querySelectorAll(".sa-del").forEach((b) =>
-    b.addEventListener("click", (e) => {
+    b.addEventListener("click", LucimaActionWait.wrap((e) => {
       e.stopPropagation();
-      deleteSavedAccount(b.dataset.del);
-    })
+      return deleteSavedAccount(b.dataset.del);
+    }))
   );
 }
 
 // 登录页主动删除一个已保存账号（离线存档）：清后端存档 + 本地列表，重渲下拉。
 async function deleteSavedAccount(email) {
-  const confirmed = await openConfirmDialog({
-    title: "删除已保存的账号？",
-    message: `将清除 ${email} 的登录令牌与开关设置。`,
-  });
-  if (!confirmed) return;
-  try { await api("/api/accounts/delete", { account: email }); }
-  catch (error) {
-    showMessageToast(`删除账号失败：${error.message}`, "err");
-    return;
-  }
-  SAVED_ACCTS = SAVED_ACCTS.filter((a) => a.account !== email);
-  renderSavedAccounts();
+  try {
+    await api("/api/accounts/delete", { account: email });
+    SAVED_ACCTS = SAVED_ACCTS.filter((a) => a.account !== email);
+    if ($("account").value === email) {
+      $("account").value = "";
+      $("password").value = "";
+      $("password").placeholder = "密码";
+    }
+    renderSavedAccounts();
+  } catch (error) { loginStatus(`删除失败：${error.message}`, "err"); }
 }
 function toggleSavedMenu() {
   const box = $("savedAccts");
@@ -5728,46 +7002,65 @@ function toggleSavedMenu() {
 function ensureAutoLogPoll() {
   if (autoLogTimer) return;
   autoLogTimer = setInterval(pollAutoLogs, AUTO_LOG_POLL_MS);
-  if (!countdownTimer) countdownTimer = setInterval(renderNextClaims, 30 * 1000);
+  if (!countdownTimer) countdownTimer = setInterval(() => {
+    renderNextClaims();
+    renderAccountBuffs(activeAcc()?.status?.buffs);
+  }, 30 * 1000);
 }
 async function pollAutoLogs() {
-  if (autoLogPollPending) return;
-  autoLogPollPending = true;
-  const emails = Object.keys(ACCOUNTS);
+  // Each login owns its own pending flag and timeout. A slow/disconnected
+  // account must not stop the other accounts' teams, logs or stop buttons.
+  const now = Date.now();
+  await Promise.allSettled(Object.keys(ACCOUNTS).map(email => {
+    const account = ACCOUNTS[email];
+    const livePage = ['auto', 'manual', 'logs'].includes(currentSection) || isBottomLogExpanded();
+    const gap = document.hidden ? 10000 : email === activeAccount ? (livePage ? 1000 : 3000) : 5000;
+    if (now - (account.lastUIPollAt || 0) < gap) return;
+    account.lastUIPollAt = now;
+    return pollAccountAutoLogs(email);
+  }));
+}
+
+async function pollAccountAutoLogs(email) {
+  const a = ACCOUNTS[email];
+  if (!a || a.autoLogPollPending) return;
+  a.autoLogPollPending = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  ensureAccountStarted(email);
+  const abyssRequest = abyssRequests[email];
+  const activityRequest = actProgressRequests[email];
+  const intimacyRequest = intimacyRequests[email];
   try {
-    for (const email of emails) {
-      const a = ACCOUNTS[email];
-      if (!a) continue;
-      ensureAccountStarted(email);
-      const abyssRequest = abyssRequests[email];
-      const activityRequest = actProgressRequests[email];
-      try {
-        const data = await api(`/api/logs/auto?account=${encodeURIComponent(email)}&since=${a.logSeq || 0}`);
-        if (ACCOUNTS[email] !== a) continue;
-        if (abyssRequest === abyssRequests[email]) applyAbyssBattle(email, data.abyssBattle);
-        if (activityRequest === actProgressRequests[email]) applyActivityProgress(email, data.activityProgress);
-        const { entries, logSeq } = data;
-        const snapshotChanged = applyStateSyncMeta(email, data);
-        if (entries && entries.length) {
-          // 用后端给的产生时刻，而不是此刻——窗口冻结期间积压的记录到这里才被拉回
-          entries.forEach((e) => handleAutoTaskResult(e.result, e.prefix, email, e.ts));
-          a.logSeq = logSeq;
-          // 有新巡检日志 → 该账号状态多半变了，刷新其状态缓存
-          refreshAccountStatus(email);
-        }
-        if (snapshotChanged) {
-          refreshAccountStatus(email);
-          await reloadStoreAfterStateSync(email);
-        }
-      } catch (e) { /* 账号可能已下线，忽略 */ }
+    const data = await api(`/api/logs/auto?account=${encodeURIComponent(email)}&since=${a.logSeq || 0}`, null,
+      {signal: controller.signal});
+    if (ACCOUNTS[email] !== a) return;
+    if (abyssRequest === abyssRequests[email]) applyAbyssBattle(email, data.abyssBattle);
+    if (activityRequest === actProgressRequests[email]) applyActivityProgress(email, data.activityProgress);
+    if (intimacyRequest === intimacyRequests[email]) applyIntimacy(email, data.intimacy);
+    const { entries, logSeq } = data;
+    const snapshotChanged = applyStateSyncMeta(email, data);
+    if (entries && entries.length) {
+      // 用后端给的产生时刻，而不是窗口恢复后的拉取时刻。
+      entries.forEach((e) => handleAutoTaskResult(e.result, e.prefix, email, e.ts));
+      a.logSeq = logSeq;
+      refreshAccountStatus(email);
     }
-  } finally {
-    autoLogPollPending = false;
+    if (snapshotChanged) {
+      refreshAccountStatus(email);
+      void reloadStoreAfterStateSync(email).catch(() => {});
+    }
+  } catch { /* The next per-account poll retries failures/timeouts. */ }
+  finally {
+    clearTimeout(timeout);
+    a.autoLogPollPending = false;
   }
 }
 // 拉某账号最新状态写回缓存（不重登，读后端缓存）
 async function refreshAccountStatus(email) {
   const a = ACCOUNTS[email];
+  if (!a || a.statusRefreshPending) return;
+  a.statusRefreshPending = true;
   try {
     const data = await api(`/api/status?account=${encodeURIComponent(email)}`);
     if (ACCOUNTS[email] !== a) return;
@@ -5775,6 +7068,7 @@ async function refreshAccountStatus(email) {
     applyStateSyncMeta(email, data);
     applyStatus(email, status, nextClaims, arena, connection, redeemCodes);
   } catch (e) {}
+  finally { a.statusRefreshPending = false; }
 }
 
 // ---------- 装备掉落详情弹窗 ----------
@@ -5795,7 +7089,7 @@ function showEquipPopup(key, anchor) {
   const pop = ensureEquipPopup();
   pop.innerHTML = `<button type="button" class="ep-close">✕</button>${equipCardHTML(card)}`;
   pop.classList.remove("hidden");
-  pop.querySelector(".ep-close").addEventListener("click", hideEquipPopup);
+  pop.querySelector(".ep-close").addEventListener("click", LucimaActionWait.wrap(hideEquipPopup));
 
   // 定位在链接附近，超出视口则回退
   const r = anchor.getBoundingClientRect();
@@ -5813,11 +7107,11 @@ function showEquipPopup(key, anchor) {
 
 function hideEquipPopup() {
   const pop = $("equipPopup");
-  if (pop) pop.classList.add("hidden");
+  if (pop) { pop.classList.add("hidden"); pop.replaceChildren(); }
 }
 
 // 全局点击：装备链接 → 弹窗；点其它地方 → 关闭弹窗 + 收起所有下拉
-document.addEventListener("click", (e) => {
+document.addEventListener("click", LucimaActionWait.wrap((e) => {
   const link = e.target.closest(".equip-link");
   if (link) {
     e.preventDefault();
@@ -5844,9 +7138,9 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("[data-urgent-help], [data-urgent-help-text]")) {
     closeActivityUrgentHelp();
   }
-});
+}));
 
-if ($("acctCaret")) $("acctCaret").onclick = (e) => { e.stopPropagation(); toggleSavedMenu(); };
+if ($("acctCaret")) $("acctCaret").onclick = LucimaActionWait.wrap((e) => { e.stopPropagation(); toggleSavedMenu(); });
 
 // 退出登录 = 下线当前账号（保留存档，下次可再连接）
 function logout() {
@@ -5891,64 +7185,92 @@ async function initAccounts() {
   $("appView").classList.add("hidden");
   $("loginView").classList.remove("hidden");
   $("loginCancel") && $("loginCancel").classList.add("hidden");
-  if (updateStartupReady) loginStatus("");
-  else loginStatus("正在检查最新版本，请稍候…", "pending");
+  loginStatus("");
   renderSavedAccounts();
+  fillLastLoginAccount();
 }
 
 // ---------- 事件绑定 ----------
-$("loginBtn").onclick = doLogin;
-$("refreshBtn").onclick = manualRefresh;
-$("reconnectBtn").onclick = manualRefresh;
-$("logoutBtn").onclick = logout;
-$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+$("loginBtn").onclick = LucimaActionWait.wrap(doLogin);
+$("refreshBtn").onclick = LucimaActionWait.wrap(manualRefresh);
+$("reconnectBtn").onclick = LucimaActionWait.wrap(event => { event.stopPropagation(); return manualRefresh(); });
+$("connPill").onclick = LucimaActionWait.wrap(() => { if (activeAcc()?.connection?.connected === false) return manualRefresh(); });
+$("connPill").onkeydown = event => {
+  if (event.target === $("connPill") && (event.key === "Enter" || event.key === " ") && activeAcc()?.connection?.connected === false) {
+    event.preventDefault(); $("connPill").click();
+  }
+};
+$("logoutBtn").onclick = LucimaActionWait.wrap(logout);
+$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("loginBtn").click(); } });
 $("account").addEventListener("input", () => {
   const item = savedAccount($("account").value.trim());
   $("password").placeholder = item?.tokenError
     ? "令牌不可用，请输入密码"
     : (item?.hasToken ? "使用临时token登录" : "密码");
 });
-if ($("loginCancel")) $("loginCancel").onclick = () => {
+if ($("loginCancel")) $("loginCancel").onclick = LucimaActionWait.wrap(() => {
   $("loginView").classList.add("hidden");
   if (!activeAccount && Object.keys(ACCOUNTS).length) switchAccount(Object.keys(ACCOUNTS)[0]);
-};
+});
 
 // 板块导航
 document.querySelectorAll("#sideNav .nav-item").forEach((n) =>
-  n.addEventListener("click", () => showSection(n.dataset.section))
+  n.addEventListener("click", LucimaActionWait.wrap(() => showSection(n.dataset.section)))
 );
 // 团员/物品 tab 切换
 document.querySelectorAll(".roster-tabs .rtab").forEach((b) =>
-  b.addEventListener("click", () => { rosterTab = b.dataset.rtab; applyRosterTab(); })
+  b.addEventListener("click", LucimaActionWait.wrap(() => { rosterTab = b.dataset.rtab; applyRosterTab(); }))
 );
 // 明暗切换
-$("themeToggle").onclick = toggleMode;
-$("loginThemeBtn").onclick = toggleMode;
+$("themeToggle").onclick = LucimaActionWait.wrap(toggleMode);
+$("loginThemeBtn").onclick = LucimaActionWait.wrap(toggleMode);
 // 移动端侧栏
 // 抽屉展开/收起：同步遮罩显隐（窄屏用遮罩点击收起，比冒泡判断可靠）
 function setDrawer(open) {
   $("sidebar").classList.toggle("collapsed", !open);
   $("sidebarBackdrop").classList.toggle("show", open);
 }
-$("menuBtn").onclick = () => setDrawer($("sidebar").classList.contains("collapsed"));
-$("sidebarBackdrop").onclick = () => setDrawer(false);
+$("menuBtn").onclick = LucimaActionWait.wrap(() => setDrawer($("sidebar").classList.contains("collapsed")));
+$("sidebarBackdrop").onclick = LucimaActionWait.wrap(() => setDrawer(false));
 // 清空当前账号日志，同时更新完整日志页和底部日志抽屉。
-$("clearLogBtn").onclick = () => {
+function clearAccountLogs() {
   const a = activeAcc();
-  if (a) a.logHtml = "";
+  if (a) { a.logHtml = ""; a.logRows = []; }
+  scheduleDropCardPrune();
   renderLogViews("");
   logUnread = 0;
   updateLogBadge();
-};
+}
+$("clearLogBtn").onclick = LucimaActionWait.wrap(clearAccountLogs);
 // 设置：自定义颜色 + 明暗分段
 $("accentPick").addEventListener("input", (e) => setTheme({ accent: e.target.value }));
 $("accent2Pick").addEventListener("input", (e) => setTheme({ accent2: e.target.value }));
 document.querySelectorAll("#modeSeg button").forEach((b) =>
-  b.addEventListener("click", () => setTheme({ mode: b.dataset.mode }))
+  b.addEventListener("click", LucimaActionWait.wrap(() => setTheme({ mode: b.dataset.mode })))
 );
 
 // ---------- 系统设置 ----------
 let runtimePlatform = "windows";
+
+function bindSettingsSection() {
+  renderSwatches(); applyTheme(getTheme());
+  $('accentPick').oninput = event => setTheme({accent:event.target.value});
+  $('accent2Pick').oninput = event => setTheme({accent2:event.target.value});
+  document.querySelectorAll('#modeSeg button').forEach(button => {
+    button.onclick = LucimaActionWait.wrap(() => setTheme({mode:button.dataset.mode}));
+  });
+  $('autoReloginEnabled').onchange = LucimaActionWait.wrap(saveAutoRelogin);
+  $('autoReloginDelay').onchange = LucimaActionWait.wrap(saveAutoRelogin);
+  $('requestDelayEnabled').onchange = LucimaActionWait.wrap(saveRequestDelay);
+  $('requestDelayMs').onchange = LucimaActionWait.wrap(saveRequestDelay);
+  $('requestDelayJitter').onchange = LucimaActionWait.wrap(saveRequestDelay);
+  $('browseDownloadPathBtn').onclick = LucimaActionWait.wrap(browseDownloadPath);
+  $('resetDownloadPathBtn').onclick = LucimaActionWait.wrap(resetDownloadPath);
+  $('downloadPathInput').onchange = LucimaActionWait.wrap(event => persistDownloadPath(event.target.value));
+  $('downloadPathInput').onkeydown = event => { if (event.key === 'Enter') event.target.blur(); };
+  initDevGate();
+  void loadConfig();
+}
 
 function requestDelayNotice(message, cls = "ok") {
   const el = $("requestDelayNotice");
@@ -6005,14 +7327,14 @@ async function saveAutoRelogin() {
   }
 }
 
-$("autoReloginEnabled")?.addEventListener("change", () => {
+$("autoReloginEnabled")?.addEventListener("change", LucimaActionWait.wrap(() => {
   syncAutoReloginUI({
     enabled: $("autoReloginEnabled").checked,
     delaySeconds: Number($("autoReloginDelay").value || 5) * 60,
   });
-  saveAutoRelogin();
-});
-$("autoReloginDelay")?.addEventListener("change", saveAutoRelogin);
+  return saveAutoRelogin();
+}));
+$("autoReloginDelay")?.addEventListener("change", LucimaActionWait.wrap(saveAutoRelogin));
 
 function syncRequestDelayUI(value = {}) {
   const enabledInput = $("requestDelayEnabled");
@@ -6053,16 +7375,16 @@ async function saveRequestDelay() {
   }
 }
 
-$("requestDelayEnabled")?.addEventListener("change", () => {
+$("requestDelayEnabled")?.addEventListener("change", LucimaActionWait.wrap(() => {
   syncRequestDelayUI({
     enabled: $("requestDelayEnabled").checked,
     ms: $("requestDelayMs").value,
     jitter: $("requestDelayJitter").value,
   });
-  saveRequestDelay();
-});
-$("requestDelayMs")?.addEventListener("change", saveRequestDelay);
-$("requestDelayJitter")?.addEventListener("change", saveRequestDelay);
+  return saveRequestDelay();
+}));
+$("requestDelayMs")?.addEventListener("change", LucimaActionWait.wrap(saveRequestDelay));
+$("requestDelayJitter")?.addEventListener("change", LucimaActionWait.wrap(saveRequestDelay));
 // 启动时拉一次 /api/config：系统设置 + 版本号（版本唯一真源在 backend/version.py，
 // 前端不写死，免得又出现"关于页 1.0.2 / APK 1.7"各说各话）。
 async function loadConfig() {
@@ -6165,11 +7487,11 @@ window.onLucimaDownloadDirectoryChanged = (location) => {
   downloadPathNotice("");
 };
 
-$("browseDownloadPathBtn")?.addEventListener("click", browseDownloadPath);
-$("resetDownloadPathBtn")?.addEventListener("click", resetDownloadPath);
-$("downloadPathInput")?.addEventListener("change", (event) => {
-  persistDownloadPath(event.target.value);
-});
+$("browseDownloadPathBtn")?.addEventListener("click", LucimaActionWait.wrap(browseDownloadPath));
+$("resetDownloadPathBtn")?.addEventListener("click", LucimaActionWait.wrap(resetDownloadPath));
+$("downloadPathInput")?.addEventListener("change", LucimaActionWait.wrap((event) => {
+  return persistDownloadPath(event.target.value);
+}));
 $("downloadPathInput")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -6179,20 +7501,12 @@ $("downloadPathInput")?.addEventListener("keydown", (event) => {
 
 // ---------- 自助更新 ----------
 let updateState = null;
-let updateAutoShownVersion = "";
 let updateStatusPending = false;
-let updateAboutCheckPromise = null;
-let updateAboutChecking = false;
-let updateAboutCheckSequence = 0;
 let updateProgressPollToken = 0;
 let updateProgressPollTimer = null;
 let updateDialogMode = "update";
-let updateStartupReady = false;
-let updateStartupBlocked = true;
-let updateStartupCheckPending = false;
-let updateStartupCheckPromise = null;
-let updateLastSuccessfulCheckAt = 0;
-const UPDATE_STALE_AFTER_MS = 60 * 60 * 1000;
+// 启动和登录不依赖更新服务；保留就绪标记供各界面的初始化检查使用。
+const updateStartupReady = true;
 
 function formatUpdateBytes(value) {
   const bytes = Math.max(0, Number(value) || 0);
@@ -6271,58 +7585,12 @@ function startUpdateProgressPolling() {
 
 function renderUpdateAvailability(state) {
   const button = $("aboutUpdateBtn");
-  if (!button) return;
-  const checking = updateAboutChecking;
-  const status = checking ? "checking" : state?.available ? "update"
-    : state?.lastError ? "error" : state?.checked ? "latest" : "idle";
-  const labels = {
-    checking: "正在检查更新",
-    update: "发现新版本，点击查看更新",
-    latest: "已是最新，点击重新检查更新",
-    error: "检查失败，点击重试",
-    idle: state?.testServer ? "测试环境，点击检查更新" : "点击检查更新",
-  };
-  button.dataset.state = status;
-  button.disabled = checking;
-  button.setAttribute("aria-busy", String(checking));
-  button.setAttribute("aria-label", labels[status]);
-  button.title = labels[status];
-}
-
-function checkUpdatesFromAbout(manual = true) {
-  if (updateAboutCheckPromise) return updateAboutCheckPromise;
-  updateAboutCheckSequence += 1;
-  updateAboutChecking = true;
-  renderUpdateAvailability(updateState);
-  updateAboutCheckPromise = (async () => {
-    try {
-      if (updateStartupCheckPromise) await updateStartupCheckPromise;
-      const state = await fetchFreshUpdateStatus();
-      updateState = state;
-      if (state.testServer) {
-        if (manual) showMessageToast("测试环境不检查更新");
-        return;
-      }
-      if (state.lastError) throw new Error(state.lastError);
-      updateLastSuccessfulCheckAt = Number(state.lastCheckedAt) || Date.now();
-      if (state.available) {
-        updateAutoShownVersion = state.latestVersion;
-        if (manual) showMessageToast(`发现新版本 ${state.latestVersion}`);
-        if (state.forced) openUpdateDialog(state);
-      } else {
-        if (manual) showMessageToast(`已是最新版本 ${state.currentVersion}`);
-        if (updateDialogMode === "update" && !state.forced) closeUpdateDialog();
-      }
-    } catch (error) {
-      updateState = { ...(updateState || {}), checking: false, lastError: error?.message || "检查更新失败" };
-      if (manual) showMessageToast(error?.message || "检查更新失败", "err", 5200);
-    } finally {
-      updateAboutChecking = false;
-      updateAboutCheckPromise = null;
-      renderUpdateAvailability(updateState);
-    }
-  })();
-  return updateAboutCheckPromise;
+  if (button) {
+    button.classList.remove("hidden");
+    const label = state?.available ? "查看可用更新" : "检查更新";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
 }
 
 function openUpdateDialog(state = updateState) {
@@ -6330,10 +7598,10 @@ function openUpdateDialog(state = updateState) {
   updateDialogMode = "update";
   updateState = state;
   const forced = !!state.forced;
-  $("updateEyebrow").textContent = forced ? "需要更新后继续使用" : "发现新版本";
-  $("updateTitle").textContent = `LucimaTools ${state.latestVersion}`;
+  $("updateEyebrow").textContent = forced ? "建议更新" : "发现新版本";
+  $("updateTitle").textContent = `璐茜玛测试版 ${state.latestVersion}`;
   $("updateSummary").textContent = forced
-    ? `当前版本 ${state.currentVersion} 已停止支持。`
+    ? `服务器建议升级当前版本 ${state.currentVersion}，也可继续使用。`
     : `当前版本 ${state.currentVersion}，更新准备就绪。`;
   const notes = Array.isArray(state.notes) ? state.notes.filter(Boolean) : [];
   const notesEl = $("updateNotes");
@@ -6341,11 +7609,12 @@ function openUpdateDialog(state = updateState) {
   notesEl.innerHTML = notes.length
     ? notes.map((note) => `<li>${filterEscape(note)}</li>`).join("")
     : "此版本暂无更新说明";
-  $("updateIgnoreBtn").classList.toggle("hidden", forced);
-  $("updateModal").querySelector(".update-actions")?.classList.toggle("forced", forced);
+  $("updateIgnoreBtn").classList.remove("hidden");
+  $("updateIgnoreBtn").disabled = !!state.installing;
+  $("updateIgnoreBtn").textContent = forced ? "暂不更新" : "忽略此版本";
+  $("updateModal").querySelector(".update-actions")?.classList.remove("forced");
   const installButton = $("updateInstallBtn");
-  // A forced manifest without a package must remain blocking, but the only
-  // available action is a retry instead of a permanently disabled dialog.
+  // 未提供安装包时允许重新检查；更新提示始终可关闭。
   const canRetryManifest = forced && (!state.artifactAvailable || !state.installSupported);
   installButton.disabled = canRetryManifest ? false : (!state.artifactAvailable || !state.installSupported || !!state.installing);
   installButton.textContent = canRetryManifest
@@ -6363,9 +7632,10 @@ function openUpdateDialog(state = updateState) {
 }
 
 function closeUpdateDialog() {
-  if (updateState?.forced || updateStartupBlocked) return;
+  if (updateState?.installing) return;
   $("updateModal")?.classList.add("hidden");
   document.body.classList.remove("update-dialog-open");
+  $("aboutUpdateBtn")?.focus({ preventScroll: true });
 }
 
 function openUpdateCheckFailureDialog(message = "无法获取最新版本，请检查网络后重试。") {
@@ -6374,20 +7644,22 @@ function openUpdateCheckFailureDialog(message = "无法获取最新版本，请�
     ...(updateState || {}),
     available: false,
     forced: false,
-    startupError: true,
+    checkError: true,
     artifactAvailable: false,
     installSupported: false,
     installing: false,
     notes: [],
   };
-  $("updateEyebrow").textContent = "无法继续使用";
-  $("updateTitle").textContent = "无法获取最新版本";
-  $("updateSummary").textContent = "请确认网络连接正常，完成版本检查后才能进入主界面。";
+  $("updateEyebrow").textContent = "检查更新失败";
+  $("updateTitle").textContent = "暂时无法检查更新";
+  $("updateSummary").textContent = "可继续使用当前版本，稍后再试。";
   const notesEl = $("updateNotes");
   notesEl.classList.add("empty");
   notesEl.textContent = "更新服务暂时不可用。";
-  $("updateIgnoreBtn").classList.add("hidden");
-  $("updateModal").querySelector(".update-actions")?.classList.add("forced");
+  $("updateIgnoreBtn").classList.remove("hidden");
+  $("updateIgnoreBtn").disabled = false;
+  $("updateIgnoreBtn").textContent = "关闭";
+  $("updateModal").querySelector(".update-actions")?.classList.remove("forced");
   const retry = $("updateInstallBtn");
   retry.disabled = false;
   retry.textContent = "重新检查";
@@ -6413,89 +7685,44 @@ async function fetchFreshUpdateStatus() {
     await sleepForUpdateCheck(250);
     state = await api("/api/update/status");
   }
-  if (!state?.testServer && (state?.checking || !state?.checked) && !state?.lastError) {
+  if (!state?.testServer && !state?.checked && !state?.lastError) {
     throw new Error("版本检查超时");
   }
   return state;
 }
 
-function setLoginUpdateGate(ready, message = "") {
-  updateStartupReady = !!ready;
-  const button = $("loginBtn");
-  if (button) button.disabled = !ready;
-  if (!ready && message) loginStatus(message, "pending");
-  else if (ready) loginStatus("");
-}
-
-async function runStartupUpdateCheck() {
-  if (updateStartupCheckPromise) return updateStartupCheckPromise;
-  updateStartupCheckPending = true;
-  setLoginUpdateGate(false, "正在检查最新版本，请稍候…");
-  updateStartupCheckPromise = (async () => {
-    try {
-      const state = await fetchFreshUpdateStatus();
-      updateState = state;
-      if (state.testServer) {
-        updateLastSuccessfulCheckAt = Date.now();
-        updateStartupBlocked = false;
-        setLoginUpdateGate(true);
-        closeUpdateDialog();
-        return state;
-      }
-      if (state.lastError) throw new Error(state.lastError);
-      updateLastSuccessfulCheckAt = Number(state.lastCheckedAt) || Date.now();
-      if (state.forced) {
-        updateStartupBlocked = true;
-        setLoginUpdateGate(false, "当前版本需要更新后才能继续使用。");
-        openUpdateDialog(state);
-      } else {
-        updateStartupBlocked = false;
-        setLoginUpdateGate(true);
-        renderUpdateAvailability(state);
-        if (state.available && !state.ignored) openUpdateDialog(state);
-        else closeUpdateDialog();
-      }
-      return state;
-    } catch (error) {
-      updateStartupBlocked = true;
-      setLoginUpdateGate(false, "无法获取最新版本，请完成检查后再登录。");
-      openUpdateCheckFailureDialog(error?.message || "更新检查失败");
-      return null;
-    } finally {
-      updateStartupCheckPending = false;
-      updateStartupCheckPromise = null;
-    }
-  })();
-  return updateStartupCheckPromise;
-}
-
-async function refreshUpdateStatus(autoShow = false, forceCheck = false) {
-  if (updateStatusPending || updateStartupCheckPending || updateAboutChecking) return;
-  const aboutSequence = updateAboutCheckSequence;
+async function checkForUpdates() {
+  if (updateStatusPending) return;
   updateStatusPending = true;
+  const button = $("aboutUpdateBtn");
+  if (button) button.disabled = true;
   try {
-    const state = forceCheck ? await fetchFreshUpdateStatus() : await api("/api/update/status");
-    if (updateAboutChecking || aboutSequence !== updateAboutCheckSequence) return;
+    const state = await fetchFreshUpdateStatus();
     updateState = state;
-    if (!state.testServer && !state.lastError && state.checked && state.lastCheckedAt) {
-      updateLastSuccessfulCheckAt = Number(state.lastCheckedAt);
-    }
     renderUpdateAvailability(state);
-    const shouldShow = state.available && (
-      state.forced || (autoShow && !state.ignored && updateAutoShownVersion !== state.latestVersion)
-    );
-    if (shouldShow) {
-      updateAutoShownVersion = state.latestVersion;
-      openUpdateDialog(state);
-    } else if (!state.available && !$("updateModal")?.classList.contains("hidden") && !updateStartupBlocked) {
+    if (state.lastError) throw new Error(state.lastError);
+    if (state.available) openUpdateDialog(state);
+    else {
       closeUpdateDialog();
+      showMessageToast("当前已是最新版本。", "ok");
     }
-  } catch { /* 更新服务不可达不影响主功能 */ }
-  finally { updateStatusPending = false; }
+    return state;
+  } catch (error) {
+    openUpdateCheckFailureDialog(error?.message || "更新检查失败");
+    return null;
+  } finally {
+    updateStatusPending = false;
+    renderUpdateAvailability(updateState);
+    if (button) button.disabled = false;
+  }
 }
 
 async function ignoreCurrentUpdate() {
-  if (!updateState?.latestVersion || updateState.forced) return;
+  if (updateDialogMode === "check-error" || updateState?.forced) {
+    closeUpdateDialog();
+    return;
+  }
+  if (!updateState?.latestVersion) return;
   const button = $("updateIgnoreBtn");
   button.disabled = true;
   try {
@@ -6512,16 +7739,12 @@ async function ignoreCurrentUpdate() {
 
 async function installCurrentUpdate() {
   if (updateDialogMode === "check-error") {
-    await runStartupUpdateCheck();
+    await checkForUpdates();
     return;
   }
   if (!updateState?.available) return;
   if (!updateState.artifactAvailable || !updateState.installSupported) {
-    // Keep a forced dialog actionable even if the server published its
-    // manifest before the platform artifact finished uploading.
-    if (updateState.forced) {
-      await refreshUpdateStatus(true, true);
-    }
+    await checkForUpdates();
     return;
   }
   const installButton = $("updateInstallBtn");
@@ -6560,81 +7783,18 @@ async function installCurrentUpdate() {
   }
 }
 
-let gameDataCheckPending = false;
-
-async function refreshGameDataStatus() {
-  const state = await api("/api/resources/status");
-  const label = $("gameDataVersion");
-  const phases = { checking: "检查中", downloading: "下载中", building: "解析中", waiting_server: "等待维护结束", error: "更新失败" };
-  if (label) {
-    const version = state.version?.replace(/^catalog_/, "") || "内置资料";
-    label.textContent = state.phase && phases[state.phase] ? `${version} · ${phases[state.phase]}` : version;
-    label.title = state.error || (state.availableVersion ? `官方资源 ${state.availableVersion}` : "启动和登录时自动检查游戏数据");
-  }
-  return state;
-}
-
-async function checkGameDataFromDev() {
-  if (gameDataCheckPending) return;
-  const button = $("gameDataCheckBtn");
-  gameDataCheckPending = true;
-  button.disabled = true;
-  button.classList.add("loading");
-  try {
-    await api("/api/resources/check", {});
-    let state;
-    const started = Date.now();
-    do {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      state = await refreshGameDataStatus();
-      if (!state.checking && Number(state.checkedAt) * 1000 >= started - 2000) break;
-    } while (Date.now() - started < 3 * 60 * 1000);
-    if (state.error) throw new Error(state.error);
-    showMessageToast(state.checking ? "游戏数据仍在后台更新" : state.phase === "waiting_server"
-      ? "游戏数据已下载，等待维护结束后启用" : `游戏数据已更新至 ${state.version?.replace(/^catalog_/, "") || "当前版本"}`);
-  } catch (error) {
-    showMessageToast(error?.message || "游戏数据更新失败，继续使用原有资料", "err", 5200);
-  } finally {
-    gameDataCheckPending = false;
-    button.disabled = false;
-    button.classList.remove("loading");
-  }
-}
-
 function initUpdateUI() {
-  $("gameDataCheckBtn")?.addEventListener("click", checkGameDataFromDev);
-  window.addEventListener("lucima:section-change", event => {
-    if (event.detail?.section === "about") {
-      checkUpdatesFromAbout(false);
-    } else if (event.detail?.section === "settings" && devPass()) {
-      refreshGameDataStatus().catch(() => {});
+  $("aboutUpdateBtn")?.addEventListener("click", LucimaActionWait.wrap(checkForUpdates));
+  $("updateIgnoreBtn")?.addEventListener("click", LucimaActionWait.wrap(ignoreCurrentUpdate));
+  $("updateInstallBtn")?.addEventListener("click", LucimaActionWait.wrap(installCurrentUpdate));
+  $("updateModal")?.querySelector(".update-backdrop")?.addEventListener("click", LucimaActionWait.wrap(closeUpdateDialog));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("updateModal")?.classList.contains("hidden")) {
+      event.preventDefault();
+      closeUpdateDialog();
     }
   });
-  setInterval(() => {
-    if (document.visibilityState === "visible" && $("section-settings")?.classList.contains("active") && devPass()) {
-      refreshGameDataStatus().catch(() => {});
-    }
-  }, 15000);
-  $("aboutUpdateBtn")?.addEventListener("click", () => {
-    if (updateAboutChecking) return;
-    if (updateState?.available) openUpdateDialog();
-    else checkUpdatesFromAbout(true);
-  });
-  $("updateIgnoreBtn")?.addEventListener("click", ignoreCurrentUpdate);
-  $("updateInstallBtn")?.addEventListener("click", installCurrentUpdate);
-  runStartupUpdateCheck();
-  setTimeout(() => refreshUpdateStatus(true), 4000);
-  setTimeout(() => refreshUpdateStatus(true), 18000);
-  setInterval(() => refreshUpdateStatus(true), 60 * 60 * 1000);
-  const checkOnForeground = () => {
-    if (document.visibilityState !== "visible" || !updateStartupReady) return;
-    const last = Number(updateLastSuccessfulCheckAt) || 0;
-    if (!last || Date.now() - last >= UPDATE_STALE_AFTER_MS) {
-      refreshUpdateStatus(true, true);
-    }
-  };
-  document.addEventListener("visibilitychange", checkOnForeground);
-  window.addEventListener("focus", checkOnForeground);
+  renderUpdateAvailability(null);
 }
 
 // ---------- 非阻塞消息弹窗 ----------
@@ -6659,7 +7819,7 @@ function showMessageToast(message, type = "ok", duration = 4200) {
     toast.classList.add("leaving");
     setTimeout(() => toast.remove(), 180);
   };
-  toast.querySelector(".message-toast-close").addEventListener("click", dismiss);
+  toast.querySelector(".message-toast-close").addEventListener("click", LucimaActionWait.wrap(dismiss));
   timer = setTimeout(dismiss, duration);
 }
 
@@ -6694,7 +7854,7 @@ async function saveDevLog() {
     }, 1600);
   }
 }
-if ($("saveDevLogBtn")) $("saveDevLogBtn").onclick = saveDevLog;
+if ($("saveDevLogBtn")) $("saveDevLogBtn").onclick = LucimaActionWait.wrap(saveDevLog);
 
 // ---------- 开发者模式 · 协议控制台 ----------
 // 入口靠口令解锁：设置页底部一个无提示输入框（#devGate），输对了控制台就出现，
@@ -7181,13 +8341,8 @@ async function checkDevUpdateChannel(channel = null) {
       devUpdateChannelState = await fetchFreshUpdateStatus();
     }
     updateState = devUpdateChannelState;
-    if (!updateState.lastError && updateState.checked) {
-      updateLastSuccessfulCheckAt = Number(updateState.lastCheckedAt) || Date.now();
-    }
-    updateAutoShownVersion = "";
     renderUpdateAvailability(updateState);
     if (!updateState.testServer && !updateState.lastError && updateState.available && !updateState.ignored) {
-      updateAutoShownVersion = updateState.latestVersion;
       openUpdateDialog(updateState);
     }
   } catch (error) {
@@ -7211,7 +8366,6 @@ function renderDevConsole() {
   card.style.display = on ? "" : "none";
   if (on && !card.dataset.bound) {
     card.dataset.bound = "1";
-    refreshGameDataStatus().catch(() => {});
     renderDevUpdateChannel();
     api("/api/update/status").then(state => {
       if (!devUpdateChannelPending && !devUpdateChannelState) {
@@ -7219,45 +8373,45 @@ function renderDevConsole() {
         renderDevUpdateChannel();
       }
     }).catch(() => {});
-    $("devUpdateCheckBtn").onclick = () => checkDevUpdateChannel();
+    $("devUpdateCheckBtn").onclick = LucimaActionWait.wrap(() => checkDevUpdateChannel());
     renderDevRecentRoutes();
-    $("devSendBtn").onclick = devSend;
-    $("devLoopAddBtn").onclick = devAddCurrentToLoop;
-    $("devLoopStartBtn").onclick = devStartLoop;
-    $("devLoopStopBtn").onclick = devStopLoop;
-    $("devHistoryList").addEventListener("click", (event) => {
+    $("devSendBtn").onclick = LucimaActionWait.wrap(devSend);
+    $("devLoopAddBtn").onclick = LucimaActionWait.wrap(devAddCurrentToLoop);
+    $("devLoopStartBtn").onclick = LucimaActionWait.wrap(devStartLoop);
+    $("devLoopStopBtn").onclick = LucimaActionWait.wrap(devStopLoop);
+    $("devHistoryList").addEventListener("click", LucimaActionWait.wrap((event) => {
       const importButton = event.target.closest("[data-history-import-index]");
       const loopButton = event.target.closest("[data-history-loop-index]");
       const copyRequestButton = event.target.closest("[data-history-copy-request-index]");
       const copyResponseButton = event.target.closest("[data-history-copy-response-index]");
       if (importButton) devImportHistory(Number(importButton.dataset.historyImportIndex));
       if (loopButton) devAddLoopRequest(DEV_HISTORY[Number(loopButton.dataset.historyLoopIndex)]);
-      if (copyRequestButton) copyDevHistoryPart(Number(copyRequestButton.dataset.historyCopyRequestIndex), "request", copyRequestButton);
-      if (copyResponseButton) copyDevHistoryPart(Number(copyResponseButton.dataset.historyCopyResponseIndex), "response", copyResponseButton);
-    });
-    $("devLoopList").addEventListener("click", (event) => {
+      if (copyRequestButton) return copyDevHistoryPart(Number(copyRequestButton.dataset.historyCopyRequestIndex), "request", copyRequestButton);
+      if (copyResponseButton) return copyDevHistoryPart(Number(copyResponseButton.dataset.historyCopyResponseIndex), "response", copyResponseButton);
+    }));
+    $("devLoopList").addEventListener("click", LucimaActionWait.wrap((event) => {
       const button = event.target.closest("[data-loop-action]");
       const row = event.target.closest("[data-loop-id]");
       if (button && row) devMoveLoopItem(Number(row.dataset.loopId), button.dataset.loopAction);
-    });
+    }));
     $("devLoopRounds").addEventListener("input", (event) => {
       event.target.value = event.target.value.replace(/[^0-9]/g, "").slice(0, 4);
     });
-    $("devLoopRounds").addEventListener("change", (event) => {
+    $("devLoopRounds").addEventListener("change", LucimaActionWait.wrap((event) => {
       const state = devLoopState();
       state.rounds = devClampLoopRounds(event.target.value);
       renderDevLoop();
-    });
+    }));
     $("devLoopInterval").addEventListener("input", (event) => {
       event.target.value = event.target.value.replace(/[^0-9]/g, "").slice(0, 5);
     });
-    $("devLoopInterval").addEventListener("change", (event) => {
+    $("devLoopInterval").addEventListener("change", LucimaActionWait.wrap((event) => {
       const state = devLoopState();
       state.interval = devClampLoopInterval(event.target.value);
       renderDevLoop();
-    });
+    }));
     $("devData").addEventListener("input", devCheckJson);
-    $("devRoute").addEventListener("change", devSaveInput);
+    $("devRoute").addEventListener("change", LucimaActionWait.wrap(devSaveInput));
   }
   if (on) {
     if (DEV_HISTORY_ACCOUNT !== activeAccount) {
@@ -7286,7 +8440,6 @@ function initDevGate() {
 
 // ---------- 工具箱预览 ----------
 function showToolboxHome() {
-  closeSchemeTransferMenu();
   stopBackgroundTestPolling();
   closeEncyclopediaStatusFilter(false);
   closeEncyclopediaCard();
@@ -7298,8 +8451,8 @@ function showToolboxHome() {
 }
 
 // ---------- 图鉴查询 ----------
-// Cloud metadata is checked independently of software releases. Per-character
-// dossiers and large portrait assets are downloaded only when requested.
+// The index stays small enough to ship with the app. Character dossiers and
+// large portrait assets are loaded only after a preview is selected.
 const ENCYCLOPEDIA_ALL_ICON = "/assets/ui/hero-all.png";
 const ENCYCLOPEDIA_ELEMENTS = [
   { id: "ALL", label: "ALL", icon: ENCYCLOPEDIA_ALL_ICON },
@@ -7328,9 +8481,9 @@ const ENCYCLOPEDIA_STARS = [
 const ENCYCLOPEDIA_STATE = {
   index: null,
   ui: null,
-  version: "",
-  pendingCatalog: null,
-  filters: { element: [], job: [], star: [], statuses: [] },
+  resourceConfig: null,
+  details: new Map(),
+  filters: { element: "ALL", job: "ALL", star: "ALL", statuses: [] },
   statusDraft: null,
   statusReturnFocus: null,
   statusContext: null,
@@ -7360,9 +8513,10 @@ const ENCYCLOPEDIA_STATE = {
     suppressClickUntil: 0,
   },
 };
+const ENCYCLOPEDIA_INDEX_URL = "/assets/encyclopedia/index.json";
+const ENCYCLOPEDIA_UI_URL = "/assets/encyclopedia/ui.json";
 let encyclopediaIndexPending = null;
-let encyclopediaCheckPending = null;
-let encyclopediaCheckTimer = null;
+window.addEventListener('lucima:memory-pressure', () => ENCYCLOPEDIA_STATE.details.clear());
 
 function encyclopediaEscape(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -7370,119 +8524,245 @@ function encyclopediaEscape(value) {
   }[character]));
 }
 
-const encyclopediaFetch = url => window.LucimaEncyclopediaData.fetchResource(url);
-window.fetchEncyclopediaResource = encyclopediaFetch;
-let encyclopediaRuntimePromise = null;
-function ensureEncyclopediaSpineRuntime() {
-  if (window.spine) return Promise.resolve(window.spine);
-  if (!encyclopediaRuntimePromise) encyclopediaRuntimePromise = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "/static/vendor/spine-webgl.js?v=1";
-    script.onload = () => window.spine ? resolve(window.spine) : reject(new Error("动态立绘组件加载失败"));
-    script.onerror = () => { script.remove(); reject(new Error("动态立绘组件加载失败")); };
-    document.head.appendChild(script);
-  }).catch(error => { encyclopediaRuntimePromise = null; throw error; });
-  return encyclopediaRuntimePromise;
+function encyclopediaJoinUrl(base, path) {
+  if (!path) return "";
+  const raw = String(path);
+  if (/^(?:https?:)?\/\//i.test(raw) || raw.startsWith("/")) return raw;
+  if (!base) return "";
+  try {
+    const result = new URL(raw.replace(/^\/+/, ""), String(base).replace(/\/?$/, "/"));
+    return ["http:", "https:"].includes(result.protocol) ? result.href : "";
+  } catch { return ""; }
 }
 
-function updateEncyclopediaSyncButton() {
-  const button = $("encyclopediaSync");
-  if (!button) return;
-  button.disabled = !!encyclopediaCheckPending;
-  button.title = ENCYCLOPEDIA_STATE.version
-    ? `图鉴版本：${ENCYCLOPEDIA_STATE.version}，点击检查更新` : "检查图鉴更新";
-  button.querySelector("span").textContent = encyclopediaCheckPending ? "检查中…" : "同步";
-}
-
-function applyEncyclopediaCatalog(catalog) {
-  if (!catalog?.available || !Array.isArray(catalog.characters)) return false;
-  if (ENCYCLOPEDIA_STATE.activeId || ENCYCLOPEDIA_STATE.savingImage || !$("encyclopediaStatusModal")?.classList.contains("hidden")) {
-    ENCYCLOPEDIA_STATE.pendingCatalog = catalog;
-    return false;
-  }
-  const changed = ENCYCLOPEDIA_STATE.version !== catalog.version;
-  ENCYCLOPEDIA_STATE.version = catalog.version;
-  ENCYCLOPEDIA_STATE.ui = catalog.ui;
-  ENCYCLOPEDIA_STATE.index = catalog.characters;
-  ENCYCLOPEDIA_STATE.pendingCatalog = null;
-  const valid = new Set([...encyclopediaStatusOptions().buff, ...encyclopediaStatusOptions().debuff].map(item => item.id));
-  ENCYCLOPEDIA_STATE.filters.statuses = ENCYCLOPEDIA_STATE.filters.statuses.filter(id => valid.has(id));
-  updateEncyclopediaStatusFilterButton();
-  updateEncyclopediaSyncButton();
-  if (ENCYCLOPEDIA_STATE.initialized) renderEncyclopediaGrid();
-  return changed;
-}
-
-async function checkEncyclopediaUpdate(force = false) {
-  if (encyclopediaCheckPending) return encyclopediaCheckPending;
-  encyclopediaCheckPending = (async () => {
+function encyclopediaConfigUrl(path, fallback = "") {
+  const config = ENCYCLOPEDIA_STATE.resourceConfig || {};
+  if (!path) return fallback;
+  const raw = String(path);
+  if (/^(?:https?:)?\/\//i.test(raw) || raw.startsWith("/")) {
     try {
-      const previous = ENCYCLOPEDIA_STATE.pendingCatalog?.version || ENCYCLOPEDIA_STATE.version;
-      const catalog = await window.LucimaEncyclopediaData.check(force);
-      const changed = catalog.available && previous && previous !== catalog.version;
-      if (catalog.version !== ENCYCLOPEDIA_STATE.version || ENCYCLOPEDIA_STATE.pendingCatalog) applyEncyclopediaCatalog(catalog);
-      window.clearTimeout(encyclopediaCheckTimer);
-      encyclopediaCheckTimer = window.setTimeout(() => {
-        if (!document.hidden && $("section-toolbox")?.classList.contains("active")
-            && (!$("encyclopediaPage")?.classList.contains("hidden") || !$("encyclopediaDetailPage")?.classList.contains("hidden")))
-          void checkEncyclopediaUpdate().catch(() => {});
-      }, Math.max(5000, (catalog.checkAfter || 3600) * 1000));
-      if (!catalog.available) throw new Error(catalog.error || "暂时无法获取图鉴资料，请联网后重试");
-      if (force && catalog.error) showMessageToast(catalog.error, "err");
-      else if (changed) showMessageToast("图鉴资料已更新");
-      else if (force) showMessageToast("图鉴资料已是最新");
-      return catalog;
-    } catch (error) {
-      if (!ENCYCLOPEDIA_STATE.index) {
-        const empty = $("encyclopediaEmpty");
-        if (empty) { empty.textContent = error.message; empty.classList.remove("hidden"); }
-      }
-      if (force) showMessageToast(error.message || "检查图鉴更新失败", "err");
-      throw error;
-    } finally { encyclopediaCheckPending = null; updateEncyclopediaSyncButton(); }
-  })();
-  updateEncyclopediaSyncButton();
-  return encyclopediaCheckPending;
+      const result = new URL(raw, location.href);
+      return ["http:", "https:"].includes(result.protocol) ? result.href : fallback;
+    } catch { return fallback; }
+  }
+  return encyclopediaJoinUrl(config.baseUrl || "", raw) || fallback;
 }
 
-async function loadEncyclopediaIndex() {
-  if (ENCYCLOPEDIA_STATE.index && ENCYCLOPEDIA_STATE.ui) {
-    void checkEncyclopediaUpdate().catch(() => {});
-    return ENCYCLOPEDIA_STATE.index;
+function encyclopediaCacheName(url = "") {
+  if (/\/objects\/[a-f0-9]{64}\.(png|jpg|jpeg|webp|skel|atlas|js)$/.test(new URL(url || location.href, location.href).pathname)) {
+    return "lucima-encyclopedia-objects-v1";
   }
-  if (!encyclopediaIndexPending) encyclopediaIndexPending = (async () => {
-    const cached = await window.LucimaEncyclopediaData.catalog();
-    if (cached.available) {
-      applyEncyclopediaCatalog(cached);
-      void checkEncyclopediaUpdate().catch(() => {});
-    } else {
-      const empty = $("encyclopediaEmpty");
-      if (empty) { empty.textContent = "正在获取图鉴资料…"; empty.classList.remove("hidden"); }
-      const catalog = await checkEncyclopediaUpdate();
-      applyEncyclopediaCatalog(catalog);
+  const version = String(ENCYCLOPEDIA_STATE.resourceConfig?.version || "local").replace(/[^a-z0-9._-]/gi, "_");
+  return `lucima-encyclopedia-resources-${version}`;
+}
+
+const encyclopediaPendingRequests = new Map();
+function usesPrivateResourceCache() {
+  return typeof window.LucimaFiles?.getDownloadLocation === 'function';
+}
+
+async function encyclopediaPrivateResourceUrl(url) {
+  if (!usesPrivateResourceCache()) return '';
+  const result = await api(`/api/encyclopedia/cache?url=${encodeURIComponent(url)}`);
+  if (!/^\/resource-cache\/[a-f0-9]{64}$/.test(result.url || '')) throw new Error('本地资源路径无效');
+  return result.url;
+}
+
+async function encyclopediaFetch(url) {
+  if (!url) throw new Error("图鉴资源地址为空");
+  if (usesPrivateResourceCache()) {
+    try {
+      const local = await encyclopediaPrivateResourceUrl(url);
+      const response = await fetch(local);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response;
+    } catch (error) {
+      // Retain pre-upgrade WebView caches as an offline fallback. New files
+      // are downloaded/verified on disk, outside the JavaScript heap.
+      try {
+        const cache = await caches.open(encyclopediaCacheName(url));
+        const old = await cache.match(url);
+        if (old) return old;
+      } catch { /* No legacy offline copy. */ }
+      throw error;
     }
-    return ENCYCLOPEDIA_STATE.index;
-  })().finally(() => { encyclopediaIndexPending = null; });
+  }
+  let cache = null;
+  try {
+    if (typeof caches !== "undefined") {
+      cache = await caches.open(encyclopediaCacheName(url));
+      const cached = await cache.match(url);
+      if (cached) return cached;
+    }
+  } catch { /* Cache Storage can be unavailable in embedded browsers. */ }
+  if (!encyclopediaPendingRequests.has(url)) {
+    const pending = (async () => {
+      const objectHash = new URL(url, location.href).pathname.match(/\/objects\/([a-f0-9]{64})\.(?:png|jpg|jpeg|webp|skel|atlas|js)$/)?.[1];
+      const response = await fetch(url, { cache: objectHash ? "default" : "no-store", credentials: "omit" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (objectHash) {
+        const digest = await crypto.subtle.digest("SHA-256", await response.clone().arrayBuffer());
+        const actual = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+        if (actual !== objectHash) throw new Error("图鉴资源校验失败");
+      }
+      try { await cache?.put(url, response.clone()); } catch { /* Still display the download. */ }
+      return response;
+    })();
+    encyclopediaPendingRequests.set(url, pending);
+  }
+  try {
+    return (await encyclopediaPendingRequests.get(url)).clone();
+  } finally {
+    encyclopediaPendingRequests.delete(url);
+  }
+}
+window.fetchEncyclopediaResource = encyclopediaFetch;
+
+async function encyclopediaJson(url) {
+  const parsed = new URL(url, location.href);
+  const isBundledDetail = parsed.origin === location.origin
+    && parsed.pathname.startsWith("/assets/encyclopedia/");
+  const response = isBundledDetail
+    ? await fetch(parsed.href, { cache: "no-store" })
+    : await encyclopediaFetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+let encyclopediaRuntimePromise = null;
+async function ensureEncyclopediaSpineRuntime() {
+  if (window.spine) return window.spine;
+  if (encyclopediaRuntimePromise) return encyclopediaRuntimePromise;
+  const runtimeUrl = ENCYCLOPEDIA_STATE.resourceConfig?.spineRuntimeUrl;
+  if (!runtimeUrl) throw new Error("未配置 Spine 运行时");
+  encyclopediaRuntimePromise = (async () => {
+    const config = ENCYCLOPEDIA_STATE.resourceConfig;
+    const resolved = window.LucimaEncyclopediaMedia.resourceUrl(config, runtimeUrl);
+    if (!resolved) throw new Error("Spine 运行库未列入资源清单");
+    const response = await encyclopediaFetch(resolved);
+    const code = await response.text();
+    const script = document.createElement("script");
+    script.textContent = `${code}\n//# sourceURL=${encyclopediaConfigUrl(runtimeUrl)}`;
+    document.head.appendChild(script);
+    if (!window.spine) throw new Error("Spine 运行时初始化失败");
+    return window.spine;
+  })();
+  try {
+    return await encyclopediaRuntimePromise;
+  } catch (error) {
+    encyclopediaRuntimePromise = null;
+    throw error;
+  }
+}
+
+async function loadEncyclopediaResourceConfig() {
+  if (ENCYCLOPEDIA_STATE.resourceConfig) return ENCYCLOPEDIA_STATE.resourceConfig;
+  if (ENCYCLOPEDIA_STATE.resourceConfigPromise) return ENCYCLOPEDIA_STATE.resourceConfigPromise;
+  ENCYCLOPEDIA_STATE.resourceConfigPromise = readEncyclopediaResourceConfig();
+  return ENCYCLOPEDIA_STATE.resourceConfigPromise;
+}
+
+async function readEncyclopediaResourceConfig() {
+  if (usesPrivateResourceCache()) {
+    try {
+      const local = await api('/api/encyclopedia/local-config');
+      ENCYCLOPEDIA_STATE.resourceConfig = local;
+      return local;
+    } catch { /* A pre-upgrade cached manifest can still work offline. */ }
+  }
+  let config = {};
+  try {
+    config = await api("/api/encyclopedia/resources");
+  } catch (error) {
+    console.warn("读取图鉴资源配置失败：", error);
+  }
+  if (config.manifestUrl) {
+    let cache = null;
+    const resolveManifest = async (response) => {
+      if (!response?.ok) throw new Error("图鉴资源清单不可用");
+      const manifest = await response.json();
+      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
+          || typeof manifest.version !== "string" || !manifest.version.trim()
+          || (manifest.baseUrl !== undefined && typeof manifest.baseUrl !== "string")) {
+        throw new Error("图鉴资源清单格式无效");
+      }
+      if (manifest.schema !== undefined && ![1, 2].includes(manifest.schema)) {
+        throw new Error("不支持的图鉴资源清单版本");
+      }
+      if (manifest.schema === 2) {
+        const files = manifest.files;
+        if (!files || typeof files !== "object" || Array.isArray(files) || !Object.keys(files).length
+            || Object.entries(files).some(([path, file]) =>
+              path.startsWith("/") || /[\\:%?#\u0000-\u001f]/.test(path)
+              || path.split("/").some((part) => !part || part === "." || part === "..")
+              || !/\.(png|jpg|jpeg|webp|skel|atlas|js)$/i.test(path)
+              || !file || typeof file !== "object" || !/^[a-f0-9]{64}$/.test(file.sha256)
+              || !Number.isSafeInteger(file.size) || file.size <= 0)) {
+          throw new Error("图鉴资源文件表无效");
+        }
+      }
+      const baseUrl = new URL(manifest.baseUrl || ".", config.manifestUrl);
+      if (!["http:", "https:"].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
+        throw new Error("图鉴资源地址无效");
+      }
+      return { ...config, ...manifest, baseUrl: baseUrl.href };
+    };
+    try {
+      try { cache = await caches.open("lucima-encyclopedia-config"); } catch { /* Optional cache. */ }
+      try {
+        const response = await fetch(config.manifestUrl, {
+          cache: "no-cache", credentials: "omit",
+          ...(typeof AbortSignal.timeout === "function" ? { signal: AbortSignal.timeout(10000) } : {}),
+        });
+        const copy = response.clone();
+        const resolved = await resolveManifest(response);
+        try { await cache?.put(config.manifestUrl, copy); } catch { /* Optional cache. */ }
+        config = resolved;
+      } catch (error) {
+        const response = await cache?.match(config.manifestUrl);
+        if (!response) throw error;
+        config = await resolveManifest(response);
+      }
+    } catch {
+      // A missing manifest leaves the complete text card available.
+      config = {};
+    }
+  }
+  ENCYCLOPEDIA_STATE.resourceConfig = config;
+  return config;
+}
+
+function encyclopediaLocalIndexUrl() {
+  return new URL(ENCYCLOPEDIA_INDEX_URL, location.href).href;
+}
+
+async function loadEncyclopediaIndex({ resources = true } = {}) {
+  if (resources) void loadEncyclopediaResourceConfig();
+  if (ENCYCLOPEDIA_STATE.index && ENCYCLOPEDIA_STATE.ui) return ENCYCLOPEDIA_STATE.index;
+  if (!encyclopediaIndexPending) {
+    encyclopediaIndexPending = (async () => {
+      if (!ENCYCLOPEDIA_STATE.ui) {
+        ENCYCLOPEDIA_STATE.ui = await encyclopediaJson(new URL(ENCYCLOPEDIA_UI_URL, location.origin).href);
+      }
+      const payload = await encyclopediaJson(encyclopediaLocalIndexUrl());
+      const characters = Array.isArray(payload) ? payload : payload?.characters;
+      if (!Array.isArray(characters)) throw new Error("图鉴索引格式无效");
+      ENCYCLOPEDIA_STATE.index = characters.map((entry) => ({
+        ...entry,
+        id: String(entry.id || ""),
+        number: Number(entry.number) || Number(String(entry.id || "").slice(1)) || 9999,
+        statuses: Array.isArray(entry.statuses) ? entry.statuses : [],
+      })).filter((entry) => entry.id).sort((left, right) => left.number - right.number || left.id.localeCompare(right.id));
+      return ENCYCLOPEDIA_STATE.index;
+    })().finally(() => { encyclopediaIndexPending = null; });
+  }
   return encyclopediaIndexPending;
 }
 
-async function loadEncyclopediaResourceConfig(entry) {
-  const selected = entry || ENCYCLOPEDIA_STATE.index?.find(row => row.id === ENCYCLOPEDIA_STATE.activeId);
-  if (!selected) return {};
-  const envelope = await window.LucimaEncyclopediaData.detail(ENCYCLOPEDIA_STATE.version, selected);
-  return window.LucimaEncyclopediaData.config(envelope);
-}
-
-function characterMatchesFilter(value, selection) {
-  return Array.isArray(selection)
-    ? !selection.length || selection.includes(value)
-    : selection === "ALL" || selection === value;
-}
-
 function characterMatchesFilters(entry, filters) {
-  return characterMatchesFilter(entry.element, filters.element)
-    && characterMatchesFilter(entry.job, filters.job)
-    && (!filters.star || characterMatchesFilter(String(entry.star), filters.star))
+  return (filters.element === "ALL" || entry.element === filters.element)
+    && (filters.job === "ALL" || entry.job === filters.job)
+    && (!filters.star || filters.star === "ALL" || Number(entry.star) === Number(filters.star))
     && (!filters.statuses.length || (entry.statuses || []).some((id) => filters.statuses.includes(id)));
 }
 
@@ -7511,10 +8791,9 @@ function renderEncyclopediaFilters() {
   const elementHost = $("encyclopediaElementFilters");
   const jobHost = $("encyclopediaJobFilters");
   const starHost = $("encyclopediaStarFilters");
-  const { element, job, star } = ENCYCLOPEDIA_STATE.filters;
-  if (elementHost) elementHost.innerHTML = ENCYCLOPEDIA_ELEMENTS.map((option) => encyclopediaFilterButtonHTML(option, "element", option.id === "ALL" ? !element.length : element.includes(option.id))).join("");
-  if (jobHost) jobHost.innerHTML = ENCYCLOPEDIA_JOBS.map((option) => encyclopediaFilterButtonHTML(option, "job", option.id === "ALL" ? !job.length : job.includes(option.id))).join("");
-  if (starHost) starHost.innerHTML = ENCYCLOPEDIA_STARS.map((option) => encyclopediaFilterButtonHTML(option, "star", option.id === "ALL" ? !star.length : star.includes(option.id))).join("");
+  if (elementHost) elementHost.innerHTML = ENCYCLOPEDIA_ELEMENTS.map((option) => encyclopediaFilterButtonHTML(option, "element", ENCYCLOPEDIA_STATE.filters.element === option.id)).join("");
+  if (jobHost) jobHost.innerHTML = ENCYCLOPEDIA_JOBS.map((option) => encyclopediaFilterButtonHTML(option, "job", ENCYCLOPEDIA_STATE.filters.job === option.id)).join("");
+  if (starHost) starHost.innerHTML = ENCYCLOPEDIA_STARS.map((option) => encyclopediaFilterButtonHTML(option, "star", ENCYCLOPEDIA_STATE.filters.star === option.id)).join("");
   updateEncyclopediaStatusFilterButton();
 }
 
@@ -7599,9 +8878,6 @@ function closeEncyclopediaStatusFilter(restoreFocus = true) {
   const returnFocus = ENCYCLOPEDIA_STATE.statusReturnFocus;
   ENCYCLOPEDIA_STATE.statusReturnFocus = null;
   if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
-  queueMicrotask(() => {
-    if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.activeId && !ENCYCLOPEDIA_STATE.savingImage) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
-  });
 }
 
 function applyEncyclopediaStatusFilter() {
@@ -7620,7 +8896,6 @@ function renderEncyclopediaGrid() {
   const empty = $("encyclopediaEmpty");
   if (!grid) return;
   const entries = encyclopediaFilteredIndex();
-  if (empty) empty.textContent = "没有符合条件的团员";
   grid.innerHTML = entries.map((entry) => `<button class="encyclopedia-preview" type="button" data-encyclopedia-character="${encyclopediaEscape(entry.id)}" aria-label="查看 ${encyclopediaEscape(entry.name || entry.id)} 图鉴">
     <span class="encyclopedia-preview-avatar"><img src="${encyclopediaEscape(entry.avatar || "/assets/ui/hero-all.png")}" alt="" loading="lazy"></span>
     <span class="encyclopedia-preview-name">${encyclopediaEscape(entry.name || entry.id)}</span>
@@ -7642,13 +8917,26 @@ function setEncyclopediaMode(mode, rerender = true) {
   if (rerender && ENCYCLOPEDIA_STATE.activeId && !$("encyclopediaDetailPage")?.classList.contains("hidden")) {
     $("encyclopediaCard").dataset.portraitMode = ENCYCLOPEDIA_STATE.mode;
     encyclopediaArchiveViewState().renderer?.setStaticMode(ENCYCLOPEDIA_STATE.mode === "static");
-    void encyclopediaArchiveViewState().media?.setMode(ENCYCLOPEDIA_STATE.mode);
+    return encyclopediaArchiveViewState().media?.setMode(ENCYCLOPEDIA_STATE.mode);
   }
 }
 
+function encyclopediaDetailUrl(entry) {
+  return new URL(`/assets/encyclopedia/${entry.detail || `characters/${entry.id}.json`}`, location.origin).href;
+}
+
 async function loadEncyclopediaDetail(entry) {
-  const envelope = await window.LucimaEncyclopediaData.detail(ENCYCLOPEDIA_STATE.version, entry);
-  return envelope.character;
+  if (ENCYCLOPEDIA_STATE.details.has(entry.id)) {
+    const detail = ENCYCLOPEDIA_STATE.details.get(entry.id);
+    ENCYCLOPEDIA_STATE.details.delete(entry.id);
+    ENCYCLOPEDIA_STATE.details.set(entry.id, detail);
+    return detail;
+  }
+  const detail = await encyclopediaJson(encyclopediaDetailUrl(entry));
+  ENCYCLOPEDIA_STATE.details.set(entry.id, detail);
+  const limit = usesPrivateResourceCache() ? 6 : 20;
+  while (ENCYCLOPEDIA_STATE.details.size > limit) ENCYCLOPEDIA_STATE.details.delete(ENCYCLOPEDIA_STATE.details.keys().next().value);
+  return detail;
 }
 
 function encyclopediaArchiveViewState() {
@@ -7875,7 +9163,7 @@ function initEncyclopediaArchiveViewport(viewport) {
   window.addEventListener("pointerup", onPointerUp, options);
   window.addEventListener("pointercancel", onPointerUp, options);
   viewport.addEventListener("lostpointercapture", onPointerUp, options);
-  viewport.addEventListener("click", onClick, { ...options, capture: true });
+  viewport.addEventListener("click", LucimaActionWait.wrap(onClick), { ...options, capture: true });
   window.addEventListener("blur", stopGestures, options);
   const resize = () => positionEncyclopediaArchiveViewport(true, pinch ? { ...pinch, ...pairPosition() } : null);
   window.addEventListener("resize", resize, options);
@@ -7916,15 +9204,16 @@ function renderEncyclopediaCard(entry, detail) {
   initEncyclopediaArchiveViewport(body.querySelector(".encyclopedia-archive-viewport"));
   encyclopediaArchiveViewState().renderer = renderer;
   updateEncyclopediaSaveButton();
-  void loadEncyclopediaResourceConfig(entry).then((config) => {
+  void loadEncyclopediaResourceConfig().then((config) => {
     const view = encyclopediaArchiveViewState();
     if (view.renderer !== renderer) return;
     view.media = window.LucimaEncyclopediaMedia.mount({
       renderer, entry, data: detail, config,
       fetchResource: encyclopediaFetch, loadRuntime: ensureEncyclopediaSpineRuntime,
+      resolveResourceUrl: usesPrivateResourceCache() ? encyclopediaPrivateResourceUrl : null,
     });
     void view.media.setMode(ENCYCLOPEDIA_STATE.mode);
-  }).catch(error => console.warn("图鉴图片加载失败：", error));
+  });
 }
 
 async function openEncyclopediaCard(id) {
@@ -7966,7 +9255,6 @@ function closeEncyclopediaCard() {
   ENCYCLOPEDIA_STATE.detailGeneration += 1;
   ENCYCLOPEDIA_STATE.activeId = null;
   showEncyclopediaList();
-  if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.savingImage) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
   document.body.classList.remove("encyclopedia-detail-open");
   disposeEncyclopediaArchiveViewport();
   $("encyclopediaCardBody")?.replaceChildren();
@@ -8021,7 +9309,7 @@ async function saveEncyclopediaImage() {
   ENCYCLOPEDIA_STATE.savingImage = true;
   updateEncyclopediaSaveButton();
   try {
-    const [data, config] = await Promise.all([loadEncyclopediaDetail(entry), loadEncyclopediaResourceConfig(entry)]);
+    const [data, config] = await Promise.all([loadEncyclopediaDetail(entry), loadEncyclopediaResourceConfig()]);
     const { pngBase64 } = await window.LucimaEncyclopediaExport.render({
       entry, data, translations: ENCYCLOPEDIA_STATE.ui || {}, config, fetchResource: encyclopediaFetch,
     });
@@ -8035,7 +9323,6 @@ async function saveEncyclopediaImage() {
     showMessageToast(`保存图鉴图片失败：${error.message || "未知错误"}`, "err", 5200);
   } finally {
     ENCYCLOPEDIA_STATE.savingImage = false;
-    if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.activeId) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
     updateEncyclopediaSaveButton();
   }
 }
@@ -8044,7 +9331,7 @@ function bindCharacterStatusFilter() {
   const modal = $("encyclopediaStatusModal");
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
-  $("encyclopediaStatusModal")?.addEventListener("click", (event) => {
+  $("encyclopediaStatusModal")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     if (event.target.closest("[data-encyclopedia-status-apply]")) applyEncyclopediaStatusFilter();
     else if (event.target.closest("[data-encyclopedia-status-close]")) closeEncyclopediaStatusFilter();
     else {
@@ -8059,16 +9346,16 @@ function bindCharacterStatusFilter() {
       button.setAttribute("aria-pressed", String(selected));
       updateEncyclopediaStatusSelection();
     }
-  });
-  $("encyclopediaStatusClear")?.addEventListener("click", () => {
+  }));
+  $("encyclopediaStatusClear")?.addEventListener("click", LucimaActionWait.wrap(() => {
     ENCYCLOPEDIA_STATE.statusDraft?.clear();
     $("encyclopediaStatusModal")?.querySelectorAll("[data-encyclopedia-status]").forEach((button) => {
       button.setAttribute("aria-pressed", "false");
       button.classList.remove("selected");
     });
     updateEncyclopediaStatusSelection();
-  });
-  $("encyclopediaStatusApply")?.addEventListener("click", applyEncyclopediaStatusFilter);
+  }));
+  $("encyclopediaStatusApply")?.addEventListener("click", LucimaActionWait.wrap(applyEncyclopediaStatusFilter));
   document.addEventListener("keydown", (event) => {
     const modal = $("encyclopediaStatusModal");
     if (modal && !modal.classList.contains("hidden")) {
@@ -8092,51 +9379,48 @@ function bindCharacterStatusFilter() {
 }
 
 async function initEncyclopedia() {
-  if (ENCYCLOPEDIA_STATE.initialized) {
-    if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.activeId) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
-    void loadEncyclopediaIndex().then(renderEncyclopediaGrid).catch(() => {});
-    return;
-  }
+  if (ENCYCLOPEDIA_STATE.initialized) return;
   ENCYCLOPEDIA_STATE.initialized = true;
   ENCYCLOPEDIA_STATE.mode = frontendStorageGet("encyclopedia_portrait_mode") === "dynamic" ? "dynamic" : "static";
   renderEncyclopediaFilters();
   setEncyclopediaMode(ENCYCLOPEDIA_STATE.mode, false);
-  for (const [type, id] of [["element", "encyclopediaElementFilters"], ["job", "encyclopediaJobFilters"], ["star", "encyclopediaStarFilters"]]) {
-    $(id)?.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-encyclopedia-filter]");
-      if (!button) return;
-      const value = button.dataset.value || "ALL";
-      const selected = ENCYCLOPEDIA_STATE.filters[type];
-      ENCYCLOPEDIA_STATE.filters[type] = value === "ALL" ? []
-        : selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value];
-      renderEncyclopediaFilters();
-      renderEncyclopediaGrid();
-      $(id)?.querySelector(`[data-value="${value}"]`)?.focus({ preventScroll: true });
-    });
-  }
-  $("encyclopediaStatusFilterButton")?.addEventListener("click", openEncyclopediaStatusFilter);
+  $("encyclopediaElementFilters")?.addEventListener("click", LucimaActionWait.wrap((event) => {
+    const button = event.target.closest("[data-encyclopedia-filter]");
+    if (!button) return;
+    ENCYCLOPEDIA_STATE.filters.element = button.dataset.value || "ALL";
+    renderEncyclopediaFilters();
+    renderEncyclopediaGrid();
+  }));
+  $("encyclopediaJobFilters")?.addEventListener("click", LucimaActionWait.wrap((event) => {
+    const button = event.target.closest("[data-encyclopedia-filter]");
+    if (!button) return;
+    ENCYCLOPEDIA_STATE.filters.job = button.dataset.value || "ALL";
+    renderEncyclopediaFilters();
+    renderEncyclopediaGrid();
+  }));
+  $("encyclopediaStarFilters")?.addEventListener("click", LucimaActionWait.wrap((event) => {
+    const button = event.target.closest("[data-encyclopedia-filter]");
+    if (!button) return;
+    ENCYCLOPEDIA_STATE.filters.star = button.dataset.value || "ALL";
+    renderEncyclopediaFilters();
+    renderEncyclopediaGrid();
+  }));
+  $("encyclopediaStatusFilterButton")?.addEventListener("click", LucimaActionWait.wrap(openEncyclopediaStatusFilter));
   bindCharacterStatusFilter();
-  $("encyclopediaGrid")?.addEventListener("click", (event) => {
+  $("encyclopediaGrid")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     const button = event.target.closest("[data-encyclopedia-character]");
-    if (button) openEncyclopediaCard(button.dataset.encyclopediaCharacter);
-  });
-  document.querySelectorAll("[data-encyclopedia-zoom]").forEach((button) => button.addEventListener("click", () => setEncyclopediaZoom(button.dataset.encyclopediaZoom)));
-  document.querySelectorAll("[data-encyclopedia-mode]").forEach((button) => button.addEventListener("click", () => setEncyclopediaMode(button.dataset.encyclopediaMode)));
-  $("encyclopediaSync")?.addEventListener("click", () => void checkEncyclopediaUpdate(true).catch(() => {}));
-  const checkVisible = () => {
-    if (!document.hidden && (!$("encyclopediaPage")?.classList.contains("hidden") || !$("encyclopediaDetailPage")?.classList.contains("hidden"))
-        && $("section-toolbox")?.classList.contains("active")) void checkEncyclopediaUpdate().catch(() => {});
-  };
-  document.addEventListener("visibilitychange", checkVisible);
-  window.addEventListener("focus", checkVisible);
-  $("encyclopediaBack")?.addEventListener("click", showToolboxHome);
-  $("encyclopediaDetailBack")?.addEventListener("click", closeEncyclopediaCard);
-  $("encyclopediaCardClose")?.addEventListener("click", closeEncyclopediaCard);
-  $("encyclopediaSaveImage")?.addEventListener("click", saveEncyclopediaImage);
+    if (button) return openEncyclopediaCard(button.dataset.encyclopediaCharacter);
+  }));
+  document.querySelectorAll("[data-encyclopedia-zoom]").forEach((button) => button.addEventListener("click", LucimaActionWait.wrap(() => setEncyclopediaZoom(button.dataset.encyclopediaZoom))));
+  document.querySelectorAll("[data-encyclopedia-mode]").forEach((button) => button.addEventListener("click", LucimaActionWait.wrap(() => setEncyclopediaMode(button.dataset.encyclopediaMode))));
+  $("encyclopediaBack")?.addEventListener("click", LucimaActionWait.wrap(showToolboxHome));
+  $("encyclopediaDetailBack")?.addEventListener("click", LucimaActionWait.wrap(closeEncyclopediaCard));
+  $("encyclopediaCardClose")?.addEventListener("click", LucimaActionWait.wrap(closeEncyclopediaCard));
+  $("encyclopediaSaveImage")?.addEventListener("click", LucimaActionWait.wrap(saveEncyclopediaImage));
   document.addEventListener("keydown", (event) => {
     if (event.defaultPrevented || !$("encyclopediaStatusModal")?.classList.contains("hidden")) return;
     if (event.key === "Escape" && !$("encyclopediaDetailPage")?.classList.contains("hidden")) closeEncyclopediaCard();
-  });
+  }, {signal:sectionControllers.get('toolbox')?.signal});
   try {
     await loadEncyclopediaIndex();
     updateEncyclopediaStatusFilterButton();
@@ -8145,7 +9429,7 @@ async function initEncyclopedia() {
     console.error("图鉴索引加载失败：", error);
     const empty = $("encyclopediaEmpty");
     if (empty) {
-      empty.textContent = error.message || "暂时无法获取图鉴资料，请联网后重试";
+      empty.textContent = "本地图鉴资料加载失败";
       empty.classList.remove("hidden");
     }
   }
@@ -8165,7 +9449,7 @@ function showToolboxPage(tool) {
   page.classList.remove("hidden");
   if (tool === "equipment-filter") renderEquipmentFilterWorkspace();
   if (tool === "background-limit-test") enterBackgroundLimitTestPage();
-  if (tool === "encyclopedia") initEncyclopedia();
+  if (tool === "encyclopedia") return initEncyclopedia();
 }
 
 const BACKGROUND_TEST_POLL_MS = 1000;
@@ -8364,6 +9648,8 @@ function enterBackgroundLimitTestPage() {
 }
 
 const EQUIP_FILTER_LS = "ark_equipment_filter_schemes_v2";
+const EQUIP_FILTER_PRESET_LS = "ark_equipment_filter_preset_revision";
+const EQUIP_FILTER_PRESET_REVISION = "equipment-doc-1027-48980cdb57ce27d1";
 const EQUIP_FILTER_EXPORT_FORMAT = "ark-equipment-filter-scheme";
 const EQUIP_FILTER_EXPORT_VERSION = 2;
 const EQUIP_FILTER_SLOTS = Object.freeze([
@@ -8496,761 +9782,1262 @@ const emptyEquipmentDetailRule = (slot, color = 0) => ({
   sets: [],
 });
 
-function defaultEquipmentFilterRule(
-  id,
-  color,
-  main,
-  subs,
-  sets,
-  { mixRequired = 0, minScore = 35, forceScore = 47, forceScoreEnabled = true } = {},
-) {
-  return {
-    id: `example-${id}`,
-    color,
-    main,
-    subs: subs.map(([stat, value, mode = "fixed"]) => ({ stat, value: String(value), mode })),
-    mixRequired,
-    minScore,
-    scoreEnabled: true,
-    forceScore,
-    forceScoreEnabled,
-    sets,
-  };
-}
-
-// 首次使用时自带秘密商店与星源商店的装备筛选方案。
+// 默认规则来自 frontend/presets/equipment.json，保留导入配置中的全部数值和规则。
 const defaultEquipmentFilterSchemes = () => ([
   {
-    id: "plan-secret-shop",
-    name: "秘密商店",
-    slots: {
-      weapon: [
-        defaultEquipmentFilterRule(
-          "secret-shop-weapon-1",
-          0,
-          "AttackValue",
-          [
-            ["AttackRate", 4, "mixed"],
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
+    "id": "plan-equipment-20261027",
+    "name": "装备1027",
+    "slots": {
+      "weapon": [
+        {
+          "id": "example-weapon-output",
+          "color": 0,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Destruction", "Penetration", "Torrent", "Immunity", "Critical", "Rage", "Lifesteal", "Attack"],
-          { mixRequired: 3, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-weapon-2",
-          1,
-          "AttackValue",
-          [
-            ["SpeedValue", 2],
-            ["HPRate", 4],
-            ["ResistanceRate", 4, "mixed"],
-            ["HPValue", 157, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Torrent",
+            "Penetration",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Critical",
+            "Immunity",
+            "Rage",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "detail-1790200915715-6ng5k",
+          "color": 1,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Injury", "Immunity"],
-          { mixRequired: 1, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-weapon-3",
-          2,
-          "AttackValue",
-          [
-            ["ResistanceRate", 6],
-            ["HPRate", 4, "mixed"],
-            ["HPValue", 157, "mixed"],
-            ["SpeedValue", 2, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Health",
+            "Defense",
+            "Immunity",
+            "Counter",
+            "Injury",
+            "Resist"
+          ]
+        },
+        {
+          "id": "detail-1790244339354-o1jgv",
+          "color": 2,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "5",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            }
           ],
-          ["Resist"],
-          { mixRequired: 2, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-weapon-4",
-          3,
-          "AttackValue",
-          [
-            ["SpeedValue", 4],
+          "mixRequired": 0,
+          "minScore": 37,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1790359853948-ctahw",
+          "color": 3,
+          "main": "AttackValue",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Speed", "Hit", "Revenge"],
-          { minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-weapon-5",
-          4,
-          "AttackValue",
-          [
-            ["AttackRate", 4, "mixed"],
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["HPRate", 4, "mixed"],
-          ],
-          ["Counter", "Pinch", "Lifesteal"],
-          { mixRequired: 3, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-weapon-6",
-          5,
-          "AttackValue",
-          [
-            ["HPRate", 4],
-            ["HPValue", 157, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
-            ["EffectHitRate", 4, "mixed"],
-          ],
-          ["Counter"],
-          { mixRequired: 2, minScore: 40 },
-        ),
+          "mixRequired": 0,
+          "minScore": 40,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        }
       ],
-      helmet: [
-        defaultEquipmentFilterRule(
-          "secret-shop-helmet-1",
-          0,
-          "HPValue",
-          [
-            ["AttackRate", 4, "mixed"],
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
+      "helmet": [
+        {
+          "id": "example-helmet-output",
+          "color": 0,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Destruction", "Critical", "Penetration", "Lifesteal", "Rage", "Torrent", "Immunity", "Attack"],
-          { mixRequired: 3, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-helmet-2",
-          1,
-          "HPValue",
-          [
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Torrent",
+            "Penetration",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Lifesteal",
+            "Rage",
+            "Immunity",
+            "Critical"
+          ]
+        },
+        {
+          "id": "example-helmet-survival",
+          "color": 1,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Immunity", "Injury"],
-          { mixRequired: 3, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-helmet-3",
-          2,
-          "HPValue",
-          [
-            ["ResistanceRate", 6],
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Immunity",
+            "Resist",
+            "Counter",
+            "Injury",
+            "Rage"
+          ]
+        },
+        {
+          "id": "detail-1790359890632-rpqwm",
+          "color": 2,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "7",
+              "mode": "fixed"
+            }
           ],
-          ["Resist"],
-          { mixRequired: 2, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-helmet-4",
-          3,
-          "HPValue",
-          [
-            ["SpeedValue", 4],
+          "mixRequired": 0,
+          "minScore": 40,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1792001345529-lyjwx",
+          "color": 3,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Speed", "Hit", "Revenge"],
-          { minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-helmet-5",
-          4,
-          "HPValue",
-          [
-            ["AttackRate", 4, "mixed"],
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["HPRate", 4, "mixed"],
-          ],
-          ["Counter", "Pinch", "Lifesteal"],
-          { mixRequired: 3, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-helmet-6",
-          5,
-          "HPValue",
-          [
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-          ],
-          ["Counter"],
-          { mixRequired: 3, minScore: 40 },
-        ),
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter"
+          ]
+        }
       ],
-      armor: [
-        defaultEquipmentFilterRule(
-          "secret-shop-armor-1",
-          0,
-          "DefenceValue",
-          [
-            ["SpeedValue", 2],
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
+      "armor": [
+        {
+          "id": "example-armor-output",
+          "color": 0,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Attack", "Critical", "Lifesteal", "Destruction", "Immunity", "Penetration", "Rage", "Torrent"],
-          { minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-armor-2",
-          1,
-          "DefenceValue",
-          [
-            ["SpeedValue", 2, "mixed"],
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Critical",
+            "Immunity",
+            "Rage",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "detail-1790201567747-7bn5c",
+          "color": 1,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Immunity", "Injury"],
-          { mixRequired: 3, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-armor-3",
-          2,
-          "DefenceValue",
-          [
-            ["ResistanceRate", 6],
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Counter",
+            "Injury",
+            "Revenge",
+            "Rage"
+          ]
+        },
+        {
+          "id": "detail-1790359963334-v29dg",
+          "color": 2,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "6",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Resist"],
-          { mixRequired: 2, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-armor-4",
-          3,
-          "DefenceValue",
-          [
-            ["SpeedValue", 4],
+          "mixRequired": 0,
+          "minScore": 40,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Speed",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1792001492258-kkzaz",
+          "color": 3,
+          "main": "DefenceValue",
+          "subs": [
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
           ],
-          ["Speed", "Hit", "Revenge"],
-          { minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-armor-5",
-          4,
-          "DefenceValue",
-          [
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-          ],
-          ["Counter", "Pinch", "Lifesteal"],
-          { mixRequired: 3, minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-armor-6",
-          5,
-          "DefenceValue",
-          [
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
-            ["HPValue", 157, "mixed"],
-          ],
-          ["Counter"],
-          { mixRequired: 3, minScore: 40 },
-        ),
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Health",
+            "Injury",
+            "Immunity"
+          ]
+        }
       ],
-      necklace: [
-        defaultEquipmentFilterRule(
-          "secret-shop-necklace-1",
-          0,
-          "CriticalDamageRate",
-          [
-            ["SpeedValue", 2, "mixed"],
-            ["AttackRate", 4, "mixed"],
-            ["CriticalRate", 3, "mixed"],
-            ["AttackValue", 33, "mixed"],
+      "necklace": [
+        {
+          "id": "example-necklace-output",
+          "color": 0,
+          "main": "CriticalDamageRate",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            }
           ],
-          ["Destruction", "Critical", "Penetration", "Torrent", "Rage", "Attack", "Lifesteal"],
-          { mixRequired: 3 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-necklace-2",
-          1,
-          "CriticalDamageRate",
-          [
-            ["AttackRate", 4, "mixed"],
-            ["CriticalRate", 3, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["HPRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Critical",
+            "Rage",
+            "Immunity",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "example-necklace-hp",
+          "color": 1,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Counter", "Lifesteal", "Destruction", "Pinch", "Immunity"],
-          { mixRequired: 3 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-necklace-3",
-          2,
-          "HPRate",
-          [
-            ["DefenceRate", 4],
-            ["SpeedValue", 2, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["HPValue", 157, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Injury",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-necklace-defense",
+          "color": 2,
+          "main": "DefenceRate",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Immunity", "Injury", "Counter"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-necklace-4",
-          3,
-          "DefenceRate",
-          [
-            ["HPRate", 4],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["SpeedValue", 2, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Injury",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-necklace-counter",
+          "color": 3,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "mixed"
+            },
+            {
+              "stat": "DefenceValue",
+              "value": "28",
+              "mode": "mixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "mixed"
+            }
           ],
-          ["Defense", "Health", "Immunity", "Injury", "Counter"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-necklace-5",
-          4,
-          "",
-          [
-            ["SpeedValue", 4],
+          "mixRequired": 2,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Pinch",
+            "Immunity",
+            "Health",
+            "Defense",
+            "Resist"
+          ]
+        },
+        {
+          "id": "example-necklace-bruiser",
+          "color": 4,
+          "main": "CriticalDamageRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Speed", "Hit", "Revenge"],
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-necklace-6",
-          5,
-          "HPRate",
-          [
-            ["ResistanceRate", 6],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["SpeedValue", 2, "mixed"],
-            ["DefenceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Lifesteal",
+            "Defense"
+          ]
+        },
+        {
+          "id": "example-necklace-speed",
+          "color": 5,
+          "main": "",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Resist"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-necklace-7",
-          6,
-          "DefenceRate",
-          [
-            ["ResistanceRate", 6],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["SpeedValue", 2, "mixed"],
-            ["HPRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 45,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1790360020320-ecgcm",
+          "color": 6,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "AttackValue",
+              "value": "33",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "7",
+              "mode": "fixed"
+            }
           ],
-          ["Resist"],
-          { mixRequired: 2 },
-        ),
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1793084879926-cl70k",
+          "color": 7,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "minScore": 38,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Defense",
+            "Health",
+            "Lifesteal",
+            "Immunity",
+            "Counter",
+            "Injury",
+            "Revenge",
+            "Resist"
+          ],
+          "mixRequired": 0
+        }
       ],
-      ring: [
-        defaultEquipmentFilterRule(
-          "secret-shop-ring-1",
-          0,
-          "AttackRate",
-          [
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
-            ["AttackValue", 33, "mixed"],
+      "ring": [
+        {
+          "id": "example-ring-output",
+          "color": 0,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
           ],
-          ["Attack", "Critical", "Lifesteal", "Destruction", "Penetration", "Rage", "Torrent"],
-          { mixRequired: 3 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-ring-2",
-          1,
-          "AttackRate",
-          [
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Critical",
+            "Rage",
+            "Immunity",
+            "Attack",
+            "Speed",
+            "Counter",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "example-ring-bruiser",
+          "color": 1,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "mixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "mixed"
+            }
           ],
-          ["Critical", "Destruction", "Counter", "Pinch", "Immunity"],
-          { mixRequired: 3 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-ring-3",
-          2,
-          "HPRate",
-          [
-            ["DefenceRate", 4],
-            ["SpeedValue", 2, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["HPValue", 157, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
+          "mixRequired": 1,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Pinch",
+            "Lifesteal",
+            "Immunity",
+            "Penetration"
+          ]
+        },
+        {
+          "id": "example-ring-hp",
+          "color": 2,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Counter", "Immunity", "Injury"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-ring-4",
-          3,
-          "DefenceRate",
-          [
-            ["HPRate", 4],
-            ["DefenceValue", 28, "mixed"],
-            ["HPValue", 157, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Immunity",
+            "Injury",
+            "Resist",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-ring-resist",
+          "color": 3,
+          "main": "ResistanceRate",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Counter", "Immunity", "Injury"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-ring-5",
-          4,
-          "",
-          [
-            ["SpeedValue", 4],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Resist",
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "example-ring-speed",
+          "color": 4,
+          "main": "",
+          "subs": [
+            {
+              "stat": "SpeedValue",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Speed", "Hit", "Revenge"],
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-ring-6",
-          5,
-          "ResistanceRate",
-          [
-            ["DefenceRate", 4, "mixed"],
-            ["HPRate", 4, "mixed"],
-            ["SpeedValue", 2, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["HPValue", 157, "mixed"],
+          "mixRequired": 0,
+          "minScore": 45,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1790360091108-xmru3",
+          "color": 5,
+          "main": "ResistanceRate",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            }
           ],
-          ["Resist"],
-          { mixRequired: 3 },
-        ),
+          "mixRequired": 0,
+          "minScore": 37,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1792001617927-vtvaq",
+          "color": 6,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "HPValue",
+              "value": "157",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Health",
+            "Immunity"
+          ]
+        },
+        {
+          "id": "detail-1792001677063-m8hrw",
+          "color": 7,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Immunity",
+            "Health",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1792458520772-adw85",
+          "color": 0,
+          "main": "ResistanceRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "5",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceValue",
+              "value": "28",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "3",
+              "mode": "fixed"
+            }
+          ],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Lifesteal"
+          ]
+        },
+        {
+          "id": "detail-1793085131887-j8b9l",
+          "color": 1,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
+          ],
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": false,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Lifesteal",
+            "Injury",
+            "Revenge",
+            "Counter"
+          ],
+          "mixRequired": 0
+        }
       ],
-      boots: [
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-1",
-          0,
-          "SpeedValue",
-          [
-            ["AttackRate", 4, "mixed"],
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["AttackValue", 33, "mixed"],
+      "boots": [
+        {
+          "id": "example-boots-speed-output",
+          "color": 0,
+          "main": "SpeedValue",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Attack", "Critical", "Lifesteal", "Destruction", "Penetration", "Rage", "Torrent", "Speed", "Revenge"],
-          { mixRequired: 3 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-2",
-          1,
-          "AttackRate",
-          [
-            ["CriticalRate", 3, "mixed"],
-            ["CriticalDamageRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-            ["HPRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Penetration",
+            "Torrent",
+            "Lifesteal",
+            "Rage",
+            "Critical",
+            "Immunity",
+            "Speed",
+            "Attack",
+            "Counter"
+          ]
+        },
+        {
+          "id": "example-boots-attack-output",
+          "color": 1,
+          "main": "AttackRate",
+          "subs": [
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalDamageRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Critical", "Destruction", "Counter", "Pinch"],
-          { mixRequired: 3 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-3",
-          2,
-          "HPRate",
-          [
-            ["DefenceRate", 4],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Destruction",
+            "Critical",
+            "Lifesteal",
+            "Counter",
+            "Rage",
+            "Pinch",
+            "Attack",
+            "Speed",
+            "Immunity",
+            "Penetration",
+            "Torrent"
+          ]
+        },
+        {
+          "id": "example-boots-survival",
+          "color": 2,
+          "main": "SpeedValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Immunity", "Injury"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-4",
-          3,
-          "DefenceRate",
-          [
-            ["HPRate", 4],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 47,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1790201123251-yid2w",
+          "color": 3,
+          "main": "HPRate",
+          "subs": [
+            {
+              "stat": "DefenceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Immunity"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-5",
-          4,
-          "SpeedValue",
-          [
-            ["HPRate", 4],
-            ["DefenceRate", 4],
-            ["ResistanceRate", 4, "mixed"],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Defense",
+            "Health",
+            "Resist",
+            "Immunity",
+            "Counter"
+          ]
+        },
+        {
+          "id": "detail-1790360142399-b5t3w",
+          "color": 4,
+          "main": "SpeedValue",
+          "subs": [
+            {
+              "stat": "AttackRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "7",
+              "mode": "fixed"
+            },
+            {
+              "stat": "CriticalRate",
+              "value": "3",
+              "mode": "fixed"
+            }
           ],
-          ["Defense", "Health", "Immunity", "Injury", "Speed", "Revenge"],
-          { mixRequired: 1 },
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-6",
-          5,
-          "SpeedValue",
-          [
-            ["EffectHitRate", 6],
+          "mixRequired": 0,
+          "minScore": 37,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Counter",
+            "Speed"
+          ]
+        },
+        {
+          "id": "detail-1792001730259-a21d8",
+          "color": 5,
+          "main": "HPValue",
+          "subs": [
+            {
+              "stat": "HPRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "ResistanceRate",
+              "value": "4",
+              "mode": "fixed"
+            },
+            {
+              "stat": "SpeedValue",
+              "value": "2",
+              "mode": "fixed"
+            }
           ],
-          ["Hit"],
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-7",
-          6,
-          "SpeedValue",
-          [
-            ["ResistanceRate", 6],
-            ["HPRate", 4],
-            ["DefenceRate", 4],
-            ["HPValue", 157],
-            ["DefenceValue", 28],
-          ],
-          ["Resist"],
-        ),
-        defaultEquipmentFilterRule(
-          "secret-shop-boots-8",
-          7,
-          "HPRate",
-          [
-            ["ResistanceRate", 6],
-            ["DefenceRate", 4, "mixed"],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-          ],
-          ["Resist"],
-          { mixRequired: 2 },
-        ),
-      ],
-    },
-  },
-  {
-    id: "plan-star-source-shop",
-    name: "星源商店",
-    slots: {
-      weapon: [
-        defaultEquipmentFilterRule(
-          "weapon-output",
-          0,
-          "AttackValue",
-          [
-            ["SpeedValue", 2],
-            ["AttackRate", 4],
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
-          ],
-          ["Destruction", "Torrent", "Penetration"],
-          { minScore: 40 },
-        ),
-      ],
-      helmet: [
-        defaultEquipmentFilterRule(
-          "helmet-output",
-          0,
-          "HPValue",
-          [
-            ["SpeedValue", 2],
-            ["AttackRate", 4],
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
-          ],
-          ["Destruction", "Torrent", "Penetration"],
-          { minScore: 40 },
-        ),
-        defaultEquipmentFilterRule(
-          "helmet-survival",
-          1,
-          "HPValue",
-          [
-            ["SpeedValue", 2],
-            ["HPRate", 4],
-            ["DefenceRate", 4],
-            ["ResistanceRate", 4],
-          ],
-          ["Defense", "Health", "Immunity", "Resist"],
-          { minScore: 40 },
-        ),
-      ],
-      armor: [
-        defaultEquipmentFilterRule(
-          "armor-output",
-          0,
-          "DefenceValue",
-          [
-            ["SpeedValue", 2],
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
-          ],
-          ["Destruction", "Penetration", "Torrent"],
-          { minScore: 40 },
-        ),
-      ],
-      necklace: [
-        defaultEquipmentFilterRule(
-          "necklace-output",
-          0,
-          "CriticalDamageRate",
-          [
-            ["SpeedValue", 2],
-            ["AttackRate", 4],
-            ["CriticalRate", 3],
-          ],
-          ["Destruction", "Penetration", "Torrent", "Critical", "Rage", "Immunity"],
-        ),
-        defaultEquipmentFilterRule(
-          "necklace-hp",
-          1,
-          "HPRate",
-          [
-            ["DefenceRate", 4],
-            ["SpeedValue", 2],
-            ["ResistanceRate", 4],
-          ],
-          ["Defense", "Health", "Resist", "Injury", "Immunity"],
-        ),
-        defaultEquipmentFilterRule(
-          "necklace-defense",
-          2,
-          "DefenceRate",
-          [
-            ["HPRate", 4],
-            ["SpeedValue", 2],
-            ["ResistanceRate", 4],
-          ],
-          ["Defense", "Health", "Resist", "Injury", "Immunity"],
-        ),
-        defaultEquipmentFilterRule(
-          "necklace-counter",
-          3,
-          "HPRate",
-          [
-            ["DefenceRate", 4],
-            ["HPValue", 157, "mixed"],
-            ["DefenceValue", 28, "mixed"],
-            ["ResistanceRate", 4, "mixed"],
-          ],
-          ["Counter", "Pinch"],
-          { mixRequired: 2 },
-        ),
-        defaultEquipmentFilterRule(
-          "necklace-bruiser",
-          4,
-          "CriticalDamageRate",
-          [
-            ["CriticalRate", 3],
-            ["HPRate", 4],
-            ["DefenceRate", 4],
-          ],
-          ["Counter", "Lifesteal"],
-        ),
-        defaultEquipmentFilterRule(
-          "necklace-speed",
-          5,
-          "",
-          [["SpeedValue", 4]],
-          ["Speed"],
-          { minScore: 45, forceScore: 45, forceScoreEnabled: false },
-        ),
-      ],
-      ring: [
-        defaultEquipmentFilterRule(
-          "ring-output",
-          0,
-          "AttackRate",
-          [
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
-            ["SpeedValue", 2],
-          ],
-          ["Destruction", "Penetration", "Torrent", "Critical", "Rage", "Immunity"],
-        ),
-        defaultEquipmentFilterRule(
-          "ring-bruiser",
-          1,
-          "AttackRate",
-          [
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
-            ["HPRate", 4, "mixed"],
-            ["DefenceRate", 4, "mixed"],
-          ],
-          ["Counter", "Pinch", "Lifesteal"],
-          { mixRequired: 1 },
-        ),
-        defaultEquipmentFilterRule(
-          "ring-hp",
-          2,
-          "HPRate",
-          [
-            ["SpeedValue", 2],
-            ["DefenceRate", 4],
-            ["ResistanceRate", 4],
-          ],
-          ["Defense", "Health", "Immunity", "Injury"],
-        ),
-        defaultEquipmentFilterRule(
-          "ring-resist",
-          3,
-          "ResistanceRate",
-          [
-            ["HPRate", 4],
-            ["DefenceRate", 4],
-            ["SpeedValue", 2],
-          ],
-          ["Resist"],
-        ),
-        defaultEquipmentFilterRule(
-          "ring-speed",
-          4,
-          "",
-          [["SpeedValue", 4]],
-          ["Speed"],
-          { minScore: 45, forceScoreEnabled: false },
-        ),
-      ],
-      boots: [
-        defaultEquipmentFilterRule(
-          "boots-speed-output",
-          0,
-          "SpeedValue",
-          [
-            ["AttackRate", 4],
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
-          ],
-          ["Destruction", "Penetration", "Torrent", "Lifesteal", "Rage", "Critical", "Immunity", "Speed"],
-        ),
-        defaultEquipmentFilterRule(
-          "boots-attack-output",
-          1,
-          "AttackRate",
-          [
-            ["CriticalRate", 3],
-            ["CriticalDamageRate", 4],
-          ],
-          ["Destruction", "Critical", "Lifesteal", "Counter", "Rage", "Pinch"],
-        ),
-        defaultEquipmentFilterRule(
-          "boots-survival",
-          2,
-          "SpeedValue",
-          [
-            ["HPRate", 4],
-            ["DefenceRate", 4],
-            ["ResistanceRate", 4],
-          ],
-          ["Defense", "Health", "Resist", "Immunity"],
-        ),
-      ],
-    },
-  },
+          "mixRequired": 0,
+          "minScore": 35,
+          "scoreEnabled": true,
+          "forceScore": 45,
+          "forceScoreEnabled": true,
+          "sets": [
+            "Immunity",
+            "Health",
+            "Counter",
+            "Resist",
+            "Injury",
+            "Revenge",
+            "Lifesteal",
+            "Defense"
+          ]
+        }
+      ]
+    }
+  }
 ]);
 
 function normalizeEquipmentDetailRule(rule, slot, index) {
@@ -9306,7 +11093,17 @@ function normalizeEquipmentFilterScheme(scheme, schemeIndex = 0, preservedId = "
   };
 }
 
+function migrateEquipmentFilterPreset() {
+  if (frontendStorageGet(EQUIP_FILTER_PRESET_LS) === EQUIP_FILTER_PRESET_REVISION) return false;
+  // 用户指定以“装备1027”方案替换旧列表，只在本次预设更新时迁移一次。
+  // 等账号设置读取完再保存，避免启动时用空设置覆盖其他偏好。
+  FRONTEND_SETTINGS[EQUIP_FILTER_LS] = JSON.stringify(defaultEquipmentFilterSchemes());
+  FRONTEND_SETTINGS[EQUIP_FILTER_PRESET_LS] = EQUIP_FILTER_PRESET_REVISION;
+  return true;
+}
+
 function loadEquipmentFilterSchemes() {
+  if (frontendStorageGet(EQUIP_FILTER_PRESET_LS) !== EQUIP_FILTER_PRESET_REVISION) return defaultEquipmentFilterSchemes();
   try {
     const saved = JSON.parse(frontendStorageGet(EQUIP_FILTER_LS));
     if (Array.isArray(saved) && saved.length) {
@@ -9348,6 +11145,7 @@ function reloadEquipmentFilterSchemesFromSettings() {
 }
 
 function saveEquipmentFilterSchemes() {
+  frontendStorageSet(EQUIP_FILTER_PRESET_LS, EQUIP_FILTER_PRESET_REVISION);
   frontendStorageSet(EQUIP_FILTER_LS, JSON.stringify(EQUIP_FILTER_SCHEMES_DATA));
   syncShopFreeSchemeSnapshot();
   const optionSignature = JSON.stringify(EQUIP_FILTER_SCHEMES_DATA.map((scheme) => [scheme.id, scheme.name]));
@@ -9381,7 +11179,7 @@ function filterEscape(value) {
 
 function filterRuleColorStyle(rule) {
   const color = EQUIP_FILTER_RULE_COLORS[rule?.color % EQUIP_FILTER_RULE_COLORS.length] || EQUIP_FILTER_RULE_COLORS[0];
-  return `--rule-color:${color.hex};--rule-rgb:${color.rgb}`;
+  return `--rule-color:${color.hex};--rule-rgb:${color.rgb};${LucimaSurfaceColors.rule(color.rgb)}`;
 }
 
 function activeFilterScheme() {
@@ -9587,7 +11385,6 @@ function filterStatDropdownHTML(cls, selected, placeholder, extraAttrs = "", ava
 }
 
 function renderFilterSchemeList() {
-  closeSchemeTransferMenu();
   const list = $("schemeList");
   if (!list) return;
   list.innerHTML = EQUIP_FILTER_SCHEMES_DATA.map((scheme) => {
@@ -9600,8 +11397,8 @@ function renderFilterSchemeList() {
       </button>
       <div class="scheme-actions">
         <button type="button" data-scheme-action="rename" title="重命名" aria-label="重命名"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-square-pen"></use></svg></button>
-        <button type="button" data-scheme-action="import" title="导入方案" aria-label="导入方案" aria-haspopup="menu" aria-controls="schemeTransferMenu" aria-expanded="false"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-upload"></use></svg></button>
-        <button type="button" data-scheme-action="export" title="导出方案" aria-label="导出方案" aria-haspopup="menu" aria-controls="schemeTransferMenu" aria-expanded="false"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-download"></use></svg></button>
+        <button type="button" data-scheme-action="import" title="导入方案" aria-label="导入方案"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-upload"></use></svg></button>
+        <button type="button" data-scheme-action="export" title="导出方案文件" aria-label="导出方案文件"><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-download"></use></svg></button>
         <button type="button" data-scheme-action="delete" title="删除" aria-label="删除"${EQUIP_FILTER_SCHEMES_DATA.length === 1 ? " disabled" : ""}><svg class="scheme-action-icon" aria-hidden="true"><use href="#ui-trash-2"></use></svg></button>
       </div>
     </div>`;
@@ -9744,6 +11541,7 @@ function renderFilterCoverage() {
 }
 
 function renderEquipmentFilterWorkspace() {
+  if (!$('schemeList')) return;
   syncActiveDetailRule();
   renderFilterSchemeList();
   renderFilterSlots();
@@ -9847,171 +11645,12 @@ function showSchemeActionFeedback(button, ok, label) {
   }, 1300);
 }
 
-let schemeTransferMenuState = null;
-let schemeClipboardImportSession = null;
-
-function closeSchemeTransferMenu(restoreFocus = false) {
-  const previous = schemeTransferMenuState;
-  schemeTransferMenuState = null;
-  $("schemeTransferMenu")?.classList.add("hidden");
-  previous?.anchor.setAttribute("aria-expanded", "false");
-  previous?.anchor.closest(".scheme-item")?.classList.remove("scheme-menu-open");
-  if (restoreFocus && previous?.anchor.isConnected) previous.anchor.focus();
-}
-
-function closeSchemeTransferMenuIfMoved() {
-  const state = schemeTransferMenuState;
-  if (!state) return;
-  const rect = state.anchor.getBoundingClientRect();
-  if (window.innerWidth !== state.viewportWidth || window.innerHeight !== state.viewportHeight
-      || ["left", "top", "right", "bottom"].some((key) => Math.abs(rect[key] - state.anchorRect[key]) > .5)) {
-    closeSchemeTransferMenu();
-  }
-}
-
-function openSchemeTransferMenu(schemeId, action, anchor) {
-  if (schemeTransferMenuState?.anchor === anchor) { closeSchemeTransferMenu(true); return; }
-  closeSchemeTransferMenu();
-  const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
-  const menu = $("schemeTransferMenu");
-  if (!scheme || !menu || !anchor) return;
-  const rect = anchor.getBoundingClientRect();
-  schemeTransferMenuState = { schemeId, action, anchor, anchorRect: rect,
-    viewportWidth: window.innerWidth, viewportHeight: window.innerHeight };
-  const importing = action === "import";
-  $("schemeTransferContext").textContent = `${importing ? "导入" : "导出"} · ${scheme.name}`;
-  menu.setAttribute("aria-label", importing ? "导入方式" : "导出方式");
-  const clipboard = menu.querySelector('[data-scheme-transfer="clipboard"]');
-  const file = menu.querySelector('[data-scheme-transfer="file"]');
-  clipboard.querySelector("span").textContent = importing ? "从剪贴板导入" : "复制到剪贴板";
-  clipboard.querySelector("use").setAttribute("href", importing ? "#ui-clipboard" : "#ui-copy");
-  file.querySelector("span").textContent = importing ? "从文件导入" : "导出为文件";
-  file.querySelector("use").setAttribute("href", importing ? "#ui-folder-open" : "#ui-download");
-  menu.classList.remove("hidden");
-  anchor.setAttribute("aria-expanded", "true");
-  anchor.closest(".scheme-item")?.classList.add("scheme-menu-open");
-  const gap = 8;
-  menu.style.left = `${Math.max(gap, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - gap))}px`;
-  const top = rect.bottom + 6 + menu.offsetHeight <= window.innerHeight - gap
-    ? rect.bottom + 6 : rect.top - menu.offsetHeight - 6;
-  menu.style.top = `${Math.max(gap, Math.min(top, window.innerHeight - menu.offsetHeight - gap))}px`;
-  clipboard.focus({ preventScroll: true });
-}
-
-async function writeEquipmentFilterClipboard(text) {
-  if (runtimePlatform === "android" && window.LucimaFiles?.writeClipboardText) {
-    const raw = window.LucimaFiles.writeClipboardText(text);
-    const result = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!result?.ok) throw new Error(result?.detail || "复制方案失败");
-    return;
-  }
-  try {
-    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; }
-  } catch { /* Older WebViews can still support copying the selected text. */ }
-  const previous = document.activeElement;
-  const input = document.createElement("textarea");
-  input.value = text;
-  input.readOnly = true;
-  input.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
-  document.body.append(input);
-  try {
-    input.focus({ preventScroll: true });
-    input.select();
-    input.setSelectionRange(0, input.value.length);
-    if (!document.execCommand("copy")) throw new Error("无法复制方案，请使用文件导出");
-  } finally {
-    input.remove();
-    if (previous?.isConnected) previous.focus({ preventScroll: true });
-  }
-}
-
-async function readEquipmentFilterClipboard() {
-  if (runtimePlatform === "android" && window.LucimaFiles?.readClipboardText) {
-    const raw = window.LucimaFiles.readClipboardText();
-    const result = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!result?.ok) throw new Error(result?.detail || "无法读取剪贴板");
-    return String(result.text || "");
-  }
-  if (!navigator.clipboard?.readText) throw new Error("请在输入框中手动粘贴方案内容");
-  return navigator.clipboard.readText();
-}
-
-function closeEquipmentFilterClipboardImport() {
-  const previous = schemeClipboardImportSession;
-  schemeClipboardImportSession = null;
-  $("schemeClipboardModal")?.classList.add("hidden");
-  document.body.classList.remove("scheme-clipboard-open");
-  if (previous?.returnFocus?.isConnected) previous.returnFocus.focus();
-  else if (previous) {
-    const item = [...document.querySelectorAll(".scheme-item")].find((entry) => entry.dataset.schemeId === previous.schemeId);
-    item?.querySelector('[data-scheme-action="import"]')?.focus();
-  }
-}
-
-async function pasteEquipmentFilterClipboard(quiet = false) {
-  const session = schemeClipboardImportSession;
-  const input = $("schemeClipboardInput");
-  if (!session || !input || session.reading) return;
-  const revision = session.inputRevision;
-  session.reading = true;
-  $("schemeClipboardPaste").disabled = true;
-  try {
-    let text;
-    try { text = await readEquipmentFilterClipboard(); }
-    catch { throw new Error("无法读取剪贴板，请在输入框中手动粘贴方案内容"); }
-    if (schemeClipboardImportSession !== session || session.inputRevision !== revision) return;
-    if (!text.trim()) throw new Error("剪贴板中没有方案文本");
-    if (new TextEncoder().encode(text).length > 1024 * 1024) throw new Error("方案内容超过 1 MB，无法导入");
-    input.value = text;
-    $("schemeClipboardError").textContent = "";
-  } catch (error) {
-    if (schemeClipboardImportSession === session && session.inputRevision === revision && !quiet) {
-      $("schemeClipboardError").textContent = error.message || "无法读取剪贴板，请手动粘贴方案内容";
-    }
-  } finally {
-    session.reading = false;
-    if (schemeClipboardImportSession === session) $("schemeClipboardPaste").disabled = false;
-  }
-}
-
-function openEquipmentFilterClipboardImport(schemeId, returnFocus) {
-  const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
-  if (!scheme) return;
-  schemeClipboardImportSession = { schemeId, returnFocus, reading: false, inputRevision: 0 };
-  $("schemeClipboardInput").value = "";
-  $("schemeClipboardError").textContent = "";
-  $("schemeClipboardPaste").disabled = false;
-  $("schemeClipboardHint").textContent = `导入后将替换“${scheme.name}”的名称和筛选规则。`;
-  $("schemeClipboardModal").classList.remove("hidden");
-  document.body.classList.add("scheme-clipboard-open");
-  $("schemeClipboardInput").focus();
-  void pasteEquipmentFilterClipboard(true);
-}
-
-function confirmEquipmentFilterClipboardImport() {
-  const session = schemeClipboardImportSession;
-  if (!session) return;
-  try {
-    importEquipmentFilterScheme($("schemeClipboardInput").value, "剪贴板", session.schemeId);
-    closeEquipmentFilterClipboardImport();
-  } catch (error) {
-    $("schemeClipboardError").textContent = error.message || "导入失败，请检查方案内容";
-  }
-}
-
-async function exportEquipmentFilterScheme(schemeId, button, method = "file") {
+async function exportEquipmentFilterScheme(schemeId, button) {
   const scheme = EQUIP_FILTER_SCHEMES_DATA.find((item) => item.id === schemeId);
   if (!scheme) return;
   try {
     const exportData = equipmentFilterExportPayload(scheme);
     const contents = JSON.stringify(exportData, null, 2) + "\n";
-    if (method === "clipboard") {
-      if (new TextEncoder().encode(contents).length > 1024 * 1024) throw new Error("方案内容超过 1 MB，无法复制");
-      await writeEquipmentFilterClipboard(contents);
-      showSchemeActionFeedback(button, true, "已复制");
-      showMessageToast(`方案“${scheme.name}”已复制到剪贴板`, "ok");
-      return;
-    }
     let result;
     if (runtimePlatform === "android" && window.LucimaFiles?.saveEquipmentFilterScheme) {
       const filename = `LucimaTools-equipment-filter-${scheme.name}.json`;
@@ -10202,12 +11841,13 @@ function parseEquipmentFilterImport(text) {
   return scheme;
 }
 
-function importEquipmentFilterScheme(text, filename = "方案文件", targetId = schemeImportTargetId) {
-  const index = EQUIP_FILTER_SCHEMES_DATA.findIndex((item) => item.id === targetId);
+function importEquipmentFilterScheme(text, filename = "方案文件") {
+  const index = EQUIP_FILTER_SCHEMES_DATA.findIndex((item) => item.id === schemeImportTargetId);
   if (index < 0) throw new Error("导入目标方案已失效，请重新选择导入");
-  if (!text?.trim()) throw new Error("方案内容为空");
+  if (!text?.trim()) throw new Error("方案文件为空");
   if (new TextEncoder().encode(text).length > 1024 * 1024) throw new Error("方案文件超过 1 MB，无法导入");
   const source = parseEquipmentFilterImport(text);
+  const targetId = EQUIP_FILTER_SCHEMES_DATA[index].id;
   EQUIP_FILTER_SCHEMES_DATA[index] = normalizeEquipmentFilterScheme(source, index, targetId);
   activeFilterSchemeId = targetId;
   activeDetailRuleId = null;
@@ -10310,22 +11950,23 @@ function setApplyPopoverOpen(open) {
   button.setAttribute("aria-expanded", String(open));
 }
 
+let toolboxGlobalBound = false;
 function initToolbox() {
   const home = $("toolboxHome");
   const page = $("equipmentFilterPage");
   if (!home || !page || home.dataset.bound) return;
   home.dataset.bound = "1";
-  home.addEventListener("click", (event) => {
+  home.addEventListener("click", LucimaActionWait.wrap((event) => {
     const tile = event.target.closest("[data-tool]");
-    if (tile) showToolboxPage(tile.dataset.tool);
-  });
-  $("toolboxBack")?.addEventListener("click", showToolboxHome);
-  $("backgroundTestBack")?.addEventListener("click", showToolboxHome);
-  $("backgroundTestStart")?.addEventListener("click", startBackgroundLimitTest);
-  $("backgroundTestStop")?.addEventListener("click", stopBackgroundLimitTest);
-  document.addEventListener("visibilitychange", handleBackgroundTestVisibilityChange);
-  $("schemeAdd")?.addEventListener("click", addEquipmentFilterScheme);
-  $("schemeList")?.addEventListener("click", async (event) => {
+    if (tile) return showToolboxPage(tile.dataset.tool);
+  }));
+  $("toolboxBack")?.addEventListener("click", LucimaActionWait.wrap(showToolboxHome));
+  $("backgroundTestBack")?.addEventListener("click", LucimaActionWait.wrap(showToolboxHome));
+  $("backgroundTestStart")?.addEventListener("click", LucimaActionWait.wrap(startBackgroundLimitTest));
+  $("backgroundTestStop")?.addEventListener("click", LucimaActionWait.wrap(stopBackgroundLimitTest));
+  if (!toolboxGlobalBound) document.addEventListener("visibilitychange", handleBackgroundTestVisibilityChange);
+  $("schemeAdd")?.addEventListener("click", LucimaActionWait.wrap(addEquipmentFilterScheme));
+  $("schemeList")?.addEventListener("click", LucimaActionWait.wrap(async (event) => {
     const action = event.target.closest("[data-scheme-action]");
     const item = event.target.closest(".scheme-item");
     if (!item) return;
@@ -10335,11 +11976,11 @@ function initToolbox() {
       return;
     }
     if (action?.dataset.schemeAction === "import") {
-      openSchemeTransferMenu(schemeId, "import", action);
+      await openEquipmentFilterImport(schemeId, action);
       return;
     }
     if (action?.dataset.schemeAction === "export") {
-      openSchemeTransferMenu(schemeId, "export", action);
+      await exportEquipmentFilterScheme(schemeId, action);
       return;
     }
     if (action?.dataset.schemeAction === "delete") {
@@ -10360,25 +12001,25 @@ function initToolbox() {
     activeFilterSchemeId = schemeId;
     activeDetailRuleId = null;
     renderEquipmentFilterWorkspace();
-  });
-  $("equipSlotTabs")?.addEventListener("click", (event) => {
+  }));
+  $("equipSlotTabs")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     const button = event.target.closest("[data-slot]");
     if (!button) return;
     activeFilterSlot = button.dataset.slot;
     activeDetailRuleId = null;
     renderEquipmentFilterWorkspace();
-  });
-  $("detailRuleCircles")?.addEventListener("click", (event) => {
+  }));
+  $("detailRuleCircles")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     const button = event.target.closest("[data-detail-rule]");
     if (!button) return;
     activeDetailRuleId = button.dataset.detailRule;
     renderEquipmentFilterWorkspace();
-  });
-  $("detailRuleAdd")?.addEventListener("click", addEquipmentDetailRule);
-  $("detailRuleDuplicate")?.addEventListener("click", duplicateActiveEquipmentDetailRule);
-  $("detailRuleEmptyAdd")?.addEventListener("click", addEquipmentDetailRule);
-  $("detailRuleDelete")?.addEventListener("click", deleteActiveEquipmentDetailRule);
-  $("subRuleList")?.addEventListener("click", (event) => {
+  }));
+  $("detailRuleAdd")?.addEventListener("click", LucimaActionWait.wrap(addEquipmentDetailRule));
+  $("detailRuleDuplicate")?.addEventListener("click", LucimaActionWait.wrap(duplicateActiveEquipmentDetailRule));
+  $("detailRuleEmptyAdd")?.addEventListener("click", LucimaActionWait.wrap(addEquipmentDetailRule));
+  $("detailRuleDelete")?.addEventListener("click", LucimaActionWait.wrap(deleteActiveEquipmentDetailRule));
+  $("subRuleList")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     if (event.target.closest("[data-add-sub-rule]")) {
       addEquipmentSubRule();
       return;
@@ -10397,8 +12038,8 @@ function initToolbox() {
     rule.subs[index].mode = modeButton.dataset.subMode === "mixed" ? "mixed" : "fixed";
     syncMixedRule(rule);
     markEquipmentFilterChanged();
-  });
-  $("subRuleList")?.addEventListener("change", (event) => {
+  }));
+  $("subRuleList")?.addEventListener("change", LucimaActionWait.wrap((event) => {
     const valueInput = event.target.closest("[data-sub-value], [data-sub-range]");
     if (valueInput) {
       const row = valueInput.closest(".sub-rule-row");
@@ -10421,7 +12062,7 @@ function initToolbox() {
     rule.mixRequired = Number(mixInput.value);
     updateSubScorePreview(rule);
     saveEquipmentFilterSchemes();
-  });
+  }));
   $("subRuleList")?.addEventListener("input", (event) => {
     const input = event.target.closest("[data-sub-value], [data-sub-range]");
     if (!input) return;
@@ -10446,43 +12087,43 @@ function initToolbox() {
     rule.minScore = clampFilterScore(event.target.value);
     saveEquipmentFilterSchemes();
   });
-  $("targetSubScore")?.addEventListener("change", (event) => {
+  $("targetSubScore")?.addEventListener("change", LucimaActionWait.wrap((event) => {
     const rule = activeDetailRule();
     if (!rule) return;
     rule.minScore = clampFilterScore(event.target.value);
     event.target.value = rule.minScore;
     saveEquipmentFilterSchemes();
-  });
-  $("targetScoreEnabled")?.addEventListener("change", (event) => {
+  }));
+  $("targetScoreEnabled")?.addEventListener("change", LucimaActionWait.wrap((event) => {
     const rule = activeDetailRule();
     if (!rule) return;
     rule.scoreEnabled = event.target.checked;
     $("targetSubScore").disabled = !rule.scoreEnabled;
     event.target.closest(".target-score-row").classList.toggle("enabled", rule.scoreEnabled);
     saveEquipmentFilterSchemes();
-  });
+  }));
   $("targetForceSubScore")?.addEventListener("input", (event) => {
     const rule = activeDetailRule();
     if (!rule) return;
     rule.forceScore = clampFilterScore(event.target.value, 45);
     saveEquipmentFilterSchemes();
   });
-  $("targetForceSubScore")?.addEventListener("change", (event) => {
+  $("targetForceSubScore")?.addEventListener("change", LucimaActionWait.wrap((event) => {
     const rule = activeDetailRule();
     if (!rule) return;
     rule.forceScore = clampFilterScore(event.target.value, 45);
     event.target.value = rule.forceScore;
     saveEquipmentFilterSchemes();
-  });
-  $("targetForceScoreEnabled")?.addEventListener("change", (event) => {
+  }));
+  $("targetForceScoreEnabled")?.addEventListener("change", LucimaActionWait.wrap((event) => {
     const rule = activeDetailRule();
     if (!rule) return;
     rule.forceScoreEnabled = event.target.checked;
     $("targetForceSubScore").disabled = !rule.forceScoreEnabled;
     event.target.closest(".target-score-row").classList.toggle("enabled", rule.forceScoreEnabled);
     saveEquipmentFilterSchemes();
-  });
-  $("targetScoreApplyAll")?.addEventListener("click", (event) => {
+  }));
+  $("targetScoreApplyAll")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     const source = activeDetailRule();
     if (!source) return;
     EQUIP_FILTER_SCHEMES_DATA.forEach((scheme) => {
@@ -10505,11 +12146,11 @@ function initToolbox() {
       button.classList.remove("applied");
       button.textContent = "一键复制";
     }, 1200);
-  });
-  $("applySetButton")?.addEventListener("click", () => {
+  }));
+  $("applySetButton")?.addEventListener("click", LucimaActionWait.wrap(() => {
     setApplyPopoverOpen($("applySetPopover").classList.contains("hidden"));
-  });
-  $("applySetGrid")?.addEventListener("click", (event) => {
+  }));
+  $("applySetGrid")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     const option = event.target.closest("[data-apply-set]");
     const rule = activeDetailRule();
     if (!option || !rule) return;
@@ -10522,54 +12163,18 @@ function initToolbox() {
     renderApplySetGrid(rule);
     updateApplySetButton(rule);
     renderFilterCoverage();
-  });
-  document.addEventListener("click", (event) => {
+  }));
+  if (!toolboxGlobalBound) {
+  document.addEventListener("click", LucimaActionWait.wrap((event) => {
     const picker = event.target.closest(".apply-picker");
     if (!picker && !$("applySetPopover")?.classList.contains("hidden")) setApplyPopoverOpen(false);
-  });
-  $("schemeRenameModal")?.addEventListener("click", (event) => {
+  }));
+  $("schemeRenameModal")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     if (event.target.closest("[data-rename-close]")) closeEquipmentFilterRename();
-  });
-  $("schemeRenameConfirm")?.addEventListener("click", saveEquipmentFilterRename);
+  }));
+  $("schemeRenameConfirm")?.addEventListener("click", LucimaActionWait.wrap(saveEquipmentFilterRename));
   $("schemeRenameInput")?.addEventListener("input", () => setSchemeRenameError());
-  $("schemeTransferMenu")?.addEventListener("click", async (event) => {
-    const option = event.target.closest("[data-scheme-transfer]");
-    const state = schemeTransferMenuState;
-    if (!option || !state) return;
-    closeSchemeTransferMenu(true);
-    if (state.action === "export") await exportEquipmentFilterScheme(state.schemeId, state.anchor, option.dataset.schemeTransfer);
-    else if (option.dataset.schemeTransfer === "clipboard") openEquipmentFilterClipboardImport(state.schemeId, state.anchor);
-    else await openEquipmentFilterImport(state.schemeId, state.anchor);
-  });
-  $("schemeTransferMenu")?.addEventListener("keydown", (event) => {
-    const items = [...$("schemeTransferMenu").querySelectorAll('[role="menuitem"]')];
-    const index = items.indexOf(document.activeElement);
-    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-      event.preventDefault();
-      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
-        : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
-      items[next]?.focus();
-    } else if (event.key === "Escape") {
-      event.preventDefault(); event.stopPropagation(); closeSchemeTransferMenu(true);
-    } else if (event.key === "Tab") closeSchemeTransferMenu(true);
-  });
-  document.addEventListener("click", (event) => {
-    const state = schemeTransferMenuState;
-    if (state && !$("schemeTransferMenu").contains(event.target) && !state.anchor.contains(event.target)) closeSchemeTransferMenu();
-  });
-  document.addEventListener("scroll", closeSchemeTransferMenuIfMoved, true);
-  window.addEventListener("resize", closeSchemeTransferMenuIfMoved);
-  $("schemeClipboardModal")?.addEventListener("click", (event) => {
-    if (event.target.closest("[data-clipboard-close]")) closeEquipmentFilterClipboardImport();
-  });
-  $("schemeClipboardPaste")?.addEventListener("click", () => void pasteEquipmentFilterClipboard());
-  $("schemeClipboardConfirm")?.addEventListener("click", confirmEquipmentFilterClipboardImport);
-  $("schemeClipboardInput")?.addEventListener("input", () => {
-    if (schemeClipboardImportSession) schemeClipboardImportSession.inputRevision++;
-    $("schemeClipboardError").textContent = "";
-  });
-  $("schemeImportFile")?.addEventListener("cancel", finishEquipmentFilterImport);
-  $("schemeImportFile")?.addEventListener("change", async (event) => {
+  $("schemeImportFile")?.addEventListener("change", LucimaActionWait.wrap(async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     if (file.size > 1024 * 1024) {
@@ -10583,31 +12188,17 @@ function initToolbox() {
       showMessageToast(error.message || "读取方案文件失败", "err", 5200);
       finishEquipmentFilterImport();
     }
-  });
-  $("confirmModal")?.addEventListener("click", (event) => {
+  }));
+  $("confirmModal")?.addEventListener("click", LucimaActionWait.wrap((event) => {
     if (event.target.closest("[data-confirm-cancel]")) closeConfirmDialog(false);
-  });
-  $("confirmAction")?.addEventListener("click", () => closeConfirmDialog(true));
-  $("desktopCloseModal")?.addEventListener("click", (event) => {
-    if (event.target.closest("[data-desktop-close-cancel]")) cancelDesktopClose();
-  });
-  $("desktopCloseCancel")?.addEventListener("click", cancelDesktopClose);
-  $("desktopCloseConfirm")?.addEventListener("click", confirmDesktopClose);
+  }));
+  $("confirmAction")?.addEventListener("click", LucimaActionWait.wrap(() => closeConfirmDialog(true)));
+  $("desktopCloseModal")?.addEventListener("click", LucimaActionWait.wrap((event) => {
+    if (event.target.closest("[data-desktop-close-cancel]")) return cancelDesktopClose();
+  }));
+  $("desktopCloseCancel")?.addEventListener("click", LucimaActionWait.wrap(cancelDesktopClose));
+  $("desktopCloseConfirm")?.addEventListener("click", LucimaActionWait.wrap(confirmDesktopClose));
   document.addEventListener("keydown", (event) => {
-    const clipboardModal = $("schemeClipboardModal");
-    if (clipboardModal && !clipboardModal.classList.contains("hidden")) {
-      if (event.key === "Escape") {
-        event.preventDefault(); closeEquipmentFilterClipboardImport();
-      } else if (event.key === "Tab") {
-        const controls = [...clipboardModal.querySelector(".scheme-import-dialog").querySelectorAll("button:not(:disabled), textarea")];
-        const first = controls[0], last = controls[controls.length - 1];
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-        else if ((!event.shiftKey && document.activeElement === last) || !clipboardModal.contains(document.activeElement)) {
-          event.preventDefault(); first?.focus();
-        }
-      }
-      return;
-    }
     if (event.key !== "Escape") return;
     if (!$("desktopCloseModal")?.classList.contains("hidden")) {
       event.preventDefault();
@@ -10620,19 +12211,105 @@ function initToolbox() {
       closeEquipmentFilterRename();
     }
   });
+  toolboxGlobalBound = true;
+  }
 }
 
+// Android keeps a notification intent until the page has finished restoring
+// its account registry. Opening one only navigates/queries; purchase is explicit.
+let equipmentNotificationReady = false;
+let equipmentNotificationOpening = false;
+async function openEquipmentNotification(id) {
+  let result;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    result = await api('/api/equipment-notifications/open', {id});
+    if (!result.pending) break;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  if (result.needsLogin) {
+    const login = await api('/api/login/saved', {account:result.account});
+    rememberAccount(login);
+    result = await api('/api/equipment-notifications/open', {id});
+  }
+  if (!result.ok) throw new Error(result.error || '账号恢复中，请稍后重新打开通知');
+  const email = result.account;
+  if (!ACCOUNTS[email]) rememberAccount(await api('/api/accounts/restore', {account:email}));
+  enterApp(); switchAccount(email); await loadTasks(); await ensureAccountStarted(email);
+  const source = result.source;
+  showSection(source === 'shop_free' ? 'auto' : 'manual');
+  const root = source === 'shop_free' ? $('auto-shop_free')
+    : source === 'shop_diamond' ? $('shop-shop_diamond') : $('starshop-star_source_shop');
+  if (!root) throw new Error('商店面板尚未加载');
+  root.querySelector('.auto-body, .shop-body')?.classList.remove('hidden');
+  const toggle = root.querySelector('.shop-free-toggle, .shop-toggle, .star-source-toggle');
+  if (toggle) toggle.textContent = '选项 ▾';
+  const state = {kind:'matched',notification:true,cards:result.cards || [],round:1,total:1,cardStates:{},cardErrors:{}};
+  if (source === 'shop_free') renderFreeShopResult('shop_free',{legendaryMatches:state.cards,cardStates:{}},email);
+  else if (source === 'shop_diamond') renderSecretShopState('shop_diamond',state,email);
+  else renderStarSourceState('star_source_shop',state,email);
+  (root.querySelector('.card-area') || root).scrollIntoView({block:'center'});
+  showMessageToast((result.message || '已定位匹配装备，请确认后购买') + (result.schemeName ? `（通知方案：${result.schemeName}）` : ''), result.stale ? 'warn' : 'ok', 5000);
+}
+async function drainEquipmentNotifications() {
+  if (!equipmentNotificationReady || equipmentNotificationOpening || !window.LucimaNotifications) return;
+  let id;
+  try { id = window.LucimaNotifications.takePendingEquipmentEvent(); } catch { return; }
+  if (!id) return;
+  equipmentNotificationOpening = true;
+  try { await openEquipmentNotification(id); }
+  catch (error) { showMessageToast(`打开装备通知失败：${error.message}`, 'err', 6000); }
+  finally { equipmentNotificationOpening = false; setTimeout(drainEquipmentNotifications, 0); }
+}
+window.addEventListener('lucima:notification-open', () => void drainEquipmentNotifications());
+
 // ---------- 启动：显示登录页，等待用户选择账号 ----------
+let gameResourceRevision = 0, gameResourcePollPending = false;
+async function pollGameResources(check = false) {
+  if (document.hidden && !check) return;
+  if (gameResourcePollPending) return;
+  gameResourcePollPending = true;
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const state = await api('/api/game-data/status' + (check ? '?check=1' : ''), undefined, {signal: controller.signal});
+    const labels = {checking:'正在自动检查游戏资料…', downloading:'正在自动下载新版游戏资料…',
+      extracting:'正在解析新版游戏资料…', compiling:'正在校验新版游戏资料…',
+      waiting:'新版资料已就绪，等待当前任务归还借装后启用', error:'游戏资料同步暂未完成，稍后自动重试'};
+    const hint = $('gameResourceStatus');
+    if (hint) { hint.textContent = labels[state.phase] || ''; hint.classList.toggle('hidden', !hint.textContent); }
+    if (state.phase === 'ready' && Number(state.revision) > gameResourceRevision) {
+      gameResourceRevision = Number(state.revision);
+      showMessageToast(`游戏资料已自动同步：${state.version.replace('catalog_', '')}`);
+      if (activeAccount) {
+        if ($('abyss-abyss_auto')?.dataset.loaded === '1' && !abyssRunning[activeAccount]) void loadAbyssOptions('abyss_auto', true);
+        if ($('act-activity_scene')?.dataset.loaded === '1' && !actProgressRunning[activeAccount] && !actRunning[activeAccount]) void loadActivityOptions('activity_scene', true);
+      }
+    }
+  } catch (_) { /* Backend startup and temporary offline periods retry quietly. */ }
+  finally { clearTimeout(timer); gameResourcePollPending = false; }
+}
+
 async function initApp() {
   await loadFrontendSettings();
   renderSwatches();
   applyTheme(getTheme());
   initBottomLogDock();
-  initAccounts();
+  await initAccounts();
   initDevGate();
   initToolbox();
   initEquipCardShells();
   initUpdateUI();
+  initSectionLifecycle();
+  equipmentNotificationReady = true;
+  void drainEquipmentNotifications();
+  void pollGameResources(true);
+  setInterval(pollGameResources, 10000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void pollGameResources(true); });
+  window.addEventListener('lucima:resume', () => { void pollGameResources(true); });
+  window.addEventListener('focus', () => { void pollGameResources(true); });
+  window.LucimaStartup?.ready();
 }
 
-initApp();
+initApp().catch(error => {
+  console.error('页面初始化失败', error);
+  window.LucimaStartup?.failed(String(error?.message || error));
+});
