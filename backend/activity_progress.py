@@ -10,6 +10,7 @@ import time
 import uuid
 
 from . import config
+from . import game_clock
 from .abyss_state import metadata
 from .game_client import GameError, GameMessage
 from .game_data import activity_open, enabled
@@ -55,9 +56,9 @@ def scenes(state: dict, family: str = "", *, now=None) -> list[dict]:
     return sorted(result, key=lambda row: (row["family"], row["chapter"], row["stage"]))
 
 
-def options(state: dict) -> list[dict]:
+def options(state: dict, *, now=None) -> list[dict]:
     groups = {}
-    for scene in scenes(state):
+    for scene in scenes(state, now=now):
         group = groups.setdefault(scene["family"], {"id": scene["family"], "name": scene["activityName"], "scenes": []})
         group["scenes"].append(scene)
     for group in groups.values():
@@ -66,8 +67,8 @@ def options(state: dict) -> list[dict]:
     return list(groups.values())
 
 
-def scene_record(state: dict, sid: str) -> dict:
-    available = next((scene for scene in scenes(state) if scene["id"] == sid), None)
+def scene_record(state: dict, sid: str, *, now=None) -> dict:
+    available = next((scene for scene in scenes(state, now=now) if scene["id"] == sid), None)
     if not available:
         raise GameError("活动关卡未开放，请刷新账号状态")
     prerequisite = available["preScene"]
@@ -90,7 +91,7 @@ def validate_scene(sid: str) -> dict:
     return scene
 
 
-def start_info(state: dict, sid: str, team_id: str, support: dict | None = None) -> dict:
+def start_info(state: dict, sid: str, team_id: str, support: dict | None = None, *, now=None) -> dict:
     from .tasks import _build_role_for_battle, _to_send_format
     scene = validate_scene(sid)
     story = (scene.get("MyCampTeam") or {}).get("Ms")
@@ -113,7 +114,7 @@ def start_info(state: dict, sid: str, team_id: str, support: dict | None = None)
         if not role_map:
             raise GameError("所选队伍不存在或没有配置角色，请检查队伍设置")
         roster = {str(pos): _build_role_for_battle(state, role) for role, pos in role_map.items()}
-    result = {"SceneData": _to_send_format(scene_record(state, sid)), "CampData1": {"PositionRoleMap": roster},
+    result = {"SceneData": _to_send_format(scene_record(state, sid, now=now)), "CampData1": {"PositionRoleMap": roster},
               "CampData2": {}, "IsRestart": 0, "Round": 0, "GM_Wave": 0, "IsRepeatAuto": 0}
     if support is not None and not story:
         result["Support"] = deepcopy(support)
@@ -151,7 +152,8 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
     pending = getattr(client, "_activity_pending", None)
     if pending and pending[0] is state:
         raise GameError(f"关卡 {pending[1]} 结果未确认，等待登录同步刷新")
-    initial = scenes(state, family)
+    now = game_clock.now_ms(client) / 1000
+    initial = scenes(state, family, now=now)
     if not initial:
         raise GameError("当前活动没有开放的关卡")
     support = _build_support(support_entry) if support_entry else None
@@ -164,7 +166,8 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
                 "completed": sum(stage["cleared"] for stage in initial)}
 
     def publish(**extra):
-        live = scenes(state, family)
+        now = game_clock.now_ms(client) / 1000
+        live = scenes(state, family, now=now)
         progress.update(sceneId=current, total=len(live), completed=sum(s["cleared"] for s in live), **extra)
         if on_progress:
             on_progress(deepcopy(progress))
@@ -178,7 +181,8 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
     while True:
         if cancel_event.is_set():
             return result(False, "自动推关已停止")
-        live = scenes(state, family)
+        now = game_clock.now_ms(client) / 1000
+        live = scenes(state, family, now=now)
         if not live:
             return result(False, "活动已结束，自动推关已停止")
         todo = [stage for stage in live if not stage["cleared"]]
@@ -196,7 +200,7 @@ def run(client, family: str, team_id: str, support_entry=None, *, cancel_event, 
             return result(False, "体力不足，自动推关已停止")
         if scene.get("EnterCost"):
             return result(False, "此关卡有额外入场消耗，暂不支持自动推关")
-        info = start_info(state, current, team_id, support)
+        info = start_info(state, current, team_id, support, now=game_clock.now_ms(client) / 1000)
         publish(stageName=stage["name"], detail="挑战中", battle=None)
         if cancel_event.is_set():
             return result(False, "自动推关已停止")

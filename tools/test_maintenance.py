@@ -99,13 +99,14 @@ class MaintenanceTests(unittest.TestCase):
             self.assertFalse(self.acc._maintenance_relogin_if_due())
         self.assertEqual(login.call_count, 1)
         self.assertTrue(self.client.is_connected())
-        self.assertEqual(self.acc.automation_wait_reason(), '等待佣兵团同步')
-        self.assertEqual(self.acc.run_toggles(['maintenance_probe'], 'test'), [])
+        self.assertIsNone(self.acc.automation_wait_reason())
+        self.assertEqual(self.acc.automation_wait_reason(guild_task=True), '等待佣兵团同步')
+        self.assertTrue(self.acc.run_toggles(['maintenance_probe'], 'test')[0]['ok'])
         self.acc._run_guild_if_due()
         self.assertIsNone(self.acc.automation_wait_reason())
         self.assertTrue(self.acc.run_toggles(['maintenance_probe'], 'test')[0]['ok'])
         routes = [route for route, _ in self.client.calls]
-        self.assertEqual(routes, ['AccountHandler.Login'] + [route for _, route, _ in GUILD_ENTRY_ROUTES]
+        self.assertEqual(routes, ['AccountHandler.Login', 'Test.Automatic'] + [route for _, route, _ in GUILD_ENTRY_ROUTES]
                          + ['GuildHandler.GuildMemberCheckIn', 'Test.Automatic'])
 
     def test_missing_malformed_or_repeated_fields_do_not_release_maintenance(self):

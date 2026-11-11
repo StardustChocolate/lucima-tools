@@ -118,17 +118,35 @@ def collect_release(pool, *, version=None, cards=False):
             raise ValueError("Invalid or duplicate character IDs")
         return set(ids)
 
-    media, media_entry = entry("manifest.json", "media", 2)
+    data, data_entry = entry("latest.json", "data", 1, "lucima-encyclopedia")
+    if data.get("renderer") not in (1, 2):
+        raise ValueError("Unsupported renderer version")
+    if data.get("renderer") == 2:
+        media_ref = data.get("media", {})
+        media_path = media_ref.get("path", "")
+        if media_path != f"manifests/{versions['data']}.json":
+            raise ValueError("Invalid computed-camera media snapshot")
+        media_entry = checked(media_path, media_ref)
+        files[media_path] = media_entry
+        media = read(pool / media_path)
+        if media.get("schema") != 2 or media.get("version") != versions["data"]:
+            raise ValueError("Invalid computed-camera media version")
+        versions["media"] = media["version"]
+    else:
+        media, media_entry = entry("manifest.json", "media", 2)
     if media.get("baseUrl") != "/encyclopedia/" or not isinstance(media.get("files"), dict) or not media["files"]:
         raise ValueError("Invalid media manifest")
+    gaps = media.get("missingFiles", {})
+    if not isinstance(gaps, dict) or any(
+            not re.fullmatch(r"skills/Icon_Skill_[A-Za-z0-9_]+\.png", path)
+            or not isinstance(reason, str) or not reason.strip() or path in media["files"]
+            for path, reason in gaps.items()):
+        raise ValueError("Invalid documented skill image gap")
     for logical, props in media["files"].items():
         object_ref({"path": f"objects/{props['sha256']}{Path(logical).suffix.lower()}", **props})
     snapshot(f"manifests/{versions['media']}.json", media_entry)
     counts["mediaFiles"] = len(media["files"])
 
-    data, data_entry = entry("latest.json", "data", 1, "lucima-encyclopedia")
-    if data.get("renderer") != 1:
-        raise ValueError("Unsupported renderer version")
     index = object_ref(data["index"], json_only=True)
     ui = object_ref(data["ui"], json_only=True)
     if index.get("schema") != 1 or ui.get("schema") != 1:
@@ -142,6 +160,12 @@ def collect_release(pool, *, version=None, cards=False):
             raise ValueError("Character detail identity mismatch: " + row["id"])
         if row.get("avatar"):
             object_ref(row["avatar"])
+        expected_skills = {"skills/" + skill["IconSprite"] + ".png"
+                           for skill in detail["character"]["Skill"] if skill.get("IconSprite")}
+        missing = {path: gaps[path] for path in expected_skills if path in gaps}
+        if detail.get("missingMedia", {}) != missing \
+                or any(path not in detail["media"] for path in expected_skills - gaps.keys()):
+            raise ValueError("Undocumented skill image gap: " + row["id"])
         for ref in detail["media"].values():
             object_ref(ref)
     snapshot(f"versions/{versions['data']}.json", data_entry)

@@ -333,6 +333,8 @@ def build_metadata(source: Path, *, previous_root: Path = ROOT, data_root: Path 
     battle, battle_evidence = build_battle_metadata(source, provenance)
     outputs = {STATIC_PATH: static, AI_PATH: auto_rules, EQUIPMENT_PATH: references,
                BATTLE_PATH: battle, GAME_CONFIG_PATH: build_game_config(battle["tables"])}
+    from backend.resource_recovery import build_intervals
+    outputs[GAME_CONFIG_PATH]["itemRecoverySeconds"] = build_intervals(items.values())
     vote_table = source / '文本/数据表/sd_Vote.txt'
     if vote_table.is_file():
         from backend.voting import build_catalog
@@ -340,6 +342,37 @@ def build_metadata(source: Path, *, previous_root: Path = ROOT, data_root: Path 
             votes = list(csv.DictReader(stream, delimiter='@'))
         quests = list(load_table(source, 'Quest', ('ID', 'ActivityID', 'Group')).values())
         outputs[GAME_CONFIG_PATH]['voting'] = build_catalog(votes, quests, localization)
+    commodity_table = source / '文本/数据表/sd_Commodity.txt'
+    drop_table = source / '文本/数据表/sd_Drop.txt'
+    if commodity_table.is_file() and drop_table.is_file():
+        from backend.gacha import build_catalog as build_gacha_catalog
+        with commodity_table.open(encoding='utf-8-sig', newline='') as stream:
+            commodities = list(csv.DictReader(stream, delimiter='@'))
+        with drop_table.open(encoding='utf-8-sig', newline='') as stream:
+            drops = list(csv.DictReader(stream, delimiter='@'))
+        names = {sid: localization.get(row.get('Name'), sid) for sid, row in items.items()}
+        ranks = {sid: int(row.get('ItemRank') or 0) for sid, row in items.items()}
+        outputs[GAME_CONFIG_PATH]['gacha'] = build_gacha_catalog(
+            commodities, list(load_table(source, 'Activity').values()), drops, names, ranks, localization,
+            'catalog_' + source_version if source_version and source_version.isdigit() else '')
+    store_table = source / '文本/数据表/sd_Store.txt'
+    if commodity_table.is_file() and store_table.is_file():
+        from backend.activity_store import build_catalog as build_activity_stores
+        with commodity_table.open(encoding='utf-8-sig', newline='') as stream:
+            shop_goods = list(csv.DictReader(stream, delimiter='@'))
+        with store_table.open(encoding='utf-8-sig', newline='') as stream:
+            shops = list(csv.DictReader(stream, delimiter='@'))
+        names = {sid: localization.get(row.get('Name'), sid) for sid, row in items.items()}
+        outputs[GAME_CONFIG_PATH]['activityStores'] = build_activity_stores(
+            shops, shop_goods, list(load_table(source, 'Activity').values()), names, localization,
+            'catalog_' + source_version if source_version and source_version.isdigit() else '')
+    if (source / '文本/数据表/sd_Quest.txt').is_file() and (source / '文本/数据表/sd_QuestGroup.txt').is_file():
+        from backend.activity_rewards import build_catalog as build_activity_rewards
+        outputs[GAME_CONFIG_PATH]['activityRewards'] = build_activity_rewards(
+            list(load_table(source, 'Quest', ('ID', 'ActivityID', 'Group')).values()),
+            list(load_table(source, 'QuestGroup', ('ID', 'ActivityID', 'Type')).values()),
+            list(load_table(source, 'Activity').values()), localization,
+            'catalog_' + source_version if source_version and source_version.isdigit() else '')
     report = {"schema": 1, "source_root": str(source), "character_data_root": str(data_root), "source": provenance,
               "character_evidence": character_evidence, "equipment": equipment_evidence, "battle": battle_evidence,
               "differences": {"skills": compare_indexes(old_static.get("skills", {}), static["skills"]),

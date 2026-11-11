@@ -1,0 +1,240 @@
+{
+  "now": 1793713336,
+  "samples": {
+    "ordinary": {
+      "before": {
+        "_id": "test-record",
+        "StaticID": "AcyivitySummonH806",
+        "Store": "Summon",
+        "BuyCount": 1,
+        "FreeBuyCount": 0,
+        "GuaranteedCount": 1,
+        "SummonRoleID": "",
+        "SummonRoleIDs": [],
+        "LastBuyTime": "2026/10/28 18:3:14",
+        "LastResetTime": "2026/10/28 18:3:14"
+      },
+      "response": {
+        "Drop": {
+          "Items": [
+            {
+              "DropID": "",
+              "DropIndex": 0,
+              "RoleData": {
+                "StaticID": "H044",
+                "Star": 4,
+                "_id": "test-RoleData"
+              }
+            },
+            {
+              "DropID": "",
+              "DropIndex": 0,
+              "Item": {
+                "Count": 1,
+                "StaticID": "69",
+                "_id": "test-Item"
+              },
+              "NowItem": {
+                "Count": 8,
+                "StaticID": "69",
+                "_id": "test-NowItem"
+              }
+            }
+          ],
+          "IsReactorCritical": false
+        },
+        "VirtualDrop": {
+          "IsReactorCritical": false
+        },
+        "CostItems": [
+          {
+            "DropID": "",
+            "DropIndex": 0,
+            "Item": {
+              "Count": 5,
+              "StaticID": "5"
+            },
+            "NowItem": {
+              "Count": 3120,
+              "StaticID": "5"
+            }
+          }
+        ],
+        "CommodityRecord": {
+          "_id": "test-record",
+          "StaticID": "AcyivitySummonH806",
+          "Store": "Summon",
+          "BuyCount": 2,
+          "FreeBuyCount": 0,
+          "GuaranteedCount": 2,
+          "SummonRoleID": "",
+          "SummonRoleIDs": [],
+          "LastBuyTime": {
+            "$date": 1793713336612
+          },
+          "LastResetTime": {
+            "$date": 1793210594122
+          }
+        }
+      },
+      "expected": "H044"
+    },
+    "artifact": {
+      "before": {
+        "_id": "test-record",
+        "StaticID": "AcyivitySummonH806",
+        "Store": "Summon",
+        "BuyCount": 3,
+        "FreeBuyCount": 0,
+        "GuaranteedCount": 3,
+        "SummonRoleID": "",
+        "SummonRoleIDs": [],
+        "LastBuyTime": "2026/11/3 13:42:24",
+        "LastResetTime": "2026/10/28 18:3:14"
+      },
+      "response": {
+        "Drop": {
+          "Items": [
+            {
+              "DropID": "",
+              "DropIndex": 0,
+              "Artifact": {
+                "StaticID": "A0048",
+                "_id": "test-Artifact"
+              }
+            },
+            {
+              "DropID": "",
+              "DropIndex": 0,
+              "Item": {
+                "Count": 1,
+                "StaticID": "69",
+                "_id": "test-Item"
+              },
+              "NowItem": {
+                "Count": 10,
+                "StaticID": "69",
+                "_id": "test-NowItem"
+              }
+            }
+          ],
+          "IsReactorCritical": false
+        },
+        "VirtualDrop": {
+          "IsReactorCritical": false
+        },
+        "CostItems": [
+          {
+            "DropID": "",
+            "DropIndex": 0,
+            "Item": {
+              "Count": 5,
+              "StaticID": "5"
+            },
+            "NowItem": {
+              "Count": 3110,
+              "StaticID": "5"
+            }
+          }
+        ],
+        "CommodityRecord": {
+          "_id": "test-record",
+          "StaticID": "AcyivitySummonH806",
+          "Store": "Summon",
+          "BuyCount": 4,
+          "FreeBuyCount": 0,
+          "GuaranteedCount": 4,
+          "SummonRoleID": "",
+          "SummonRoleIDs": [],
+          "LastBuyTime": {
+            "$date": 1793713367980
+          },
+          "LastResetTime": {
+            "$date": 1793210594122
+          }
+        }
+      },
+      "expected": "A0048"
+    },
+    "up": {
+      "before": {
+        "_id": "test-record",
+        "StaticID": "AcyivitySummonH806",
+        "Store": "Summon",
+        "BuyCount": 119,
+        "FreeBuyCount": 0,
+        "GuaranteedCount": 119,
+        "SummonRoleID": "",
+        "SummonRoleIDs": [],
+        "LastBuyTime": "2026/11/3 13:58:13",
+        "LastResetTime": "2026/10/28 18:3:14"
+      },
+      "response": {
+        "Drop": {
+          "Items": [
+            {
+              "DropID": "",
+              "DropIndex": 0,
+              "Item": {
+                "Count": 1,
+                "StaticID": "69",
+                "_id": "test-Item"
+              },
+              "NowItem": {
+                "Count": 126,
+                "StaticID": "69",
+                "_id": "test-NowItem"
+              }
+            }
+          ],
+          "IsReactorCritical": false
+        },
+        "VirtualDrop": {
+          "Items": [
+            {
+              "DropID": "",
+              "DropIndex": 0,
+              "RoleData": {
+                "StaticID": "H806",
+                "Star": 5,
+                "_id": "test-RoleData"
+              }
+            }
+          ],
+          "IsReactorCritical": false
+        },
+        "CostItems": [
+          {
+            "DropID": "",
+            "DropIndex": 0,
+            "Item": {
+              "Count": 5,
+              "StaticID": "5"
+            },
+            "NowItem": {
+              "Count": 2605,
+              "StaticID": "5"
+            }
+          }
+        ],
+        "CommodityRecord": {
+          "_id": "test-record",
+          "StaticID": "AcyivitySummonH806",
+          "Store": "Summon",
+          "BuyCount": 120,
+          "FreeBuyCount": 0,
+          "GuaranteedCount": 0,
+          "SummonRoleID": "",
+          "SummonRoleIDs": [],
+          "LastBuyTime": {
+            "$date": 1793714297361
+          },
+          "LastResetTime": {
+            "$date": 1793210594122
+          }
+        }
+      },
+      "expected": "H806"
+    }
+  }
+}

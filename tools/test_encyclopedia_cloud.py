@@ -36,14 +36,17 @@ class CloudTests(unittest.TestCase):
         self.remote[path] = raw
         return {'path': path, 'sha256': sha, 'size': len(raw)}
 
-    def release(self, version, text, heroes=('H001',)):
+    def release(self, version, text, heroes=('H001',), search=None):
         self.image = self.put(b'image', '.png')
         rows = []
         for hero in heroes:
             detail = self.put(encoded({'schema': 1, 'character': {'ID': hero, 'Description': text},
                                        'media': {'portraits/static/' + hero + '.png': self.image}}))
             rows.append({'id': hero, 'name': hero, 'detail': detail, 'avatar': self.image})
-        index = self.put(encoded({'schema': 1, 'characters': rows}))
+        index_data = {'schema': 1, 'characters': rows}
+        if search is not None:
+            index_data['search'] = search
+        index = self.put(encoded(index_data))
         ui = self.put(encoded({'schema': 1, 'translations': {'status_filters': {}}, 'files': []}))
         entry = {'schema': 1, 'kind': 'lucima-encyclopedia', 'renderer': 1,
                  'version': version, 'index': index, 'ui': ui}
@@ -65,6 +68,7 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(self.requests, [])
         result = self.service.check()
         self.assertTrue(result['available'])
+        self.assertIsNone(result['search'])
         self.assertEqual(len(self.requests), 3)
         self.assertFalse(any(path == self.image['path'] for path, _ in self.requests))
         self.assertEqual(self.service.detail('v1', 'H001')['character']['Description'], 'first')
@@ -72,6 +76,21 @@ class CloudTests(unittest.TestCase):
         raw, _ = self.service.object(Path(self.image['path']).name)
         self.assertEqual(raw, b'image')
         self.assertEqual(len(self.requests), 5)
+
+    def test_search_index_is_returned_with_catalog_and_validated(self):
+        search = {
+            'ids': {'h001': ['H001']}, 'names': {'shani': ['H001']},
+            'aliases': {'夏妮': ['H001']}, 'pinyin': {'xiani': ['H001']},
+        }
+        self.release('v-search', 'first', search=search)
+        result = self.service.check()
+        self.assertEqual(result['search'], search)
+
+        bad = dict(search)
+        bad['pinyin'] = {'xiani': ['H999']}
+        self.release('v-invalid-search', 'bad', search=bad)
+        self.now += 3601
+        self.assertEqual(self.service.check()['version'], 'v-search')
 
     def test_hourly_check_uses_etag_without_redownloading_any_data(self):
         self.service.check()
@@ -81,6 +100,19 @@ class CloudTests(unittest.TestCase):
         self.assertFalse(self.service.check()['updated'])
         self.assertEqual(len(self.requests), 4)
         self.assertEqual(self.requests[-1][1]['If-None-Match'], 'v1')
+
+    def test_entry_check_bypasses_hourly_interval_but_keeps_five_second_debounce(self):
+        self.service.check(force=True)
+        self.now += 4
+        self.service.check(force=True)
+        self.assertEqual(len(self.requests), 3)
+        self.now += 2
+        self.service.check(force=True)
+        self.assertEqual(len(self.requests), 4)
+        self.assertEqual(self.requests[-1][1]['If-None-Match'], 'v1')
+        self.now += 6
+        self.service.check()
+        self.assertEqual(len(self.requests), 4)
 
     def test_restart_offline_reuses_only_previously_downloaded_data(self):
         self.service.check()
@@ -142,6 +174,16 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(self.service.check()['version'], 'v1')
         with self.assertRaises(EncyclopediaError):
             self.service.object('../settings.json')
+
+    def test_computed_camera_renderer_keeps_lightweight_check_and_lazy_media(self):
+        entry = dict(self.entry, renderer=2, media={
+            'path': 'manifests/v1.json', 'sha256': '0' * 64, 'size': 1000})
+        self.remote['latest.json'] = encoded(entry)
+        self.assertTrue(self.service.check()['available'])
+        self.assertEqual(len(self.requests), 3)
+        self.assertFalse(any(path.endswith('.framing.json') or path.startswith('manifests/')
+                             for path, _ in self.requests))
+        self.assertEqual(self.service.detail('v1', 'H001')['character']['Description'], 'first')
 
     def test_concurrent_checks_and_media_downloads_are_coalesced(self):
         with ThreadPoolExecutor(max_workers=5) as pool:

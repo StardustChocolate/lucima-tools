@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from encyclopedia_search import build_search
 from stage_encyclopedia_cdn import VERSION, atomic_write
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +23,13 @@ def payload(value):
 def build(bundle, pool, avatars, version):
     if not VERSION.fullmatch(version):
         raise ValueError("Invalid cloud encyclopedia version")
-    media = read(pool / "manifest.json")["files"]
+    snapshot_path = pool / "manifests" / f"{version}.json"
+    manifest_path = snapshot_path if snapshot_path.is_file() else pool / "manifest.json"
+    manifest = read(manifest_path)
+    media = manifest["files"]
+    gaps = manifest.get("missingFiles", {})
+    if set(gaps) & set(media):
+        raise ValueError("Documented missing media already exists")
     created = set()
 
     def put(raw, suffix):
@@ -63,22 +70,30 @@ def build(bundle, pool, avatars, version):
 
     translations = replace_assets(read(bundle / "ui.json"))
     rows = []
-    for entry in read(bundle / "index.json")["characters"]:
+    bundle_index = read(bundle / "index.json")
+    for entry in bundle_index["characters"]:
         hero = entry["id"]
         character = replace_assets(read(bundle / entry["detail"]))
         sprites = {skill["IconSprite"] for skill in character["Skill"] if skill.get("IconSprite")}
         logical = {"skills/" + sprite + ".png" for sprite in sprites}
         logical.update(path for path in media if path == f"portraits/static/{hero}.png" or path.startswith(f"portraits/spine/{hero}/"))
-        refs = {path: media_ref(path) for path in sorted(logical)}
-        detail = put(payload({"schema": 1, "character": character, "media": refs}), ".json")
+        refs = {path: media_ref(path) for path in sorted(logical) if path not in gaps}
+        missing = {path: gaps[path] for path in sorted(logical) if path in gaps}
+        detail = put(payload({"schema": 1, "character": character, "media": refs,
+                              **({"missingMedia": missing} if missing else {})}), ".json")
         avatar = avatars / (hero + ".png")
         rows.append({**entry, "detail": detail,
                      "avatar": put(avatar.read_bytes(), ".png") if avatar.is_file() else None})
-    index = put(payload({"schema": 1, "characters": rows}), ".json")
+    index = put(payload({"schema": 1, "characters": rows, "search": build_search(rows)}), ".json")
     ui = put(payload({"schema": 1, "translations": translations,
                       "files": sorted(shared_files.values(), key=lambda item: item["path"])}), ".json")
-    latest = {"schema": 1, "kind": "lucima-encyclopedia", "renderer": 1,
+    computed_cameras = any(path.endswith(".framing.json") for path in media)
+    latest = {"schema": 1, "kind": "lucima-encyclopedia", "renderer": 2 if computed_cameras else 1,
               "version": version, "index": index, "ui": ui}
+    if computed_cameras:
+        raw_media = manifest_path.read_bytes()
+        latest["media"] = {"path": manifest_path.relative_to(pool).as_posix(),
+                           "sha256": hashlib.sha256(raw_media).hexdigest(), "size": len(raw_media)}
     raw = payload(latest)
     snapshot = pool / "versions" / (version + ".json")
     if snapshot.exists() and snapshot.read_bytes() != raw:

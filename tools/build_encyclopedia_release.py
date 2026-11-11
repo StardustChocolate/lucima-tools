@@ -66,7 +66,7 @@ def build_release(args):
             print("源资料缺少头像：" + ", ".join(missing), flush=True)
         print("[2/4] 整理图鉴媒体" + ("（复用现有媒体清单）" if args.reuse_media else ""), flush=True)
         if not args.reuse_media:
-            report = stage_cdn(source, pool, args.version)
+            report = stage_cdn(source, pool, args.version, source_gaps=getattr(args, "source_gaps", None))
             atomic_write(work / "media.json", json_bytes(report))
         print("[3/4] 生成云端资料", flush=True)
         report = build_cloud(bundle, pool, avatars, args.version)
@@ -93,6 +93,8 @@ def main():
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_WORK)
     parser.add_argument("--cards", action="store_true", help="Also build and publish the full finished-card collection")
+    parser.add_argument("--source-gaps", type=Path,
+                        help="Catalog-bound official missing skill image report; all other missing media still fail")
     parser.add_argument("--reuse-media", action="store_true", help="Reuse the existing media manifest for a data-only update")
     parser.add_argument("--from-existing", action="store_true", help="Only validate existing output and regenerate its publication plan")
     args = parser.parse_args()

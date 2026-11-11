@@ -10,12 +10,12 @@ import shutil
 import uuid
 from pathlib import Path
 
-from stage_encyclopedia_resources import resource_sources
+from stage_encyclopedia_resources import missing_skill_sources, resource_sources
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".skel", ".atlas", ".js"}
+EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".skel", ".atlas", ".js", ".json"}
 
 
 def file_hash(path: Path) -> str:
@@ -40,10 +40,11 @@ def atomic_write(path: Path, payload: bytes) -> None:
         pending.unlink(missing_ok=True)
 
 
-def stage_cdn(ark2_root: Path, output: Path, version: str) -> dict:
+def stage_cdn(ark2_root: Path, output: Path, version: str, *, source_gaps: Path | None = None) -> dict:
     if not VERSION.fullmatch(version):
         raise ValueError("Invalid resource version")
-    sources, counts = resource_sources(ark2_root)
+    sources, counts = resource_sources(ark2_root, source_gaps=source_gaps)
+    missing = {f"skills/{sprite}.png": reason for sprite, reason in missing_skill_sources(ark2_root, source_gaps).items()}
     files: dict[str, dict] = {}
     objects: dict[str, Path] = {}
     for logical, source in sorted(sources.items()):
@@ -63,8 +64,10 @@ def stage_cdn(ark2_root: Path, output: Path, version: str) -> dict:
         "skillIconBaseUrl": "skills/",
         "spineRuntimeUrl": "runtime/spine-webgl.js",
         "files": files,
+        **({"missingFiles": missing} if missing else {}),
     }
     payload = json_bytes(manifest)
+    computed_cameras = any(path.endswith(".framing.json") for path in files)
     snapshot = output / "manifests" / f"{version}.json"
     if snapshot.exists() and snapshot.read_bytes() != payload:
         raise FileExistsError(f"Resource version is immutable; choose a new version: {version}")
@@ -94,7 +97,10 @@ def stage_cdn(ark2_root: Path, output: Path, version: str) -> dict:
     # Publish the entry only after all referenced objects and its snapshot exist.
     if not snapshot.exists():
         atomic_write(snapshot, payload)
-    atomic_write(entry, payload)
+    # Old players cannot consume computed cameras. Keep their live manifest
+    # paired with the old static PNGs; renderer-2 data uses the new snapshot.
+    if not computed_cameras:
+        atomic_write(entry, payload)
     categories = {}
     for prefix in ("portraits/static/", "portraits/spine/", "skills/", "runtime/"):
         group = [properties for logical, properties in files.items() if logical.startswith(prefix)]
@@ -104,6 +110,7 @@ def stage_cdn(ark2_root: Path, output: Path, version: str) -> dict:
         "previousVersion": previous.get("version"),
         "output": str(output.resolve()),
         "counts": counts,
+        "sourceGaps": missing,
         "logicalFiles": len(files),
         "logicalBytes": sum(properties["size"] for properties in files.values()),
         "objects": len(objects),
@@ -113,8 +120,9 @@ def stage_cdn(ark2_root: Path, output: Path, version: str) -> dict:
         "changedFiles": [logical for logical, properties in files.items() if previous_files.get(logical) != properties],
         "newObjects": created,
         "newObjectBytes": added_bytes,
-        "uploadLast": "manifest.json",
-        "uploadManifests": [f"manifests/{version}.json", "manifest.json"],
+        "uploadLast": None if computed_cameras else "manifest.json",
+        "uploadManifests": [f"manifests/{version}.json"] + ([] if computed_cameras else ["manifest.json"]),
+        "computedCameras": computed_cameras,
     }
 
 
@@ -123,9 +131,10 @@ def main() -> None:
     parser.add_argument("--ark2-root", type=Path, default=Path(r"E:\Project\ark2"))
     parser.add_argument("--output", type=Path, default=ROOT / "releases" / "encyclopedia")
     parser.add_argument("--version", required=True)
+    parser.add_argument("--source-gaps", type=Path, help="Catalog-bound official missing skill image report")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
-    report = stage_cdn(args.ark2_root.resolve(), args.output.resolve(), args.version)
+    report = stage_cdn(args.ark2_root.resolve(), args.output.resolve(), args.version, source_gaps=args.source_gaps)
     report_path = args.report or ROOT / "build" / "encyclopedia-cdn" / f"{args.version}-upload.json"
     atomic_write(report_path, json_bytes(report))
     print(json.dumps({key: value for key, value in report.items()

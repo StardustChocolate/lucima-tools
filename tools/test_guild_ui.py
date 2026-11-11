@@ -88,9 +88,6 @@ class GuildUITests(unittest.TestCase):
         self.pending_overview = None
         self.toggle_error = False
         self.overview_error = False
-        self.score_jobs = {}
-        self.score_start_error = False
-        self.score_status_error = False
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
         self.context.route("**/*", self.serve)
         self.page.goto(ORIGIN)
@@ -118,27 +115,6 @@ class GuildUITests(unittest.TestCase):
             route.abort()
             return
         if path.startswith("/api/"):
-            if path == '/api/guild/quests/start':
-                job = {'id': body['requestId'], 'mode': body['mode'], 'kind': 'quest_rewards',
-                       'state': 'running', 'running': True, 'score': 1200, 'target': 2800, 'completed': 0}
-                self.score_jobs[body['account']] = job
-                route.fulfill(status=500 if self.score_start_error else 200, content_type='application/json',
-                              body=json.dumps({'detail': '响应丢失'} if self.score_start_error else job))
-                return
-            if path == '/api/guild/quests/cancel':
-                job = self.score_jobs[body['account']]
-                job.update(state='cancelled', running=False)
-                route.fulfill(content_type='application/json', body=json.dumps(job))
-                return
-            if path == '/api/guild/quests':
-                from urllib.parse import parse_qs
-                account = parse_qs(url.query).get('account', [''])[0]
-                job = self.score_jobs.get(account, {'state': 'idle', 'running': False})
-                # Production status includes the current guild cache as well as the job.
-                guild = job.get('guild') or summary(weekly={**weekly_summary(), 'score': job.get('score', 1200)})
-                route.fulfill(status=500 if self.score_status_error else 200, content_type='application/json',
-                              body=json.dumps({'detail': '读取失败'} if self.score_status_error else {**job, 'guild': guild}))
-                return
             if path == "/api/guild/overview" and self.hold_overview:
                 self.pending_overview = route
                 return
@@ -185,7 +161,7 @@ class GuildUITests(unittest.TestCase):
             self.page.evaluate("guild => applyGuildSnapshot('first', guild)",
                                summary(revision=10 + index, waiting=reason, claimError='old error'))
             for identifier in ('guildSigninState', 'guildDonateState', 'guildAidState',
-                               'guildWeeklyState', 'guildStoreState', 'guildCaptainStoreState', 'guildScoreState'):
+                               'guildWeeklyState', 'guildStoreState', 'guildCaptainStoreState'):
                 self.assertEqual(self.page.locator('#' + identifier).inner_text(), reason)
                 classes = self.page.locator('#' + identifier).get_attribute('class') or ''
                 self.assertNotIn('ready', classes)
@@ -193,7 +169,6 @@ class GuildUITests(unittest.TestCase):
             self.assertTrue(self.page.locator('#guildAutoSignin').is_enabled())
             self.assertTrue(self.page.locator('#guildAutoDonate').is_enabled())
             self.assertEqual(self.page.locator('#guildRefresh').is_disabled(), reason == '等待每日重登')
-            self.assertTrue(self.page.locator('#guildScoreStart').is_disabled())
             if index == 0:
                 self.page.locator('#guildManualStoreOptions').click()
             self.assertTrue(all(self.page.locator('#guildManualStoreGoods button').nth(i).is_disabled()
@@ -695,132 +670,19 @@ class GuildUITests(unittest.TestCase):
                     self.assertGreater(description['width'], bounds['width'] * .75)
                 self.page.locator('#guildWeeklyRow').screenshot(path=str(output / f'guild-weekly-{width}-{theme}.png'))
 
-    def test_score_warning_requires_confirmation_and_can_cancel_or_stop(self):
-        self.enter_guild()
-        button = self.page.locator('#guildScoreStart')
-        self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
-        self.assertEqual(self.page.locator('.guild-score-warning').inner_text(), '非常规功能')
-        self.assertEqual(self.page.locator('#guildScoreState').inner_text(), '全团积分 1200 / 2800')
-        button.click()
-        self.assertEqual(self.page.locator('#confirmMessage').inner_text(),
-                         '该功能非常规功能，请在明确功能含义的情况下执行，建议使用非正式账号')
-        self.assertEqual(self.page.locator('.confirm-icon use').get_attribute('href'), '#ui-triangle-alert')
-        self.assertEqual(self.count('/api/guild/quests/start'), 0)
-        self.page.locator('.confirm-cancel').click()
-        self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
-        self.assertEqual(self.count('/api/guild/quests/start'), 0)
-        button.click()
-        self.page.locator('#confirmAction').click()
-        self.page.wait_for_function("document.getElementById('guildScoreStart').textContent === '停止'")
-        self.assertEqual(self.count('/api/guild/quests/start'), 1)
-        start = [body for path, body in self.requests if path == '/api/guild/quests/start'][-1]
-        self.assertEqual(start['mode'], 'score')
-        self.assertTrue(start['requestId'])
-        self.assertIn('进行中', self.page.locator('#guildScoreState').inner_text())
-        button.click()
-        self.page.wait_for_function("document.getElementById('guildScoreStart').textContent === '开始'")
-        self.assertIn('已停止', self.page.locator('#guildScoreState').inner_text())
-        self.assertEqual(self.count('/api/guild/quests/cancel'), 1)
-        self.assertEqual(self.count('/api/guild/overview'), 0)
-        self.page.evaluate("() => { openConfirmDialog({title:'删除',message:'测试'}); }")
-        self.assertEqual(self.page.locator('.confirm-icon use').get_attribute('href'), '#ui-trash-2')
-
-    def test_score_lost_start_response_is_queried_without_sending_start_again(self):
-        self.enter_guild()
-        self.score_start_error = True
-        self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
-        self.page.locator('#guildScoreStart').click()
-        self.page.locator('#confirmAction').click()
-        self.page.wait_for_function("document.getElementById('guildScoreState').textContent.includes('进行中') && document.getElementById('guildScoreStart').textContent === '停止'")
-        self.assertEqual(self.count('/api/guild/quests/start'), 1)
-        self.assertGreaterEqual(self.count('/api/guild/quests'), 2)
-        self.score_jobs['first'].update(state='completed', running=False, completed=64, score=2800)
-        self.page.wait_for_function("document.getElementById('guildScoreState').textContent.includes('已完成')")
-        self.assertEqual(self.page.locator('#guildScoreState').inner_text(), '全团积分 2800 / 2800 · 已领取 64 次 · 已完成')
-        self.assertFalse(self.page.locator('#guildScoreStart').is_disabled())
-        self.assertEqual(self.count('/api/guild/quests/start'), 1)
-
-    def test_score_account_switch_or_no_guild_does_not_start_or_leak_task(self):
-        self.enter_guild()
-        self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
-        self.page.locator('#guildScoreStart').click()
-        self.page.evaluate("activeAccount='second'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
-        self.page.locator('#confirmAction').click()
-        self.assertEqual(self.count('/api/guild/quests/start'), 0)
-        self.assertTrue(self.page.locator('#guildScoreStart').is_disabled())
-        self.assertEqual(self.page.locator('#guildScoreState').inner_text(), '未加入佣兵团，暂不执行')
-        self.score_jobs['first'] = {'id': 'job', 'mode': 'score', 'running': True, 'state': 'running',
-                                    'score': 2000, 'target': 2800, 'completed': 32}
-        self.page.evaluate("activeAccount='first'; window.dispatchEvent(new CustomEvent('lucima:account-change'))")
-        self.page.wait_for_function("document.getElementById('guildScoreStart').textContent === '停止'")
-        self.assertIn('2000 / 2800', self.page.locator('#guildScoreState').inner_text())
-        self.page.evaluate("showSection('info')")
-        self.page.wait_for_timeout(1100)
-        count = self.count('/api/guild/quests')
-        self.page.wait_for_timeout(1100)
-        self.assertEqual(self.count('/api/guild/quests'), count)
-
-    def test_score_uses_refreshed_guild_progress_instead_of_stale_finished_job(self):
-        self.score_jobs['first'] = {'id': 'old-job', 'mode': 'score', 'running': False, 'state': 'failed',
-                                   'score': 80, 'target': 2800, 'completed': 1, 'message': '积分未增长',
-                                   'guild': summary(weekly={**weekly_summary(), 'score': 75})}
-        self.enter_guild()
-        self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
-        self.assertIn('75 / 2800', self.page.locator('#guildScoreState').inner_text())
-        self.assertEqual(self.page.locator('#guildWeeklyScore').text_content(), '75')
-        self.page.evaluate("applyGuildSnapshot('first', {...ACCOUNTS.first.guild, revision:3, weekly:{...ACCOUNTS.first.guild.weekly, score:null}})")
-        self.assertIn('— / 2800', self.page.locator('#guildScoreState').inner_text())
-
-    def test_score_batch_shows_planned_claims_and_verification_without_estimated_points(self):
-        self.score_jobs['first'] = {'id': 'batch', 'mode': 'score', 'running': True, 'state': 'running',
-                                   'phase': 'claiming', 'score': 100, 'target': 2800,
-                                   'completed': 30, 'planned': 109,
-                                   'guild': summary(weekly={**weekly_summary(), 'score': 100})}
-        self.enter_guild()
-        self.page.wait_for_function("document.getElementById('guildScoreState').textContent.includes('30 / 109')")
-        self.assertEqual(self.page.locator('#guildScoreState').inner_text(),
-                         '全团积分 100 / 2800 · 已领取 30 / 109 次 · 进行中…')
-        self.assertEqual(self.page.locator('#guildWeeklyScore').text_content(), '100')
-        self.score_jobs['first'].update(phase='verifying', completed=109)
-        self.page.wait_for_function("document.getElementById('guildScoreState').textContent.includes('正在校验')")
-        self.assertIn('109 / 109', self.page.locator('#guildScoreState').inner_text())
-        self.assertEqual(self.page.locator('#guildWeeklyScore').text_content(), '100')
-        for width in (320, 390, 1280):
+    def test_removed_score_task_is_absent_and_does_not_poll(self):
+        for width in (320, 1280):
             self.page.set_viewport_size({'width': width, 'height': 900})
-            for theme in ('dark', 'light'):
-                self.page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
-                for selector in ('#guildScoreStart', '#guildScoreState'):
-                    rect = self.page.locator(selector).bounding_box()
-                    self.assertGreaterEqual(rect['x'], 0)
-                    self.assertLessEqual(rect['x'] + rect['width'], width)
-                self.assertTrue(self.page.locator('#guildScoreState').evaluate(
-                    'element => element.scrollWidth <= element.clientWidth + 1'))
-        self.score_jobs['first'].update(state='completed', running=False, score=2800,
-                                       guild=summary(weekly={**weekly_summary(), 'score': 2800}))
-        self.page.wait_for_function("document.getElementById('guildScoreState').textContent.includes('已完成')")
-        self.assertEqual(self.page.locator('#guildWeeklyScore').text_content(), '2,800')
-
-    def test_score_layout_on_phone_and_desktop_in_both_themes(self):
-        self.enter_guild()
-        self.page.wait_for_function("!document.getElementById('guildScoreStart').disabled")
-        output = ROOT / 'previews'
-        output.mkdir(exist_ok=True)
-        for width in (320, 390, 1280):
-            self.page.set_viewport_size({'width': width, 'height': 900})
-            self.page.evaluate('setDrawer(false)')
-            self.page.wait_for_function("!document.body.classList.contains('drawer-open')")
-            for theme in ('dark', 'light'):
-                self.page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
-                self.page.locator('#guildScoreRow').scroll_into_view_if_needed()
-                self.page.evaluate("Promise.all(document.getAnimations().map(animation => animation.finished))")
-                for selector in ('#guildScoreStart', '.guild-score-warning', '#guildScoreState'):
-                    rect = self.page.locator(selector).bounding_box()
-                    self.assertGreaterEqual(rect['x'], 0)
-                    self.assertLessEqual(rect['x'] + rect['width'], width)
-                self.page.locator('.guild-manual-card').screenshot(path=str(output / f'guild-score-{width}-{theme}.png'))
-                self.page.locator('#guildScoreStart').click()
-                self.page.locator('.confirm-dialog').screenshot(path=str(output / f'guild-score-confirm-{width}-{theme}.png'))
-                self.page.locator('.confirm-cancel').click()
+            self.enter_guild()
+            self.page.evaluate("showSection('info'); showSection('guild'); switchAccount('second'); switchAccount('first')")
+            self.page.evaluate("guild => applyGuildSnapshot('first', guild)", summary(revision=20))
+            self.assertEqual(self.page.locator('#guildScoreRow, #guildScoreStart, #guildScoreState').count(), 0)
+            self.assertEqual(self.page.locator('.guild-manual-card .tname').all_text_contents(), ['团员商店'])
+            self.assertEqual(self.page.locator('#guildWeeklyScore').inner_text(), '1,200')
+        self.page.wait_for_timeout(1200)
+        self.assertFalse(any(path.startswith('/api/guild/quests') for path, _ in self.requests))
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.unexpected, [])
 
     def test_store_split_selection_manual_quantity_and_account_isolation(self):
         self.enter_guild()

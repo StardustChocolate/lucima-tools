@@ -1198,6 +1198,7 @@
   font-size: 46px;
   font-weight: 800;
   line-height: 1.16;
+  white-space: nowrap;
   text-shadow:
     0 0 5px var(--theme-transparent-82),
     0 0 12px var(--theme-transparent-55),

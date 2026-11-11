@@ -21,8 +21,6 @@ function applyGuildSnapshot(account, value) {
   const aidLabels = { hunt: '讨伐材料', element: '元素材料', catalyst: '催化剂' };
   let aidCatalog = null;
   let aidCatalogPromise = null;
-  let scorePollTimer = null;
-  const scoreWarning = '该功能非常规功能，请在明确功能含义的情况下执行，建议使用非正式账号';
   function aidOptions(session) {
     const value = session?.params?.guild_auto_aid || {};
     // A previously disabled request must stay disabled when removing its checkbox.
@@ -122,8 +120,7 @@ function applyGuildSnapshot(account, value) {
   function state(account) {
     if (!states.has(account) || states.get(account).session !== ACCOUNTS[account]) {
       states.set(account, { session: ACCOUNTS[account], refreshPending: false, savePending: false,
-        donationReserveDrafts: {},
-        scoreJob: null, scoreChecked: false, scorePending: false, scoreConfirming: false, scorePolling: false, scoreGeneration: 0, scoreError: '' });
+        donationReserveDrafts: {} });
     }
     return states.get(account);
   }
@@ -184,107 +181,6 @@ function applyGuildSnapshot(account, value) {
     }).join('');
     if ($('guildWeeklyTiers').innerHTML !== tierHTML) $('guildWeeklyTiers').innerHTML = tierHTML;
   }
-  function paintScore(session, st) {
-    const guild = session?.guild;
-    const joined = guild?.joined === true;
-    const job = st.scoreJob;
-    const running = Boolean(job?.running);
-    const target = job?.target || Math.max(0, ...(guild?.weekly?.tiers || []).map(row => Number(row.target) || 0)) || 2800;
-    const score = guild?.weekly ? guild.weekly.score ?? '—' : job?.score ?? '—';
-    const status = $('guildScoreState');
-    const count = job?.running && job.planned > 0 ? `${job.completed || 0} / ${job.planned}` : job?.completed || 0;
-    const progress = `全团积分 ${score} / ${target}${job ? ` · 已领取 ${count} 次` : ''}`;
-    status.textContent = guild?.waiting ? guild.waiting : !joined ? (guild?.joined === false ? '未加入佣兵团，暂不执行' : '等待同步全团积分')
-      : st.scoreError ? st.scoreError
-      : job?.state === 'failed' ? `${progress} · ${job.message}`
-      : `${progress}${job ? ` · ${job.state === 'completed' ? '已完成' : job.state === 'cancelled' ? '已停止'
-          : job.state === 'stopping' ? '正在停止…' : job.phase === 'verifying' ? '正在校验…' : '进行中…'}` : ''}`;
-    status.classList.toggle('error', !guild?.waiting && (Boolean(st.scoreError) || job?.state === 'failed'));
-    status.classList.toggle('ready', !guild?.waiting && job?.state === 'completed');
-    const button = $('guildScoreStart');
-    button.textContent = st.scorePending ? (running ? '处理中…' : '启动中…')
-      : job?.state === 'stopping' ? '正在停止…' : running ? '停止' : '开始';
-    button.disabled = st.scorePending || st.scoreConfirming || job?.state === 'stopping'
-      || (!running && (!joined || guild?.waiting || session?.connection?.connected === false || !st.scoreChecked || st.scorePolling));
-    $('guildScoreRow').classList.toggle('on', running);
-  }
-  function scheduleScorePoll(delay = 0) {
-    clearTimeout(scorePollTimer);
-    scorePollTimer = null;
-    if (currentSection !== 'guild' || document.hidden || !activeAcc() || activeAcc().guild?.joined !== true) return;
-    scorePollTimer = setTimeout(pollScore, delay);
-  }
-  async function pollScore() {
-    const account = activeAccount, session = ACCOUNTS[account], st = state(account);
-    if (currentSection !== 'guild' || document.hidden || !session || st.scorePolling || st.scorePending) return;
-    st.scorePolling = true;
-    const generation = st.scoreGeneration;
-    paint();
-    try {
-      const id = st.scoreJob?.id;
-      const data = await api(`/api/guild/quests?account=${encodeURIComponent(account)}${id ? `&id=${encodeURIComponent(id)}` : ''}`);
-      if (ACCOUNTS[account] !== session || st.scoreGeneration !== generation) return;
-      st.scoreJob = data.mode === 'score' ? data : null;
-      st.scoreChecked = true;
-      st.scoreError = '';
-      if (data.guild) applyGuildSnapshot(account, data.guild);
-    } catch (error) {
-      if (ACCOUNTS[account] === session) st.scoreError = `任务状态读取失败：${error.message}`;
-    } finally {
-      st.scorePolling = false;
-      if (account === activeAccount && ACCOUNTS[account] === session) {
-        paint();
-        if (st.scoreJob?.running || st.scoreError) scheduleScorePoll(st.scoreError ? 5000 : 1000);
-      }
-    }
-  }
-  async function runScore() {
-    const account = activeAccount, session = ACCOUNTS[account], st = state(account);
-    if (!session || st.scorePending || st.scoreConfirming) return;
-    if (st.scoreJob?.running) {
-      st.scoreGeneration += 1;
-      st.scorePending = true;
-      paint();
-      try {
-        st.scoreJob = await api('/api/guild/quests/cancel', { account, id: st.scoreJob.id });
-        st.scoreError = '';
-      } catch (error) {
-        st.scoreError = `停止失败：${error.message}`;
-        logTo(account, `[佣兵团] ${st.scoreError}`, 'err');
-      } finally {
-        st.scorePending = false;
-        if (account === activeAccount && ACCOUNTS[account] === session) { paint(); scheduleScorePoll(); }
-      }
-      return;
-    }
-    if (!st.scoreChecked || session.guild?.joined !== true) return;
-    st.scoreConfirming = true;
-    paint();
-    const confirmed = await openConfirmDialog({ title: '获取团积分', message: scoreWarning,
-      confirmLabel: '了解并开始', icon: 'ui-triangle-alert', tone: 'warning', returnFocus: $('guildScoreStart') });
-    st.scoreConfirming = false;
-    if (!confirmed || activeAccount !== account || ACCOUNTS[account] !== session
-        || session.guild?.joined !== true || session.connection?.connected === false) {
-      paint();
-      return;
-    }
-    clearTimeout(scorePollTimer);
-    st.scoreGeneration += 1;
-    const requestId = crypto.randomUUID();
-    st.scorePending = true;
-    st.scoreError = '';
-    st.scoreJob = { id: requestId, mode: 'score', state: 'running', running: true, completed: 0 };
-    paint();
-    try {
-      st.scoreJob = await api('/api/guild/quests/start', { account, mode: 'score', requestId });
-    } catch (error) {
-      st.scoreError = `启动结果未确认，正在查询任务状态：${error.message}`;
-      logTo(account, `[佣兵团] ${st.scoreError}`, 'err');
-    } finally {
-      st.scorePending = false;
-      if (account === activeAccount && ACCOUNTS[account] === session) { paint(); scheduleScorePoll(); }
-    }
-  }
   function paint() {
     const account = activeAccount;
     const session = ACCOUNTS[account];
@@ -306,7 +202,7 @@ function applyGuildSnapshot(account, value) {
     const refresh = $('guildRefresh');
     refresh.classList.toggle('hidden', noGuild);
     refresh.disabled = !session || !connected || loading || claiming || donating || aiding || Boolean(guild?.weekly?.running)
-      || st.scoreJob?.running || noGuild || guild?.waiting === '等待每日重登';
+      || noGuild || guild?.waiting === '等待每日重登';
     refresh.classList.toggle('loading', loading);
     refresh.setAttribute('aria-busy', String(loading));
     const toggle = $('guildAutoSignin');
@@ -385,7 +281,6 @@ function applyGuildSnapshot(account, value) {
       : aid.error ? '操作未确认，5 分钟后查询确认'
       : [requestState, supportState].filter(Boolean).join(' · ') || '请在选项中配置求助或援助范围';
     paintWeekly(session, st, guild, joined, noGuild);
-    paintScore(session, st);
   }
   async function refresh() {
     const account = activeAccount;
@@ -442,7 +337,6 @@ function applyGuildSnapshot(account, value) {
   function init() {
     if (!$('section-guild')) return;
     $('guildRefresh').addEventListener('click', refresh);
-    $('guildScoreStart').addEventListener('click', runScore);
     $('guildAutoSignin').addEventListener('change', () => saveSettings('guild_auto_signin', $('guildAutoSignin').checked));
     $('guildAutoDonate').addEventListener('change', () => saveSettings('guild_auto_donate', $('guildAutoDonate').checked));
     $('guildAutoAid').addEventListener('change', () => saveSettings('guild_auto_aid', $('guildAutoAid').checked));
@@ -485,15 +379,10 @@ function applyGuildSnapshot(account, value) {
     window.addEventListener('lucima:account-change', () => {
       restorePanels.forEach((restore) => restore?.());
       paint();
-      scheduleScorePoll();
     });
-    window.addEventListener('lucima:section-change', () => scheduleScorePoll());
-    document.addEventListener('visibilitychange', () => scheduleScorePoll());
     window.addEventListener('lucima:guild-change', event => {
       if (event.detail.account !== activeAccount) return;
       paint();
-      const st = state(activeAccount);
-      if (!st.scoreChecked && !st.scorePolling && !st.scoreError) scheduleScorePoll();
     });
     paint();
   }

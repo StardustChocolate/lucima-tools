@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import math
 import re
 import time
+from . import game_clock
 from .game_client import GameClient, GameError, GameMessage
 from .game_data import activity_open, public_int
 
@@ -265,16 +266,7 @@ class GuildService:
         self.donation_reserves = donation_reserves({"reserve": reserves})
 
     def now_ms(self):
-        now = int(time.time() * 1000)
-        # Status polling does not take the game-request lock; copy the clock
-        # before a concurrent successful login clears the old runtime.
-        runtime = dict(self.runtime)
-        if "serverTimeMs" in runtime:
-            return runtime["serverTimeMs"] + now - runtime["serverTimeSyncedAtMs"]
-        try:
-            return int(float(self.client.account_state["Utc"]) * 1000) + now - runtime["stateSyncedAtMs"]
-        except (KeyError, TypeError, ValueError, OverflowError):
-            return now
+        return game_clock.now_ms(self.client)
 
     def snapshot(self):
         state = self.client.account_state or {}
@@ -334,8 +326,9 @@ class GuildService:
         if not count:
             return 0
         self._call(rule["route"], {"ItemID": rule["item"], "Count": count})
-        after = self.donation_status()[kind]
-        if after["donated"] != before["donated"] + count:
+        own = (self.client.account_state or {}).get("PlayerGuildInfo") or {}
+        confirmed = _nonnegative_int(own.get(rule["field"]))
+        if confirmed != before["donated"] + count:
             raise GameError("佣兵团捐赠响应未确认次数，等待下次同步后确认")
         return count
 
@@ -360,12 +353,7 @@ class GuildService:
                 if after is not None and end is not None and end > after:
                     pending.pop(identifier, None)
                     (self.runtime.get("captainShopStatusSyncRetryAtMs") or {}).pop(identifier, None)
-        try:
-            stamp = int(float(result["Utc"]) * 1000)
-        except (KeyError, TypeError, ValueError, OverflowError):
-            pass
-        else:
-            self.runtime.update(serverTimeMs=stamp, serverTimeSyncedAtMs=int(time.time() * 1000))
+        game_clock.sync(self.client, result)
         if isinstance(result.get("Info"), dict):
             state["Info"] = {**(state.get("Info") or {}), **deepcopy(result["Info"])}
         guild = result.get("GuildData")

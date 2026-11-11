@@ -32,6 +32,10 @@ class CloudBuildTests(unittest.TestCase):
         entry = json.loads((self.pool / 'latest.json').read_bytes())
         index = self.read(entry['index'])
         self.assertEqual(len(index['characters']), 2)
+        self.assertEqual(index['search']['ids']['h001'], ['H001'])
+        self.assertEqual(index['search']['aliases']['甲别称'], ['H001'])
+        self.assertEqual(index['search']['aliases']['测试外号'], ['H001'])
+        self.assertEqual(index['search']['pinyin']['jiabiecheng'], ['H001'])
         hero = index['characters'][0]
         detail = self.read(hero['detail'])
         original = json.loads((self.bundle / 'characters/H001.json').read_bytes())
@@ -59,6 +63,22 @@ class CloudBuildTests(unittest.TestCase):
         self.assertNotEqual(old['characters'][0]['detail'], new['characters'][0]['detail'])
         self.assertEqual(old['characters'][1]['detail'], new['characters'][1]['detail'])
         self.assertEqual((self.pool / 'versions/data1.json').read_bytes(), first)
+
+    def test_documented_gap_preserves_source_skill_reference_but_unlisted_gap_fails(self):
+        path = 'skills/Icon_Skill_Test.png'
+        manifest = json.loads((self.pool / 'manifest.json').read_bytes())
+        del manifest['files'][path]
+        (self.pool / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+        with self.assertRaises(KeyError):
+            build(self.bundle, self.pool, self.avatars, 'gap1')
+        manifest['missingFiles'] = {path: 'Official source reference has no image'}
+        (self.pool / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+        build(self.bundle, self.pool, self.avatars, 'gap1')
+        index = self.read(json.loads((self.pool / 'latest.json').read_bytes())['index'])
+        detail = self.read(index['characters'][0]['detail'])
+        self.assertEqual(detail['character']['Skill'][0]['IconSprite'], 'Icon_Skill_Test')
+        self.assertNotIn(path, detail['media'])
+        self.assertEqual(detail['missingMedia'], manifest['missingFiles'])
 
 
 if __name__ == '__main__':

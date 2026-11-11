@@ -19,7 +19,7 @@ const _CONNECTION_BLOCKED_PATHS = new Set([
   "/api/star-source/query", "/api/star-source/refresh", "/api/star-source/buy",
   "/api/customized-equip/action", "/api/store/options", "/api/store/buy",
   "/api/sweep/options", "/api/sweep/run", "/api/activity/options", "/api/activity/run",
-  "/api/activity/progress/run",
+  "/api/activity/progress/run", "/api/activity/rewards/claim",
   "/api/activity/urgent/clear", "/api/support/favorite", "/api/support/unfavorite",
   "/api/arena/options", "/api/arena/config", "/api/dev/call",
   "/api/abyss/options", "/api/abyss/config", "/api/abyss/run", "/api/abyss/cancel", "/api/abyss/rewards",
@@ -89,6 +89,10 @@ const api = async (path, body, { signal } = {}) => {
     // The first duplicate-login response is logged and reflected in the
     // status pill. A task click after that is what shows the one-time toast.
     applyConnectionState(responseAccount, data.connection, { notify: false });
+  }
+  if (localAccount && ACCOUNTS[responseAccount] === localAccount
+      && typeof applyResourceGauges === "function") {
+    applyResourceGauges(responseAccount, data.resourceGauges || data.status);
   }
   // Every account response can advertise a new inventory version, including
   // the background poll when a task batch has not produced a log yet.
@@ -291,6 +295,7 @@ function showSection(id) {
   document.querySelectorAll(".section").forEach((s) => s.classList.toggle("active", s.id === `section-${id}`));
   document.querySelectorAll("#sideNav .nav-item").forEach((n) => n.classList.toggle("active", n.dataset.section === id));
   $("crumb").textContent = SECTION_TITLES[id] || "";
+  if (id === "info") renderResourceGauges();
   if (id === "logs") {
     logUnread = 0;
     updateLogBadge();
@@ -532,6 +537,7 @@ function rememberAccount(data) {
   const email = data.account;
   ACCOUNTS[email] = {
     status: data.status || {},
+    resourceGauges: {},
     nextClaims: data.nextClaims || {},
     arena: null,                 // 展开竞技场面板时才拉（/api/arena/options）
     toggles: data.toggles || {},
@@ -561,6 +567,7 @@ function rememberAccount(data) {
     // 仅在当前前端会话中保存的浏览状态；不写入游戏或后端配置。
     uiState: { panels: Object.create(null), optionCache: Object.create(null) },
   };
+  if (typeof applyResourceGauges === "function") applyResourceGauges(email, data.status);
 }
 
 // 用户主动登录成功后登记账号并切换过去。
@@ -816,6 +823,47 @@ const CUR_META = [
   { key: "galaxy", label: "银河契约", icon: "/assets/icons/galaxy.png" },
 ];
 
+function resourceGaugeValue(gauge, now, connected, spendable = false) {
+  if (spendable && gauge.spendable) gauge = { ...gauge.spendable, receivedAtMs: gauge.receivedAtMs };
+  const value = { current: gauge.current ?? 0, max: gauge.max };
+  const recovery = gauge.recovery;
+  if (!connected || !recovery || !(value.current < value.max)
+      || !(recovery.intervalMs > 0) || !Number.isFinite(recovery.nextInMs)) return value;
+  const elapsed = Math.max(0, now - (gauge.receivedAtMs ?? now));
+  if (elapsed >= recovery.nextInMs) {
+    value.current = Math.min(value.max,
+      value.current + 1 + Math.floor((elapsed - recovery.nextInMs) / recovery.intervalMs));
+  }
+  return value;
+}
+
+function applyResourceGauges(email, gauges) {
+  const account = ACCOUNTS[email];
+  if (!account || !gauges) return;
+  account.resourceGauges ||= {};
+  for (const { key } of GAUGE_META) {
+    const value = gauges[key], previous = account.resourceGauges[key];
+    if (!value || (previous?.sampledAtMs != null
+        && (value.sampledAtMs == null || value.sampledAtMs < previous.sampledAtMs))) continue;
+    account.resourceGauges[key] = { ...value, receivedAtMs: Date.now() };
+  }
+  if (email === activeAccount) renderResourceGauges();
+}
+
+function renderResourceGauges(status = ACCOUNTS[activeAccount]?.status || {}) {
+  const row = $("gaugeRow"), account = ACCOUNTS[activeAccount];
+  if (!row || document.hidden || currentSection !== "info") return;
+  const now = Date.now(), connected = account?.connection?.connected !== false;
+  const values = GAUGE_META.map(meta => resourceGaugeValue(
+    account?.resourceGauges?.[meta.key] || status[meta.key] || {}, now, connected));
+  const signature = JSON.stringify([activeAccount, values]);
+  if (row.dataset.values === signature) return;
+  row.dataset.values = signature;
+  row.innerHTML = GAUGE_META.map((meta, index) => gaugeHTML(meta, values[index])).join("");
+}
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden) renderResourceGauges(); });
+
 // 单个表盘：细环 + 刻度 + 进度端点光珠，中心放物品图标与数值
 function gaugeHTML({ key, label, color, icon }, g) {
   const cur = g.current ?? 0;
@@ -846,7 +894,7 @@ function renderStatus(s) {
   $("pLv").textContent = s.level != null ? `LV ${s.level}` : "—";
 
   // 能源 / 旗帜：表盘
-  $("gaugeRow").innerHTML = GAUGE_META.map((m) => gaugeHTML(m, s[m.key] || {})).join("");
+  renderResourceGauges(s);
 
   // 资源概览：左列金币/钻石/能源电池，右列三种契约
   const cur = s.currencies || {};
@@ -1087,7 +1135,7 @@ function itemCategoryOf(item) {
 function itemTileHTML(it) {
   return `
     <div class="item-tile r${it.rank || 0}" data-item-id="${it.id}" title="${it.name || it.id}">
-      <div class="item-ic"><img src="/assets/items/${it.id}.png" alt="" loading="lazy"
+      <div class="item-ic"><img src="${itemIcon(it.id)}" alt="" loading="lazy"
         onerror="this.style.display='none';this.parentNode.classList.add('noimg');this.parentNode.dataset.t=('${(it.name || it.id)}').slice(0,2)"></div>
       <div class="item-cnt">${fmtNum(it.count)}</div>
     </div>`;
@@ -1180,13 +1228,14 @@ const TASK_ICON_UI = {
   element_sweep: "element.png",
   activity_scene: "activity.png",
   store_buy: "store.png",
+  activity_store: "store.png",
   customized_equip: "customized-equip.png",
 };
 // 生成任务图标 HTML：指定的 SVG 和界面图标优先，其次物品图标，最后回退 emoji/◆。
 function taskIconHTML(id, fallback = "◆") {
   if (id === "abyss_auto") return '<svg class="ticon-svg" aria-hidden="true"><use href="#ui-mysterious-realm"></use></svg>';
   const uiIcon = TASK_ICON_UI[id];
-  const lightThemeClass = ["month_signin", "claim_mail", "hunt_sweep", "element_sweep", "activity_scene", "store_buy"].includes(id)
+  const lightThemeClass = ["month_signin", "claim_mail", "hunt_sweep", "element_sweep", "activity_scene", "store_buy", "activity_store"].includes(id)
     ? " task-icon-light-invert"
     : "";
   if (uiIcon) return `<img class="ticon-img${lightThemeClass}" src="/assets/ui/${uiIcon}" alt="" loading="lazy">`;
@@ -1402,6 +1451,7 @@ function renderNextClaims() {
   document.querySelectorAll("#autoList .auto-item.has-body").forEach((el) => {
     if (el.querySelector(".arena-row")) renderArenaList(el.dataset.id);
     if (el.dataset.id === 'activity_vote') renderVotingProgress(el.dataset.id);
+    if (el.dataset.id === 'activity_store') renderActivityStoreProgress(el.dataset.id);
   });
 }
 
@@ -1536,20 +1586,21 @@ function renderAutoPanel(toggle) {
       // 带展开页的开关：外层必须是 div 而不是 label
       // ——<button>（"选项 ▸"）不能放在 <label> 里，点它会连带触发开关。
       // 开关本体单独包一层 <label> 保持点击区。
-      if (t.ui === "arena" || t.ui === "achievement" || t.ui === "redeem_code" || t.ui === "voting") {
+      if (["arena", "achievement", "redeem_code", "voting", "activity_store"].includes(t.ui)) {
         const achievement = t.ui === "achievement";
         const redeemCode = t.ui === "redeem_code";
         const voting = t.ui === 'voting';
+        const activityStore = t.ui === 'activity_store';
         return `<div class="auto-item has-body ${on ? "on" : ""}" data-id="${t.id}" id="auto-${t.id}">
           <div class="auto-head">
             ${inner}
-            <button type="button" class="mini ${voting ? 'voting-toggle' : achievement ? "achievement-toggle" : (redeemCode ? "redeem-code-toggle" : "arena-toggle")}">选项 ▸</button>
+            <button type="button" class="mini ${activityStore ? 'activity-store-toggle' : voting ? 'voting-toggle' : achievement ? "achievement-toggle" : (redeemCode ? "redeem-code-toggle" : "arena-toggle")}">选项 ▸</button>
             <label class="switch-wrap">
               <input type="checkbox" class="switch-in" ${on ? "checked" : ""}>
               <div class="switch"></div>
             </label>
           </div>
-          <div class="auto-body hidden">${voting ? renderVotingOptions() : achievement ? renderAchievementOptions() : (redeemCode ? renderRedeemCodeOptions() : renderArenaBody(t))}</div>
+          <div class="auto-body hidden">${activityStore ? renderActivityStoreOptions() : voting ? renderVotingOptions() : achievement ? renderAchievementOptions() : (redeemCode ? renderRedeemCodeOptions() : renderArenaBody(t))}</div>
         </div>`;
       }
       if (t.wantsBuyTargets) {
@@ -1588,6 +1639,7 @@ function renderAutoPanel(toggle) {
   toggle.forEach((t) => { if (t.ui === "achievement") bindAchievementOptions(t.id); });
   toggle.forEach((t) => { if (t.ui === "redeem_code") bindRedeemCodeOptions(t.id); });
   toggle.forEach((t) => { if (t.ui === 'voting') bindVotingOptions(t.id); });
+  toggle.forEach((t) => { if (t.ui === 'activity_store') bindActivityStoreOptions(t.id); });
   toggle.forEach((t) => { if (t.wantsBuyTargets) bindShopFreeOptions(t.id); });
   renderNextClaims();
 }
@@ -1853,13 +1905,15 @@ function renderArenaBody(t) {
 }
 
 // 单个 NPC 行的档期文案（沿用自动任务面板的时间格式：绝对时刻在前、倒计时在括号内）
-function arenaWhen(npc) {
+function arenaWhen(npc, flags = null) {
   if (npc.waiting) return { txt: npc.waiting, cls: "" };
   if (npc.waitingForLogin) return { txt: "等待登录同步刷新", cls: "" };
   const gate = Math.max(npc.nextMs || 0, npc.retryMs || 0);
-  if (!gate) return { txt: "可挑战", cls: "ready" };
   const diff = gate - Date.now();
-  if (diff <= 0) return { txt: "可挑战", cls: "ready" };
+  if (diff <= 0) {
+    const waiting = flags == null ? npc.waitingForFlags : flags < 1;
+    return waiting ? { txt: "等待旗帜恢复", cls: "" } : { txt: "可挑战", cls: "ready" };
+  }
   const label = npc.retryMs && npc.retryMs >= (npc.nextMs || 0) ? "重试" : "下次挑战";
   return { txt: `${label}: ${fmtClock(gate)} (${fmtRemain(diff)})`, cls: "" };
 }
@@ -1870,9 +1924,11 @@ function renderArenaList(taskId) {
   const a = activeAcc();
   const st = (a && a.arena) || null;
   if (!st) return;
+  const flags = resourceGaugeValue(a.resourceGauges?.flag || a.status?.flag || {},
+    Date.now(), a.connection?.connected !== false, true).current;
   box.innerHTML = st.npcs
     .map((n) => {
-      const w = arenaWhen(n);
+      const w = arenaWhen(n, flags);
       return `<label class="arena-row ${n.picked ? "on" : ""}" data-n="${n.n}">
         <input type="checkbox" class="arena-pick" ${n.picked ? "checked" : ""}>
         ${checkboxUIHTML()}
@@ -2031,7 +2087,7 @@ function toggleParams(ids) {
 async function runToggleTasks(ids, prefix = "自动·", quiet = false) {
   if (!ids || !ids.length) return;
   // 竞技场和兑换码由后端逐项写日志，运行期间持续拉取已完成的结果。
-  const streamsResults = ids.includes("arena_npc") || ids.includes("redeem_code") || ids.includes('activity_vote');
+  const streamsResults = ids.includes("arena_npc") || ids.includes("redeem_code") || ids.includes('activity_vote') || ids.includes('activity_store');
   const liveLogTimer = streamsResults ? setInterval(pollAutoLogs, 700) : null;
   try {
     const { results } = await api("/api/tasks/auto", { taskIds: ids, params: toggleParams(ids) });
@@ -2172,10 +2228,10 @@ function renderShopWidget(t) {
           <div class="shop-row">
             <span class="shop-lbl">刷新次数</span>
             <div class="count-box">
-              <button type="button" class="count-btn" data-d="-1">−</button>
+              <button type="button" class="count-btn" data-d="-1" aria-label="减少刷新次数"><svg aria-hidden="true"><use href="#ui-minus"></use></svg></button>
               <input type="text" inputmode="numeric" class="count-in shop-count" value="${cfg.count}">
               <span class="count-unit">次</span>
-              <button type="button" class="count-btn" data-d="1">+</button>
+              <button type="button" class="count-btn" data-d="1" aria-label="增加刷新次数"><svg aria-hidden="true"><use href="#ui-plus"></use></svg></button>
             </div>
           </div>
           <div class="shop-row col">
@@ -2991,9 +3047,9 @@ function renderStarSourceShopWidget(task) {
     + '<button type="button" class="mini shop-toggle">选项 ▸</button></div>'
     + '<div class="shop-body hidden"><div class="shop-grid"><div class="shop-left">'
     + '<div class="shop-row"><span class="shop-lbl">刷新次数</span><div class="count-box">'
-    + '<button type="button" class="count-btn" data-d="-1">−</button>'
+    + '<button type="button" class="count-btn" data-d="-1" aria-label="减少刷新次数"><svg aria-hidden="true"><use href="#ui-minus"></use></svg></button>'
     + '<input type="text" inputmode="numeric" class="count-in star-source-count" value="' + cfg.count + '">'
-    + '<span class="count-unit">次</span><button type="button" class="count-btn" data-d="1">+</button>'
+    + '<span class="count-unit">次</span><button type="button" class="count-btn" data-d="1" aria-label="增加刷新次数"><svg aria-hidden="true"><use href="#ui-plus"></use></svg></button>'
     + '</div></div><div class="shop-row col"><span class="shop-lbl">筛选方案</span>'
     + dropdownHTML("star-source-scheme", options, cfg.schemeId, "暂无筛选方案")
     + '</div><button type="button" class="btn primary star-source-start">▶ 开始刷新</button></div>'
@@ -3783,10 +3839,10 @@ function renderSweepWidget(t) {
       <div class="shop-row">
         <span class="shop-lbl">扫荡次数</span>
         <div class="count-box">
-          <button type="button" class="count-btn" data-d="-1">−</button>
+          <button type="button" class="count-btn" data-d="-1" aria-label="减少扫荡次数"><svg aria-hidden="true"><use href="#ui-minus"></use></svg></button>
           <input type="text" inputmode="numeric" class="count-in sweep-count" value="${cfg.count}">
           <span class="count-unit">次</span>
-          <button type="button" class="count-btn" data-d="1">+</button>
+          <button type="button" class="count-btn" data-d="1" aria-label="增加扫荡次数"><svg aria-hidden="true"><use href="#ui-plus"></use></svg></button>
         </div>
       </div>
       <label class="quick-ticket-toggle target-score-toggle sweep-quick-row">
@@ -4616,7 +4672,7 @@ function getActCfg() {
       : legacyUrgent;
     return {
       count: v.count || 5, sceneId: v.sceneId || "", teamId: v.teamId || "",
-      mode: v.mode === "progress" ? "progress" : "sweep", family: v.family || "",
+      mode: ["progress", "rewards"].includes(v.mode) ? v.mode : "sweep", family: v.family || "",
       supportCuid: v.supportCuid || "", quick: v.quick !== false,
       urgentEnabled: v.urgentEnabled !== false,
       urgentSpecializations,
@@ -4649,9 +4705,20 @@ function renderActivityWidget(t) {
     </div>
     <div class="shop-body hidden">
       <div class="act-option-head"><div class="b-tabs act-tabs" role="tablist" aria-label="活动关卡模式">
-        <button type="button" class="b-tab${cfg.mode !== "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode !== "progress"}" data-act-mode="sweep">扫荡</button>
+        <button type="button" class="b-tab${cfg.mode === "sweep" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "sweep"}" data-act-mode="sweep">扫荡</button>
         <button type="button" class="b-tab${cfg.mode === "progress" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "progress"}" data-act-mode="progress">自动推关</button>
+        <button type="button" class="b-tab${cfg.mode === "rewards" ? " active" : ""}" role="tab" aria-selected="${cfg.mode === "rewards"}" data-act-mode="rewards">奖励领取</button>
       </div><button type="button" class="act-options-refresh" title="重新加载活动关卡选项" aria-label="重新加载活动关卡选项"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ui-rotate-cw"></use></svg></button></div>
+      <div class="act-rewards-only act-reward-actions${cfg.mode === "rewards" ? "" : " hidden"}">
+        <div class="shop-row col">
+          <button type="button" class="btn primary" data-act-reward="story">领取故事奖励</button>
+          <span class="act-reward-count" data-act-reward-count="story">加载中…</span>
+        </div>
+        <div class="shop-row col">
+          <button type="button" class="btn primary" data-act-reward="achievement">领取成就奖励</button>
+          <span class="act-reward-count" data-act-reward-count="achievement">加载中…</span>
+        </div>
+      </div>
       <div class="shop-row col act-progress-only${cfg.mode === "progress" ? "" : " hidden"}">
         <span class="shop-lbl">活动</span>
         <div class="dd-slot act-family-slot"><div class="dd-loading">加载中…</div></div>
@@ -4674,10 +4741,10 @@ function renderActivityWidget(t) {
       <div class="shop-row">
         <span class="shop-lbl">扫荡次数</span>
         <div class="count-box">
-          <button type="button" class="count-btn" data-d="-1">−</button>
+          <button type="button" class="count-btn" data-d="-1" aria-label="减少扫荡次数"><svg aria-hidden="true"><use href="#ui-minus"></use></svg></button>
           <input type="text" inputmode="numeric" class="count-in act-count" value="${cfg.count}">
           <span class="count-unit">次</span>
-          <button type="button" class="count-btn" data-d="1">+</button>
+          <button type="button" class="count-btn" data-d="1" aria-label="增加扫荡次数"><svg aria-hidden="true"><use href="#ui-plus"></use></svg></button>
         </div>
       </div>
       <label class="quick-ticket-toggle target-score-toggle act-quick-row">
@@ -4716,8 +4783,8 @@ function renderActivityWidget(t) {
           </div>
         </div>
       </div>
-      <button type="button" class="btn primary act-start">▶ 开始扫荡</button>
-      <div class="sweep-summary" id="actSummary-${t.id}"></div>
+      <button type="button" class="btn primary act-start act-battle-only">▶ 开始扫荡</button>
+      <div class="sweep-summary act-battle-only" id="actSummary-${t.id}"></div>
       <div class="act-progress-status hidden" aria-live="polite"></div>
       <div class="act-battle-progress abyss-battle-progress hidden" aria-label="活动战斗进度"></div>
     </div>
@@ -4728,19 +4795,26 @@ const actProgressRunning = {};
 const actProgressRequests = {};
 const actProgressState = {};
 const actProgressStopping = {};
+const actRewarding = {};
+const actRewardState = {};
 
 function updateActivityMode(id) {
   const root = $(`act-${id}`);
   if (!root) return;
   const running = !!actProgressRunning[activeAccount];
-  const progress = running || getActCfg().mode === "progress";
-  root.querySelectorAll(".act-sweep-only").forEach((node) => node.classList.toggle("hidden", progress));
+  const mode = running ? "progress" : actRunning[activeAccount] ? "sweep" : getActCfg().mode;
+  const progress = mode === "progress";
+  const rewards = mode === "rewards";
+  const busy = !!(running || actRunning[activeAccount] || actRewarding[activeAccount]);
+  root.querySelectorAll(".act-sweep-only").forEach((node) => node.classList.toggle("hidden", mode !== "sweep"));
   root.querySelectorAll(".act-progress-only").forEach((node) => node.classList.toggle("hidden", !progress));
+  root.querySelectorAll(".act-battle-only").forEach((node) => node.classList.toggle("hidden", rewards));
+  root.querySelectorAll(".act-rewards-only").forEach((node) => node.classList.toggle("hidden", !rewards));
   root.querySelectorAll("[data-act-mode]").forEach((button) => {
-    const selected = button.dataset.actMode === (progress ? "progress" : "sweep");
+    const selected = button.dataset.actMode === mode;
     button.classList.toggle("active", selected);
     button.setAttribute("aria-selected", String(selected));
-    button.disabled = !!(running || actRunning[activeAccount]);
+    button.disabled = busy;
   });
   const button = root.querySelector(".act-start");
   if (progress) {
@@ -4752,7 +4826,15 @@ function updateActivityMode(id) {
     button.disabled = false;
     button.classList.remove("task-stop-button");
   }
-  root.querySelector(".act-options-refresh").disabled = !!(running || actRunning[activeAccount] || root.dataset.loading === "1");
+  root.querySelector(".act-options-refresh").disabled = busy || root.dataset.loading === "1" || root.dataset.rewardsLoading === "1";
+  root.querySelectorAll("[data-act-reward]").forEach((button) => {
+    const kind = button.dataset.actReward;
+    button.disabled = busy || root.dataset.rewardsLoading === "1";
+    button.textContent = actRewarding[activeAccount] === kind ? "领取中…" : kind === "story" ? "领取故事奖励" : "领取成就奖励";
+    const state = actRewardState[activeAccount]?.[kind];
+    root.querySelector(`[data-act-reward-count="${kind}"]`).textContent = state
+      ? (state.claimable ? `${state.claimable} 项可领取` : "暂无可领取奖励") : "暂未获取状态";
+  });
   root.querySelectorAll(".dd-slot, .act-support-slot").forEach((node) => {
     node.inert = !!(running || actRunning[activeAccount]);
   });
@@ -4772,6 +4854,45 @@ function updateActivityMode(id) {
     host._battleHTML = html;
   }
   host.classList.toggle("hidden", !battle);
+}
+
+async function loadActivityRewards(id) {
+  const root = $(`act-${id}`);
+  const email = activeAccount;
+  if (!root || root.dataset.rewardsLoading === "1") return;
+  root.dataset.rewardsLoading = "1";
+  const refresh = root.querySelector(".act-options-refresh");
+  refresh.classList.add("loading");
+  updateActivityMode(id);
+  try {
+    const state = await api(`/api/activity/rewards/options?account=${encodeURIComponent(email)}`);
+    actRewardState[email] = state;
+  } catch (error) {
+    logTo(email, `加载活动奖励失败：${error.message}`, "err");
+  } finally {
+    delete root.dataset.rewardsLoading;
+    refresh.classList.remove("loading");
+    if (activeAccount === email && root.isConnected) updateActivityMode(id);
+  }
+}
+
+async function claimActivityRewards(id, kind) {
+  const email = activeAccount;
+  if (!email || actRewarding[email] || actRunning[email] || actProgressRunning[email]) return;
+  actRewarding[email] = kind;
+  updateActivityMode(id);
+  try {
+    const result = await api("/api/activity/rewards/claim", { account: email, kind });
+    if (result.status) applyStatus(email, result.status, result.nextClaims);
+    if (result.rewards) actRewardState[email] = result.rewards;
+    logResult({ ...result, name: kind === "story" ? "活动故事奖励" : "活动成就奖励" }, "", email);
+  } catch (error) {
+    logTo(email, `活动奖励领取失败：${error.message}`, "err");
+  } finally {
+    delete actRewarding[email];
+    if (activeAccount === email) updateActivityMode(id);
+    refreshAccountStatus(email);
+  }
 }
 
 function applyActivityProgress(email, snapshot) {
@@ -4855,19 +4976,31 @@ async function bindActivityWidget(id) {
   const countRow = root.querySelector(".act-count").closest(".shop-row");
   [sceneRow, countRow, root.querySelector(".act-quick-row"), root.querySelector(".act-urgent-control")]
     .forEach((node) => node.classList.add("act-sweep-only"));
+  [root.querySelector(".act-team-slot"), root.querySelector(".act-support-slot")]
+    .forEach((node) => node.closest(".shop-row").classList.add("act-battle-only"));
   root.querySelectorAll("[data-act-mode]").forEach((button) => button.addEventListener("click", () => {
-    if (actRunning[activeAccount] || actProgressRunning[activeAccount]) return;
+    if (actRunning[activeAccount] || actProgressRunning[activeAccount] || actRewarding[activeAccount]) return;
     setActCfg({ mode: button.dataset.actMode });
     updateActivityMode(id);
+    if (getActCfg().mode === "rewards") void loadActivityRewards(id);
+    else if (!root.dataset.loaded) void loadActivityOptions(id);
   }));
   updateActivityMode(id);
   bindAccountPanel(toggle, body, `manual:${id}`, { onOpen: async () => {
-    if (!root.dataset.loaded) await loadActivityOptions(id);
+    if (getActCfg().mode === "rewards") await loadActivityRewards(id);
+    else if (!root.dataset.loaded) await loadActivityOptions(id);
   }, onRestore: async () => {
-    if (accountOptionCache(`activity:${id}`) && !root.dataset.loaded) await loadActivityOptions(id);
+    if (getActCfg().mode === "rewards") await loadActivityRewards(id);
+    else if (accountOptionCache(`activity:${id}`) && !root.dataset.loaded) await loadActivityOptions(id);
   }});
 
-  root.querySelector(".act-options-refresh").addEventListener("click", () => loadActivityOptions(id, true));
+  root.querySelector(".act-options-refresh").addEventListener("click", () => {
+    if (getActCfg().mode === "rewards") void loadActivityRewards(id);
+    else void loadActivityOptions(id, true);
+  });
+  root.querySelectorAll("[data-act-reward]").forEach((button) => button.addEventListener("click", () => {
+    void claimActivityRewards(id, button.dataset.actReward);
+  }));
 
   const cntIn = root.querySelector(".act-count");
   cntIn.addEventListener("input", () => { cntIn.value = cntIn.value.replace(/[^0-9]/g, "").slice(0, 3); });
@@ -4993,8 +5126,8 @@ async function loadActivityOptions(id, refresh = false) {
     return false;
   } finally {
     delete root.dataset.loading;
-    refreshButton.disabled = false;
     refreshButton.classList.remove("loading");
+    if (activeAccount === email && root.isConnected) updateActivityMode(id);
   }
 }
 
@@ -5195,7 +5328,7 @@ function setStoreCfg(patch) {
 }
 // 货架数据按账号缓存（展开时拉一次，切 tab 不重复请求）
 const STORE_DATA = {};   // email -> {stores, wallet}
-const itemIcon = (sid) => `/assets/items/${sid}.png`;
+const itemIcon = (sid) => `/assets/${/^E\d{4}$/.test(String(sid)) ? 'equip' : 'items'}/${sid}.png`;
 const fmtNum2 = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
 const STORE_RESET_LABEL = { Day: "每日", Week: "每周", Month: "每月", Hour: "每小时" };
 
@@ -5324,10 +5457,10 @@ function renderStorePanes(id) {
     // 可多次购买的档给次数步进器，默认买满剩余额度；限购 1 次的不给（没得选）
     const q = picks[g.id];
     const multi = g.limit == null || g.limit > 1;
-    const stepper = multi ? `<div class="b-step" data-gid="${g.id}">
-        <button type="button" data-d="-1">−</button>
-        <span class="v">${q || storeDefaultQty(g)}</span>
-        <button type="button" data-d="1">+</button>
+    const stepper = multi ? `<div class="b-step count-box" data-gid="${g.id}">
+        <button type="button" class="count-btn" data-d="-1" aria-label="减少购买数量"><svg aria-hidden="true"><use href="#ui-minus"></use></svg></button>
+        <span class="v count-value">${q || storeDefaultQty(g)}</span>
+        <button type="button" class="count-btn" data-d="1" aria-label="增加购买数量"><svg aria-hidden="true"><use href="#ui-plus"></use></svg></button>
       </div>` : (anyStep ? `<div class="b-step-gap"></div>` : "");
     return `<div class="b-card ${q ? "sel" : ""}" data-gid="${g.id}" title="${g.name}">
       <span class="b-pick">✓</span>${art}
@@ -5427,6 +5560,7 @@ async function runStoreBuy(id) {
 function applyStatus(email, status, nextClaims, arena, connection, redeemCodes) {
   const a = ACCOUNTS[email]; if (!a) return;
   if (connection) applyConnectionState(email, connection);
+  if (status) applyResourceGauges(email, status);
   if (status) { a.status = status; a.name = status.name; a.avatar = status.avatar; }
   if (nextClaims) a.nextClaims = nextClaims;
   // 竞技场档期（/api/status 带回）。直接采用后端值：勾选存在后端 params 里、
@@ -5459,7 +5593,7 @@ async function refreshStatus(quiet = false) {
   } catch (e) { if (!quiet) log(`刷新失败：${e.message}`, "err"); }
 }
 
-// 手动刷新按钮：重新登录拉全量（唯一能拿到游戏客户端内变化 + 体力恢复的权威数据）。
+// 手动刷新按钮：重新登录拉取权威全量；自然恢复显示另由服务器计时推算。
 // 只在用户主动点按钮时才重登，不做自动轮询。
 async function manualRefresh() {
   const email = activeAccount;
@@ -5576,6 +5710,28 @@ function updateAccountSwitcher(email) {
   updateAccountConnectionIndicator(email);
 }
 
+// 账号列表按视口和侧栏的裁剪范围展开，极矮窗口整栏滚动时也能完整操作。
+function positionAccountPopover() {
+  const button = $("accCurrentBtn"), menu = $("accPop"), sidebar = $("sidebar");
+  if (!button || !menu || !sidebar || menu.classList.contains("hidden")) return;
+  const viewport = window.visualViewport;
+  const bounds = sidebar.getBoundingClientRect();
+  const top = Math.max(viewport?.offsetTop || 0, bounds.top + sidebar.clientTop) + 8;
+  const bottom = Math.min((viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight),
+    bounds.top + sidebar.clientTop + sidebar.clientHeight) - 8;
+  const rect = button.getBoundingClientRect();
+  if (rect.bottom <= top || rect.top >= bottom) {
+    menu.classList.add("hidden");
+    return;
+  }
+  const above = Math.max(0, rect.top - top - 8);
+  const below = Math.max(0, bottom - rect.bottom - 8);
+  const upward = above >= below;
+  menu.style.top = upward ? "auto" : "calc(100% + 8px)";
+  menu.style.bottom = upward ? "calc(100% + 8px)" : "auto";
+  menu.style.maxHeight = `${Math.floor(Math.min(360, upward ? above : below))}px`;
+}
+
 // 渲染左下角账号切换器（在线账号列表 + 添加账号）。
 function renderAccountSwitcher() {
   const box = $("accSwitcher");
@@ -5613,7 +5769,11 @@ function renderAccountSwitcher() {
   box.innerHTML = html;
   emails.forEach(updateAccountConnectionIndicator);
 
-  $("accCurrentBtn").onclick = (e) => { e.stopPropagation(); $("accPop").classList.toggle("hidden"); };
+  $("accCurrentBtn").onclick = (e) => {
+    e.stopPropagation();
+    $("accPop").classList.toggle("hidden");
+    positionAccountPopover();
+  };
   box.querySelectorAll(".acc-item").forEach((el) => {
     el.addEventListener("click", (e) => {
       if (e.target.closest(".acc-x")) return;
@@ -5731,6 +5891,8 @@ function ensureAutoLogPoll() {
   if (!countdownTimer) countdownTimer = setInterval(renderNextClaims, 30 * 1000);
 }
 async function pollAutoLogs() {
+  // Reuse the existing 1s tick; resource recovery never sends a game request.
+  renderResourceGauges();
   if (autoLogPollPending) return;
   autoLogPollPending = true;
   const emails = Object.keys(ACCOUNTS);
@@ -5746,6 +5908,7 @@ async function pollAutoLogs() {
         if (ACCOUNTS[email] !== a) continue;
         if (abyssRequest === abyssRequests[email]) applyAbyssBattle(email, data.abyssBattle);
         if (activityRequest === actProgressRequests[email]) applyActivityProgress(email, data.activityProgress);
+        if (data.gacha) applyGachaJob(email, data.gacha);
         const { entries, logSeq } = data;
         const snapshotChanged = applyStateSyncMeta(email, data);
         if (entries && entries.length) {
@@ -5929,9 +6092,13 @@ $("loginThemeBtn").onclick = toggleMode;
 function setDrawer(open) {
   $("sidebar").classList.toggle("collapsed", !open);
   $("sidebarBackdrop").classList.toggle("show", open);
+  if (!open) $("accPop")?.classList.add("hidden");
 }
 $("menuBtn").onclick = () => setDrawer($("sidebar").classList.contains("collapsed"));
 $("sidebarBackdrop").onclick = () => setDrawer(false);
+$("sidebar").addEventListener("scroll", positionAccountPopover, { passive: true });
+window.addEventListener("resize", positionAccountPopover);
+window.visualViewport?.addEventListener("resize", positionAccountPopover);
 // 清空当前账号日志，同时更新完整日志页和底部日志抽屉。
 $("clearLogBtn").onclick = () => {
   const a = activeAcc();
@@ -6673,7 +6840,13 @@ async function saveDevLog() {
   try {
     let result;
     if (runtimePlatform === "android" && window.LucimaFiles?.saveDeveloperLogs) {
-      const raw = window.LucimaFiles.saveDeveloperLogs();
+      let gameDataVersion = "未知";
+      try {
+        const resources = await api("/api/resources/status");
+        gameDataVersion = String(resources.version || "").replace(/^catalog_/, "")
+          || (resources.bundled ? "内置数据" : "未知");
+      } catch { /* 数据版本无法读取时仍允许导出日志 */ }
+      const raw = window.LucimaFiles.saveDeveloperLogs(gameDataVersion);
       result = typeof raw === "string" ? JSON.parse(raw) : raw;
       if (!result?.ok) throw new Error(result?.detail || "保存开发者日志失败");
     } else {
@@ -7329,6 +7502,8 @@ const ENCYCLOPEDIA_STATE = {
   index: null,
   ui: null,
   version: "",
+  search: null,
+  searchQuery: "",
   pendingCatalog: null,
   filters: { element: [], job: [], star: [], statuses: [] },
   statusDraft: null,
@@ -7363,6 +7538,7 @@ const ENCYCLOPEDIA_STATE = {
 let encyclopediaIndexPending = null;
 let encyclopediaCheckPending = null;
 let encyclopediaCheckTimer = null;
+let encyclopediaSearchTimer = null;
 
 function encyclopediaEscape(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -7385,15 +7561,6 @@ function ensureEncyclopediaSpineRuntime() {
   return encyclopediaRuntimePromise;
 }
 
-function updateEncyclopediaSyncButton() {
-  const button = $("encyclopediaSync");
-  if (!button) return;
-  button.disabled = !!encyclopediaCheckPending;
-  button.title = ENCYCLOPEDIA_STATE.version
-    ? `图鉴版本：${ENCYCLOPEDIA_STATE.version}，点击检查更新` : "检查图鉴更新";
-  button.querySelector("span").textContent = encyclopediaCheckPending ? "检查中…" : "同步";
-}
-
 function applyEncyclopediaCatalog(catalog) {
   if (!catalog?.available || !Array.isArray(catalog.characters)) return false;
   if (ENCYCLOPEDIA_STATE.activeId || ENCYCLOPEDIA_STATE.savingImage || !$("encyclopediaStatusModal")?.classList.contains("hidden")) {
@@ -7404,11 +7571,11 @@ function applyEncyclopediaCatalog(catalog) {
   ENCYCLOPEDIA_STATE.version = catalog.version;
   ENCYCLOPEDIA_STATE.ui = catalog.ui;
   ENCYCLOPEDIA_STATE.index = catalog.characters;
+  ENCYCLOPEDIA_STATE.search = catalog.search || null;
   ENCYCLOPEDIA_STATE.pendingCatalog = null;
   const valid = new Set([...encyclopediaStatusOptions().buff, ...encyclopediaStatusOptions().debuff].map(item => item.id));
   ENCYCLOPEDIA_STATE.filters.statuses = ENCYCLOPEDIA_STATE.filters.statuses.filter(id => valid.has(id));
   updateEncyclopediaStatusFilterButton();
-  updateEncyclopediaSyncButton();
   if (ENCYCLOPEDIA_STATE.initialized) renderEncyclopediaGrid();
   return changed;
 }
@@ -7417,9 +7584,7 @@ async function checkEncyclopediaUpdate(force = false) {
   if (encyclopediaCheckPending) return encyclopediaCheckPending;
   encyclopediaCheckPending = (async () => {
     try {
-      const previous = ENCYCLOPEDIA_STATE.pendingCatalog?.version || ENCYCLOPEDIA_STATE.version;
       const catalog = await window.LucimaEncyclopediaData.check(force);
-      const changed = catalog.available && previous && previous !== catalog.version;
       if (catalog.version !== ENCYCLOPEDIA_STATE.version || ENCYCLOPEDIA_STATE.pendingCatalog) applyEncyclopediaCatalog(catalog);
       window.clearTimeout(encyclopediaCheckTimer);
       encyclopediaCheckTimer = window.setTimeout(() => {
@@ -7428,37 +7593,32 @@ async function checkEncyclopediaUpdate(force = false) {
           void checkEncyclopediaUpdate().catch(() => {});
       }, Math.max(5000, (catalog.checkAfter || 3600) * 1000));
       if (!catalog.available) throw new Error(catalog.error || "暂时无法获取图鉴资料，请联网后重试");
-      if (force && catalog.error) showMessageToast(catalog.error, "err");
-      else if (changed) showMessageToast("图鉴资料已更新");
-      else if (force) showMessageToast("图鉴资料已是最新");
       return catalog;
     } catch (error) {
       if (!ENCYCLOPEDIA_STATE.index) {
         const empty = $("encyclopediaEmpty");
         if (empty) { empty.textContent = error.message; empty.classList.remove("hidden"); }
       }
-      if (force) showMessageToast(error.message || "检查图鉴更新失败", "err");
       throw error;
-    } finally { encyclopediaCheckPending = null; updateEncyclopediaSyncButton(); }
+    } finally { encyclopediaCheckPending = null; }
   })();
-  updateEncyclopediaSyncButton();
   return encyclopediaCheckPending;
 }
 
-async function loadEncyclopediaIndex() {
+async function loadEncyclopediaIndex({ force = false } = {}) {
   if (ENCYCLOPEDIA_STATE.index && ENCYCLOPEDIA_STATE.ui) {
-    void checkEncyclopediaUpdate().catch(() => {});
+    void checkEncyclopediaUpdate(force).catch(() => {});
     return ENCYCLOPEDIA_STATE.index;
   }
   if (!encyclopediaIndexPending) encyclopediaIndexPending = (async () => {
     const cached = await window.LucimaEncyclopediaData.catalog();
     if (cached.available) {
       applyEncyclopediaCatalog(cached);
-      void checkEncyclopediaUpdate().catch(() => {});
+      void checkEncyclopediaUpdate(force).catch(() => {});
     } else {
       const empty = $("encyclopediaEmpty");
       if (empty) { empty.textContent = "正在获取图鉴资料…"; empty.classList.remove("hidden"); }
-      const catalog = await checkEncyclopediaUpdate();
+      const catalog = await checkEncyclopediaUpdate(force);
       applyEncyclopediaCatalog(catalog);
     }
     return ENCYCLOPEDIA_STATE.index;
@@ -7484,6 +7644,50 @@ function characterMatchesFilters(entry, filters) {
     && characterMatchesFilter(entry.job, filters.job)
     && (!filters.star || characterMatchesFilter(String(entry.star), filters.star))
     && (!filters.statuses.length || (entry.statuses || []).some((id) => filters.statuses.includes(id)));
+}
+
+function normalizeEncyclopediaSearch(value) {
+  return String(value ?? "").normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+}
+
+function encyclopediaSearchMatches(entry, query, candidates) {
+  if (!query) return true;
+  if (candidates) return candidates.has(entry.id);
+  const terms = [entry.id, entry.name, entry.nameEn, entry.nameE7, ...(entry.aliases || [])];
+  return terms.some((term) => normalizeEncyclopediaSearch(term).includes(query));
+}
+
+function encyclopediaSearchCandidates(query) {
+  const search = ENCYCLOPEDIA_STATE.search;
+  if (!search || !["ids", "names", "aliases", "pinyin"].every((key) => search[key] && typeof search[key] === "object")) return null;
+  const candidates = new Set();
+  const pinyinQuery = query.replace(/\s+/gu, "");
+  for (const [kind, table] of Object.entries(search)) {
+    const needle = kind === "pinyin" ? pinyinQuery : query;
+    if (!needle) continue;
+    for (const [term, ids] of Object.entries(table)) {
+      if (term.includes(needle)) ids.forEach((id) => candidates.add(id));
+    }
+  }
+  return candidates;
+}
+
+function bindEncyclopediaSearch() {
+  const searchInput = $("encyclopediaSearchInput"), searchClear = $("encyclopediaSearchClear");
+  searchInput?.addEventListener("input", () => {
+    ENCYCLOPEDIA_STATE.searchQuery = searchInput.value;
+    if (searchClear) searchClear.hidden = !searchInput.value;
+    window.clearTimeout(encyclopediaSearchTimer);
+    encyclopediaSearchTimer = window.setTimeout(renderEncyclopediaGrid, 120);
+  });
+  searchClear?.addEventListener("click", () => {
+    window.clearTimeout(encyclopediaSearchTimer);
+    if (searchInput) searchInput.value = "";
+    ENCYCLOPEDIA_STATE.searchQuery = "";
+    searchClear.hidden = true;
+    renderEncyclopediaGrid();
+    searchInput?.focus();
+  });
 }
 
 function characterStatusIconsHTML(statuses) {
@@ -7612,7 +7816,10 @@ function applyEncyclopediaStatusFilter() {
 }
 
 function encyclopediaFilteredIndex() {
-  return (ENCYCLOPEDIA_STATE.index || []).filter((entry) => characterMatchesFilters(entry, ENCYCLOPEDIA_STATE.filters));
+  const query = normalizeEncyclopediaSearch(ENCYCLOPEDIA_STATE.searchQuery);
+  const candidates = query ? encyclopediaSearchCandidates(query) : null;
+  return (ENCYCLOPEDIA_STATE.index || []).filter((entry) => encyclopediaSearchMatches(entry, query, candidates)
+    && characterMatchesFilters(entry, ENCYCLOPEDIA_STATE.filters));
 }
 
 function renderEncyclopediaGrid() {
@@ -7912,6 +8119,7 @@ function renderEncyclopediaCard(entry, detail) {
     data: detail,
     translations: ENCYCLOPEDIA_STATE.ui || {},
     staticMode: ENCYCLOPEDIA_STATE.mode === "static",
+    version: ENCYCLOPEDIA_STATE.version,
   });
   initEncyclopediaArchiveViewport(body.querySelector(".encyclopedia-archive-viewport"));
   encyclopediaArchiveViewState().renderer = renderer;
@@ -8023,7 +8231,8 @@ async function saveEncyclopediaImage() {
   try {
     const [data, config] = await Promise.all([loadEncyclopediaDetail(entry), loadEncyclopediaResourceConfig(entry)]);
     const { pngBase64 } = await window.LucimaEncyclopediaExport.render({
-      entry, data, translations: ENCYCLOPEDIA_STATE.ui || {}, config, fetchResource: encyclopediaFetch,
+      entry, data, translations: ENCYCLOPEDIA_STATE.ui || {}, config,
+      version: ENCYCLOPEDIA_STATE.version, fetchResource: encyclopediaFetch,
     });
     const name = data.NAME || entry.name || entry.id;
     const result = runtimePlatform === "android"
@@ -8094,13 +8303,14 @@ function bindCharacterStatusFilter() {
 async function initEncyclopedia() {
   if (ENCYCLOPEDIA_STATE.initialized) {
     if (ENCYCLOPEDIA_STATE.pendingCatalog && !ENCYCLOPEDIA_STATE.activeId) applyEncyclopediaCatalog(ENCYCLOPEDIA_STATE.pendingCatalog);
-    void loadEncyclopediaIndex().then(renderEncyclopediaGrid).catch(() => {});
+    void loadEncyclopediaIndex({ force: true }).then(renderEncyclopediaGrid).catch(() => {});
     return;
   }
   ENCYCLOPEDIA_STATE.initialized = true;
   ENCYCLOPEDIA_STATE.mode = frontendStorageGet("encyclopedia_portrait_mode") === "dynamic" ? "dynamic" : "static";
   renderEncyclopediaFilters();
   setEncyclopediaMode(ENCYCLOPEDIA_STATE.mode, false);
+  bindEncyclopediaSearch();
   for (const [type, id] of [["element", "encyclopediaElementFilters"], ["job", "encyclopediaJobFilters"], ["star", "encyclopediaStarFilters"]]) {
     $(id)?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-encyclopedia-filter]");
@@ -8122,7 +8332,6 @@ async function initEncyclopedia() {
   });
   document.querySelectorAll("[data-encyclopedia-zoom]").forEach((button) => button.addEventListener("click", () => setEncyclopediaZoom(button.dataset.encyclopediaZoom)));
   document.querySelectorAll("[data-encyclopedia-mode]").forEach((button) => button.addEventListener("click", () => setEncyclopediaMode(button.dataset.encyclopediaMode)));
-  $("encyclopediaSync")?.addEventListener("click", () => void checkEncyclopediaUpdate(true).catch(() => {}));
   const checkVisible = () => {
     if (!document.hidden && (!$("encyclopediaPage")?.classList.contains("hidden") || !$("encyclopediaDetailPage")?.classList.contains("hidden"))
         && $("section-toolbox")?.classList.contains("active")) void checkEncyclopediaUpdate().catch(() => {});
@@ -8138,7 +8347,7 @@ async function initEncyclopedia() {
     if (event.key === "Escape" && !$("encyclopediaDetailPage")?.classList.contains("hidden")) closeEncyclopediaCard();
   });
   try {
-    await loadEncyclopediaIndex();
+    await loadEncyclopediaIndex({ force: true });
     updateEncyclopediaStatusFilterButton();
     renderEncyclopediaGrid();
   } catch (error) {
@@ -8156,6 +8365,7 @@ function showToolboxPage(tool) {
     "equipment-filter": "equipmentFilterPage",
     "background-limit-test": "backgroundLimitTestPage",
     encyclopedia: "encyclopediaPage",
+    gacha: "gachaPage",
   };
   const page = $(pages[tool]);
   if (!page) return;
@@ -8166,6 +8376,7 @@ function showToolboxPage(tool) {
   if (tool === "equipment-filter") renderEquipmentFilterWorkspace();
   if (tool === "background-limit-test") enterBackgroundLimitTestPage();
   if (tool === "encyclopedia") initEncyclopedia();
+  if (tool === "gacha") enterGachaPage();
 }
 
 const BACKGROUND_TEST_POLL_MS = 1000;

@@ -119,7 +119,7 @@ class Encyclopedia:
             self.objects[ref["path"]] = ref
 
     def _snapshot(self, entry):
-        if not isinstance(entry, dict) or entry.get("schema") != 1 or entry.get("renderer") != 1:
+        if not isinstance(entry, dict) or entry.get("schema") != 1 or entry.get("renderer") not in (1, 2):
             raise EncyclopediaError("该图鉴资料需要更新软件后查看")
         if entry.get("kind") != "lucima-encyclopedia" or not VERSION.fullmatch(str(entry.get("version", ""))):
             raise EncyclopediaError("图鉴版本入口无效")
@@ -142,6 +142,20 @@ class Encyclopedia:
             reference(row.get("detail"))
             if row.get("avatar"):
                 reference(row["avatar"])
+        search = index.get("search")
+        if search is not None:
+            tables = {"ids", "names", "aliases", "pinyin"}
+            if not isinstance(search, dict) or set(search) != tables:
+                raise EncyclopediaError("图鉴搜索索引无效")
+            for table in search.values():
+                if not isinstance(table, dict) or len(table) > 100000:
+                    raise EncyclopediaError("图鉴搜索索引无效")
+                for term, candidates in table.items():
+                    if (not isinstance(term, str) or not term or not isinstance(candidates, list)
+                            or not candidates or len(candidates) > len(seen)
+                            or any(not isinstance(hero, str) or hero not in seen for hero in candidates)
+                            or len(candidates) != len(set(candidates))):
+                        raise EncyclopediaError("图鉴搜索索引无效")
         if shared.get("schema") != 1 or not isinstance(shared.get("translations"), dict) or not isinstance(shared.get("files"), list):
             raise EncyclopediaError("图鉴公共资料无效")
         refs = [ref for row in rows for ref in [row.get("avatar")] if ref] + shared["files"]
@@ -191,6 +205,7 @@ class Encyclopedia:
             rows = [{**row, "avatar": API_ROOT + row["avatar"]["path"] if row.get("avatar") else ""}
                     for row in snap["index"]["characters"]]
             return {"available": True, "version": self.active, "characters": rows,
+                    "search": snap["index"].get("search"),
                     "ui": local_urls(snap["ui"]), **status}
 
     def check(self, force=False):

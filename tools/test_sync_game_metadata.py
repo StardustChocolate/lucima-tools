@@ -35,7 +35,11 @@ class GameMetadataTests(unittest.TestCase):
         npc = {**hero, "ID": "1", "IsHero": "", "SkillIDs": "H105S1", "Element": "Other", "Job": "", "AIs": ""}
         self.write_table("Role", fields, [npc, hero])
         self.write_table("Equipment", TABLE_FIELDS["Equipment"], [{"ID": "E0391", "Part": "Weapon", "EquipLV": "88"}, {"ID": "EN0001", "Part": "Necklace", "EquipLV": "85"}])
-        self.write_table("Item", ("ID", "Name", "ItemType"), [{"ID": "E0391", "Name": "T_Item_Name_E0391", "ItemType": "Equipment"}, {"ID": "EN0001", "Name": "T_Missing", "ItemType": "Equipment"}])
+        self.write_table("Item", ("ID", "Name", "ItemType", "DynamicField1", "DynamicField2"), [
+            {"ID": "E0391", "Name": "T_Item_Name_E0391", "ItemType": "Equipment"},
+            {"ID": "EN0001", "Name": "T_Missing", "ItemType": "Equipment"},
+            {"ID": "3", "ItemType": "Currency", "DynamicField1": "ItemCollectSecond#300"},
+            {"ID": "4", "ItemType": "Currency", "DynamicField1": "ItemCollectSecond#3600"}])
         for name in set(TABLE_FIELDS) - {"Role", "Skill", "Equipment"}:
             self.write_table(name, TABLE_FIELDS[name], [])
         self.write_table("PublicVariable", TABLE_FIELDS["PublicVariable"], [{"ID": "GuildWarLessLV", "VALUE": "6"}])
@@ -71,6 +75,7 @@ class GameMetadataTests(unittest.TestCase):
 
     def test_official_level_and_identity_replace_legacy_metadata(self):
         outputs, report = metadata.build_metadata(self.source, previous_root=self.previous)
+        self.assertEqual(outputs[metadata.GAME_CONFIG_PATH]["itemRecoverySeconds"], {"3": 300, "4": 3600})
         static = outputs[metadata.STATIC_PATH]
         self.assertEqual(static["version"], "ark2-test-current")
         self.assertEqual(static["skills"]["H105S1"]["SP"], "-20")

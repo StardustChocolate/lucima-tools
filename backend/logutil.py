@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import platform as host_platform
 import re
 import sys
 from datetime import datetime
@@ -133,6 +134,34 @@ def developer_log_filename() -> str:
     return f"LucimaTools-developer-log-{datetime.now():%Y%m%d-%H%M%S}.txt"
 
 
+def _platform_details() -> str:
+    system = host_platform.system()
+    release = host_platform.release()
+    machine = host_platform.machine() or "unknown architecture"
+    if system == "Windows":
+        return f"Windows {release} ({host_platform.version()}; {machine})"
+    return f"{system} {release} ({machine})"
+
+
+def _game_data_version() -> str:
+    try:
+        from .resource_update import service as resource_service
+
+        state = resource_service.status()
+        version = str(state.get("version") or "").removeprefix("catalog_")
+        return version or ("内置数据" if state.get("bundled") else "未知")
+    except Exception:
+        return "未知"
+
+
+def developer_log_header() -> str:
+    return (
+        f"应用版本：{config.APP_VERSION}\n"
+        f"平台：{_platform_details()}\n"
+        f"游戏数据版本：{_game_data_version()}\n\n"
+    )
+
+
 def save_developer_logs() -> Path:
     directory = config.get_download_directory()
     directory.mkdir(parents=True, exist_ok=True)
@@ -142,5 +171,8 @@ def save_developer_logs() -> Path:
     while target.exists():
         target = directory / f"{base.stem}-{suffix}{base.suffix}"
         suffix += 1
-    target.write_text(read_retained_logs() or "（暂无日志）\n", encoding="utf-8")
+    target.write_text(
+        developer_log_header() + (read_retained_logs() or "（暂无日志）\n"),
+        encoding="utf-8",
+    )
     return target

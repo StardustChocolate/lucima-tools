@@ -217,17 +217,22 @@ h1 span { color: var(--accent); margin-left: 3px; }
 
 /* 侧边栏 */
 .sidebar {
-  width: 250px; flex-shrink: 0; height: 100%;
+  width: 250px; flex-shrink: 0; height: 100%; min-height: 0;
   display: flex; flex-direction: column; padding: 22px 16px;
   background: var(--panel); backdrop-filter: blur(18px);
   border-right: 1px solid var(--border);
   transition: margin-left 0.3s ease;
 }
-.side-brand { display: flex; align-items: center; gap: 12px; padding: 4px 8px 22px; }
+.side-brand { display: flex; align-items: center; flex-shrink: 0; gap: 12px; padding: 4px 8px 22px; }
 .side-brand h1 { font-size: 19px; }
-.side-nav { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.side-nav {
+  display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 44px;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
 .nav-item {
   display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 14px;
+  flex-shrink: 0; min-height: 44px;
   border: none; border-radius: 12px; cursor: pointer; text-align: left;
   background: transparent; color: var(--text); font-family: var(--sans);
   font-size: 14px; font-weight: 600; position: relative;
@@ -253,7 +258,7 @@ h1 span { color: var(--accent); margin-left: 3px; }
   padding: 0 5px; border-radius: 9px; display: grid; place-items: center;
   background: var(--err); color: #fff;
 }
-.side-foot { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px dashed var(--border); }
+.side-foot { display: flex; flex-direction: column; flex-shrink: 0; gap: 8px; padding-top: 14px; border-top: 1px dashed var(--border); }
 .side-btn {
   display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%;
   padding: 10px; border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: 600;
@@ -297,6 +302,7 @@ h1 span { color: var(--accent); margin-left: 3px; }
   position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 60;
   background: var(--panel); border: 1px solid var(--border-strong); border-radius: 14px;
   padding: 6px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); animation: pop-in 0.16s ease;
+  overflow-y: auto; overscroll-behavior: contain;
 }
 .acc-item {
   display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 10px; cursor: pointer;
@@ -435,6 +441,24 @@ h1 span { color: var(--accent); margin-left: 3px; }
     display: block; position: fixed; inset: 0; z-index: 55;
     background: rgba(0, 0, 0, .5);
   }
+}
+
+/* 横屏、矮窗口按高度压缩留白，菜单仍保留完整的点按高度。 */
+@media (max-height: 620px) {
+  .sidebar {
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .side-brand { padding-bottom: 12px; }
+  .side-brand .logo { width: 36px; height: 36px; border-radius: 10px; }
+  .side-nav { gap: 2px; }
+  .side-foot { gap: 6px; padding-top: 10px; }
+}
+
+/* 极矮视口整栏滚动兜底，避免固定的品牌区和账号区占满可用高度。 */
+@media (max-height: 320px) {
+  .sidebar { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+  .side-nav { flex: none; overflow: visible; }
 }
 
 /* ===================== 基本信息：账号卡 ===================== */
@@ -796,14 +820,6 @@ h1 span { color: var(--accent); margin-left: 3px; }
 .guild-task-row input:disabled + .switch { opacity: .45; }
 .guild-task-row.auto-item input.switch-in { position: absolute; display: block; width: 1px; height: 1px; opacity: 0; }
 .guild-task-row input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 3px; }
-.guild-score-row .tinfo > .guild-score-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-.guild-score-row { --guild-warning: var(--warn); cursor: default; }
-[data-theme="light"] .guild-score-row { --guild-warning: #a15c00; }
-.guild-score-warning { display: inline-flex; align-items: center; gap: 4px; color: var(--guild-warning); font-size: 11px; font-weight: 600; }
-.guild-score-warning svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.guild-score-row .auto-head { display: flex; width: 100%; align-items: center; gap: 12px; }
-.guild-score-row .tinfo { min-width: 0; }
-.guild-score-start { flex-shrink: 0; }
 .guild-task-row .bt-opt:has(input:disabled), .guild-task-row .switch-wrap:has(input:disabled) { cursor: default; }
 .guild-donate-choice {
   width: 100%; min-width: 0; box-sizing: border-box; display: flex; align-items: center;
@@ -843,6 +859,7 @@ h1 span { color: var(--accent); margin-left: 3px; }
 .guild-store-balances > span, .guild-store-price { display: inline-flex; align-items: center; gap: 5px; }
 .guild-store-balances img, .guild-store-price img { width: 22px; height: 22px; object-fit: contain; }
 .guild-store-balances b { color: var(--accent); font-family: var(--mono); }
+.activity-store-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .guild-store-group + .guild-store-group { margin-top: 14px; }
 .guild-store-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .guild-store-group .guild-weekly-heading { margin-bottom: 8px; }
@@ -899,11 +916,6 @@ h1 span { color: var(--accent); margin-left: 3px; }
   #guildWeeklyDetails { grid-column: 2; grid-row: 1; }
   #guildWeeklyRow .switch-wrap { grid-column: 3; grid-row: 1; }
   #guildWeeklyRow .tdesc, #guildWeeklyState { grid-column: 1 / -1; }
-  #guildScoreRow .auto-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
-  #guildScoreRow .tinfo { display: contents; }
-  #guildScoreRow .guild-score-heading { grid-column: 1; grid-row: 1; }
-  #guildScoreStart { grid-column: 2; grid-row: 1; }
-  #guildScoreRow .tdesc, #guildScoreState { grid-column: 1 / -1; }
   .guild-profile { gap: 12px; }
   .guild-avatar { flex-basis: 56px; width: 56px; height: 60px; }
   .guild-profile-copy h3 { font-size: 16px; }
@@ -1479,20 +1491,28 @@ body.abyss-picker-open { overflow: hidden; }
 /* ===================== 次数步进器 ===================== */
 .count-box {
   display: flex; align-items: center; gap: 2px; flex-shrink: 0;
-  padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--elev);
+  height: 28px; padding: 0 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--elev);
 }
 .count-box:focus-within { border-color: var(--border-strong); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.25); }
 .count-btn {
-  width: 24px; height: 24px; flex-shrink: 0; border: none; border-radius: 6px; cursor: pointer;
-  background: rgba(var(--accent-rgb), 0.1); color: var(--accent); font-size: 16px; line-height: 1;
+  width: 22px; height: 22px; padding: 0; flex-shrink: 0; border: none; border-radius: 4px; cursor: pointer;
+  background: rgba(var(--accent-rgb), 0.1); color: var(--accent);
   display: grid; place-items: center; transition: background 0.15s;
 }
-.count-btn:hover { background: rgba(var(--accent-rgb), 0.22); }
-.count-in {
-  width: 38px; padding: 0; text-align: center; font-family: var(--mono); font-size: 14px; font-weight: 600;
-  background: transparent; border: none; color: var(--accent);
+.count-btn svg {
+  display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; pointer-events: none;
 }
-.count-in:focus { outline: none; }
+.count-btn:hover:not(:disabled) { background: rgba(var(--accent-rgb), 0.22); }
+.count-btn:disabled { cursor: default; }
+.count-box:has(input:disabled) { opacity: .55; }
+.count-box .count-in, .count-value {
+  height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--accent);
+  font: 600 16px var(--mono); text-align: center; box-shadow: none;
+}
+.count-box .count-in { width: 38px; min-width: 0; }
+.count-box .count-in:focus { outline: none; box-shadow: none; }
+.count-value { min-width: 26px; display: grid; place-items: center; }
 .count-unit { font-size: 12px; color: var(--text-dim); padding: 0 3px 0 1px; }
 
 /* ===================== 秘密商店（钻石）控件 ===================== */
@@ -1578,14 +1598,13 @@ body.abyss-picker-open { overflow: hidden; }
 .customized-rule-hint.warn { color: var(--warn); background: rgba(255, 180, 84, .08); }
 .customized-rule-hint.ok { color: var(--ok); background: rgba(46, 230, 160, .07); }
 .customized-start-row { display: flex; align-items: stretch; gap: 8px; }
-.customized-start-row > .btn,
-.customized-start-row > .count-box { height: 42px; min-height: 42px; }
 .customized-start-row > .btn {
+  height: 42px; min-height: 42px;
   margin-top: 0; padding-top: 0; padding-bottom: 0;
   display: inline-flex; align-items: center; justify-content: center;
 }
 .customized-equip-start { flex: 1; min-width: 0; }
-.customized-start-row .count-box { min-width: 68px; justify-content: center; }
+.customized-start-row .count-box { min-width: 68px; justify-content: center; align-self: center; }
 .customized-start-row .count-in { width: 35px; }
 .customized-equip-reward { width: 72px; flex: 0 0 72px; margin-top: 0; padding: 0 8px; }
 .customized-equip-reward.is-rewarded { color: var(--ok); border-color: rgba(46, 230, 160, .45); background: rgba(46, 230, 160, .08); }
@@ -1834,6 +1853,10 @@ body.abyss-picker-open { overflow: hidden; }
 .b-tab.active { border-color: var(--border-strong); color: var(--text); background: rgba(var(--accent-rgb), 0.1); }
 .b-tab .n { font-family: var(--mono); font-size: 11px; opacity: 0.7; }
 .act-tabs { margin: 0; }
+.act-tabs .b-tab { padding-inline: 11px; white-space: nowrap; }
+.act-reward-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.act-reward-actions .btn { width: 100%; }
+.act-reward-count { color: var(--text-dim); font-size: 12px; text-align: center; }
 .shop-widget[id^="act-"] .shop-body { display: flex; flex-direction: column; gap: 14px; padding-top: 14px; }
 .act-tabs + .act-options-refresh { flex-shrink: 0; }
 .act-progress-hint { margin: 2px 0 0; color: var(--text-dim); font-size: 12px; line-height: 1.7; }
@@ -1867,18 +1890,7 @@ body.abyss-picker-open { overflow: hidden; }
 .b-cost img { width: 15px; height: 15px; object-fit: contain; }
 /* 份数步进器（可多次购买的档才有） */
 .b-step {
-  display: flex; align-items: center; justify-content: center; gap: 1px; margin: 8px auto 0;
-  width: fit-content; padding: 2px; border: 1px solid var(--border); border-radius: 8px;
-}
-.b-step button {
-  width: 22px; height: 22px; border: none; border-radius: 5px; cursor: pointer;
-  font-size: 15px; line-height: 1; background: rgba(var(--accent-rgb), 0.12);
-  color: var(--accent); font-family: var(--sans);
-}
-.b-step button:hover { background: rgba(var(--accent-rgb), 0.26); }
-.b-step .v {
-  min-width: 26px; text-align: center; font-family: var(--mono); font-size: 13px;
-  font-weight: 700; color: var(--accent);
+  justify-content: center; width: fit-content; margin: 8px auto 0;
 }
 /* 同 tab 内别的卡片有步进器、这张没有（如荣誉勋章：能源可多买、技能模块每周1次）
    时的占位，保证两张卡的状态行齐平 */
@@ -2662,6 +2674,34 @@ button.tool-tile:hover { transform: translateY(-3px); border-color: var(--border
 .tool-page-title h2 { font-size: 20px; line-height: 1.15; }
 .preview-badge { margin-left: auto; padding: 4px 9px; border: 1px solid rgba(var(--accent-rgb), .35); border-radius: 6px; color: var(--accent); background: rgba(var(--accent-rgb), .08); font: 700 10px var(--mono); letter-spacing: .7px; }
 
+/* ===== 抽卡 ===== */
+.gacha-workspace { max-width: 560px; }
+.gacha-workspace .card { margin: 0; min-width: 0; }
+.gacha-form { display: flex; flex-direction: column; gap: 15px; }
+.gacha-form .field { margin: 0; min-width: 0; }
+.gacha-count-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gacha-count-row label { margin: 0; }
+.gacha-count { width: 112px; }
+.gacha-count .count-in { flex: 1; width: 0; }
+.gacha-contracts { min-height: 39px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.gacha-contract { gap: 4px; color: var(--text); }
+.gacha-contract img { width: 28px; height: 28px; }
+.gacha-contract b { font-weight: 600; }
+.gacha-targets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 4px 0; }
+.gacha-target { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.gacha-target-label { color: var(--text-dim); font-size: 11px; }
+.gacha-target-item { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100px; max-width: 100%; min-width: 0; text-align: center; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.gacha-target-media { width: 52px; height: 52px; flex-shrink: 0; position: relative; display: grid; place-items: center; background: var(--elev); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; color: var(--accent); font-size: 24px; }
+.gacha-target-media img { width: 100%; height: 100%; object-fit: contain; position: absolute; inset: 0; }
+.gacha-target-media img[hidden] { display: none; }
+.gacha-count-row > label, .gacha-stop-row { color: var(--text); font-size: 12px; font-weight: 650; letter-spacing: normal; }
+.gacha-stop-row { padding: 0; }
+.gacha-stop-row:has(input:disabled) { opacity: .5; }
+.gacha-progress-row { display: flex; align-items: center; gap: 10px; }
+.gacha-progress { flex: 1; min-width: 0; }
+.gacha-progress > span { background: var(--accent); transition: width .2s; }
+.gacha-progress-count { flex-shrink: 0; color: var(--text-dim); font: 600 12px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 /* ===== 图鉴查询 ===== */
 .encyclopedia-page-head { margin-bottom: 14px; }
 .encyclopedia-mode {
@@ -2679,6 +2719,26 @@ button.tool-tile:hover { transform: translateY(-3px); border-color: var(--border
   display: flex; flex-direction: column; align-items: stretch; gap: 10px;
   padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow);
 }
+.encyclopedia-search-row { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.encyclopedia-search {
+  min-width: 0; flex: 1 1 0; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text-dim); background: var(--elev);
+}
+.encyclopedia-search:focus-within { border-color: rgba(var(--accent-rgb), .55); }
+.encyclopedia-search > svg { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.encyclopedia-search input {
+  width: 100%; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; box-shadow: none;
+  color: var(--text); background: transparent; font: 500 12px var(--sans);
+}
+.encyclopedia-search input:focus { outline: 0; box-shadow: none; }
+.encyclopedia-search input::placeholder { color: var(--text-dim); opacity: .8; }
+.encyclopedia-search input::-webkit-search-cancel-button { display: none; }
+.encyclopedia-search-clear { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: var(--text-dim); background: transparent; cursor: pointer; }
+.encyclopedia-search-clear:hover { color: var(--text); background: rgba(var(--accent-rgb), .12); }
+.encyclopedia-search-clear[hidden] { display: none; }
+.encyclopedia-search-clear svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.encyclopedia-result-count { flex: 0 0 9ch; display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; color: var(--text-dim); font: 600 13px/1 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.encyclopedia-result-count strong { color: var(--accent); font: inherit; }
 .encyclopedia-filter-group { min-width: 0; display: flex; align-items: center; gap: 11px; }
 .encyclopedia-filter-label { flex: 0 0 32px; color: var(--text-dim); font-size: 11px; font-weight: 750; letter-spacing: 1px; }
 .encyclopedia-filter-options { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 7px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
@@ -2713,13 +2773,6 @@ button.tool-tile:hover { transform: translateY(-3px); border-color: var(--border
 .encyclopedia-status-selected-icons { display: contents; }
 .encyclopedia-status-selected-icon { width: 36px; height: 36px; flex: 0 0 36px; display: grid; place-items: center; }
 .encyclopedia-status-selected-icon img { width: 28px; height: 28px; display: block; object-fit: contain; }
-.encyclopedia-filter-meta { min-height: 28px; display: flex; align-items: baseline; gap: 4px; padding-top: 9px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 11px; white-space: nowrap; }
-.encyclopedia-filter-meta strong { color: var(--text); font: 750 16px/1 var(--mono); }
-.encyclopedia-sync { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--text-dim); padding: 3px 0 3px 8px; font: inherit; cursor: pointer; }
-.encyclopedia-sync:hover { color: var(--text); }
-.encyclopedia-sync:disabled { opacity: .55; cursor: default; }
-.encyclopedia-sync svg { width: 13px; height: 13px; }
-#encyclopediaResultCount { color: var(--accent); }
 .encyclopedia-preview-panel { min-height: 240px; margin-top: 14px; padding: 14px 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
 .encyclopedia-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 2px 4px; }
 .encyclopedia-preview {

@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from . import runtime_data as resources
+from . import runtime_data as resources, game_clock
 
 import inspect
 import json
@@ -22,6 +22,7 @@ from typing import Callable
 
 from .game_client import GameClient, GameError, GameMessage, TaskDeferred
 from .voting import status as voting_status, task as task_activity_vote
+from .activity_store import status as activity_store_status, task as task_activity_store
 
 
 class UnknownEquipmentError(Exception):
@@ -147,7 +148,7 @@ def task_month_signin(c: GameClient, params: dict | None = None,
         previous = c.account_state.get("MonthSignInData") if isinstance(c.account_state, dict) else None
         previous_day = previous.get("NowDay") if isinstance(previous, dict) else None
         previous_time = _ms(previous.get("LastSignInTime")) if isinstance(previous, dict) else None
-        if _signin_is_today(previous_time, _signin_now_ms(c.account_state or {}, runtime)):
+        if _signin_is_today(previous_time, game_clock.now_ms(c)):
             runtime["calendarCheckedRevision"] = revision
             raw["calendar"] = {"skipped": True, "NowDay": previous_day}
             details.append("今日已完成月历签到")
@@ -168,7 +169,7 @@ def task_month_signin(c: GameClient, params: dict | None = None,
             except Exception as error:
                 errors.append(f"月历签到失败：{error}")
             else:
-                _sync_signin_time(runtime, res)
+                game_clock.sync(c, res)
                 runtime["calendarCheckedRevision"] = revision
                 runtime["pendingMailRevision"] = revision
                 raw["calendar"] = res
@@ -193,7 +194,7 @@ def task_month_signin(c: GameClient, params: dict | None = None,
         except Exception as error:
             errors.append(f"月卡日奖励查询失败：{error}")
         else:
-            _sync_signin_time(runtime, res)
+            game_clock.sync(c, res)
             runtime["statusCheckedRevision"] = revision
             raw["accountStatus"] = res
             if res.get("HasMail"):
@@ -427,28 +428,6 @@ _ACTIVITY_SIGNIN_DATES = ("CreateTime", "LastLoginTime", "LastSignInTime", "Last
 _ACTIVITY_SIGNIN_DAYS = 7  # catalog 115657 的全部 65 种签到均为 7 天。
 
 
-def _sync_signin_time(runtime: dict, response: dict) -> None:
-    try:
-        server_ms = int(float(response["Utc"]) * 1000)
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return
-    runtime["serverTimeMs"] = server_ms
-    runtime["serverTimeSyncedAtMs"] = int(time.time() * 1000)
-    runtime["serverTimeLoginRevision"] = runtime.get("loginRevision", 1)
-
-
-def _signin_now_ms(state: dict, runtime: dict) -> int:
-    now_ms = int(time.time() * 1000)
-    revision = runtime.get("loginRevision", 1)
-    if (runtime.get("serverTimeLoginRevision") == revision
-            and runtime.get("serverTimeMs") is not None and runtime.get("serverTimeSyncedAtMs") is not None):
-        return runtime["serverTimeMs"] + now_ms - runtime["serverTimeSyncedAtMs"]
-    try:
-        return int(float(state["Utc"]) * 1000) + now_ms - runtime["stateSyncedAtMs"]
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return now_ms
-
-
 def _signin_is_today(value, now_ms: int) -> bool:
     stamp = _ms(value)
     if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
@@ -499,7 +478,7 @@ def _task_activity_signins(c: GameClient, runtime: dict) -> dict:
             if day >= _ACTIVITY_SIGNIN_DAYS:
                 completed[key] = revision
                 continue
-            if _signin_is_today(record.get("LastSignInTime"), _signin_now_ms(state, runtime)):
+            if _signin_is_today(record.get("LastSignInTime"), game_clock.now_ms(c)):
                 completed[key] = revision
                 continue
             data = {"_id": key, "SignInDay": day, "ActivityID": activity}
@@ -526,7 +505,7 @@ def _task_activity_signins(c: GameClient, runtime: dict) -> dict:
             updated = {field: deepcopy(response[field])
                        for field in ("_id", "SignInDay", "ActivityID", *_ACTIVITY_SIGNIN_DATES)}
             records[index] = updated
-            _sync_signin_time(runtime, response)
+            game_clock.sync(c, response)
             completed[key] = revision
             runtime["pendingMailRevision"] = revision
             advanced = response["SignInDay"] > record["SignInDay"]
@@ -556,7 +535,7 @@ def _expiry_ms(m: dict):
 
 
 MEAL_TIMEZONE = timezone(timedelta(hours=8))
-MEAL_BOUNDARY_GRACE_MS = 60_000  # 08/20 点后留一分钟，避开客户端/服务器时差及餐次边界。
+MEAL_BOUNDARY_GRACE_MS = game_clock.TASK_BOUNDARY_GRACE_MS
 TASK_RETRY_MS = 5 * 60_000
 MEAL_RETRY_MS = TASK_RETRY_MS
 
@@ -583,39 +562,42 @@ def _meal_sent_in_window(state: dict, start_ms: int, end_ms: int) -> bool:
 
 
 def send_meal_status(state: dict, runtime: dict | None = None,
-                     now_ms: int | None = None) -> dict:
+                     now_ms: int | None = None, *, local_now_ms: int | None = None) -> dict:
     """纯读取的餐食档期，供任务、调度、界面倒计时共用。
 
     上午跟随账号快照刷新；新登录、重新开启开关或手动刷新可立即检查当前餐次。
-    夜间体力独立排在 20:01，不等下一次快照。查询失败只重试确认邮件。
+    夜间体力独立排在 20:00:05，不等下一次快照。查询失败只重试确认邮件。
     """
     runtime = runtime or {}
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    offset = 0 if local_now_ms is None else int(local_now_ms) - now_ms
     _meal_id, start_ms, end_ms = _meal_window(now_ms)
     confirming = runtime.get("pendingMailWindowMs") == start_ms
     delivered = (_meal_sent_in_window(state or {}, start_ms, end_ms)
                  or runtime.get("confirmedWindowMs") == start_ms)
-    check_after = runtime.get("checkAfterMs", now_ms)
+    check_after = runtime.get("checkAfterMs", now_ms + offset) - offset
     fresh_check = _meal_window(int(check_after))[1] == start_ms
 
     current = datetime.fromtimestamp(now_ms / 1000, MEAL_TIMEZONE)
     morning = current.replace(hour=8, minute=10, second=0, microsecond=0)
     if current >= morning:
         morning += timedelta(days=1)
-    refresh_ms = runtime.get("stateRefreshAtMs") or int(morning.timestamp() * 1000)
-    dinner = current.replace(hour=20, minute=1, second=0, microsecond=0)
+    refresh_ms = ((runtime["stateRefreshAtMs"] - offset) if runtime.get("stateRefreshAtMs")
+                  else int(morning.timestamp() * 1000))
+    dinner = current.replace(hour=20, minute=0, second=0, microsecond=0)
+    dinner += timedelta(milliseconds=MEAL_BOUNDARY_GRACE_MS)
     if current >= dinner:
         dinner += timedelta(days=1)
     next_dinner_ms = int(dinner.timestamp() * 1000)
 
-    retry_ms = ((runtime.get("nextRetryMs") or 0)
+    retry_ms = ((runtime["nextRetryMs"] - offset if runtime.get("nextRetryMs") else 0)
                 if runtime.get("retryWindowMs") == start_ms else 0)
     if confirming or (not delivered and (_meal_id == "Dinner" or fresh_check)):
         next_ms = max(start_ms + MEAL_BOUNDARY_GRACE_MS, retry_ms)
     else:
         # 当前时段已投递，或日间体力尚待今日快照。调度器会先刷新快照，再执行本任务。
         next_ms = min(refresh_ms, next_dinner_ms)
-    return {"nextMs": next_ms, "ready": now_ms >= next_ms,
+    return {"nextMs": next_ms + offset, "ready": now_ms >= next_ms,
             "confirming": confirming, "retrying": retry_ms > now_ms}
 
 
@@ -649,8 +631,9 @@ def task_send_meal(c: GameClient, params: dict | None = None,
                    runtime: dict | None = None) -> dict:
     """投递当前餐次的 50 体力并查询邮件确认，不领取邮件，不处理月卡。"""
     runtime = runtime if runtime is not None else {}
-    now_ms = int(time.time() * 1000)
-    status = send_meal_status(c.account_state or {}, runtime, now_ms)
+    now_ms = game_clock.now_ms(c)
+    status = send_meal_status(c.account_state or {}, runtime, now_ms,
+                              local_now_ms=int(time.time() * 1000))
     if not status["ready"]:
         return {"ok": True, "skipped": True, "detail": "未到每日体力检查时间"}
     meal_id, start_ms, end_ms = _meal_window(now_ms)
@@ -709,7 +692,7 @@ def task_claim_mail(c: GameClient) -> dict:
        故领取前剔除已过期邮件。
     """
     import time
-    now_ms = time.time() * 1000
+    now_ms = game_clock.now_ms(c)
 
     try:
         mails = _query_mail(c)
@@ -768,6 +751,7 @@ def _collect_items(items: list, counter: dict):
 
 # 动力转换领取的最短累积阈值：达到即视为满 100%
 REACTOR_FULL_HOURS = 12
+REACTOR_GRACE_MS = game_clock.TASK_BOUNDARY_GRACE_MS
 
 
 def _ms(v):
@@ -778,22 +762,23 @@ def _ms(v):
 
 
 def task_reactor(c: GameClient) -> dict:
-    """动力转换（ArkReactor）：距上次领取满 12 小时才领，避免频繁领取降低收益。"""
+    """动力转换：按服务器时钟，满 12 小时后再留 5 秒余量。"""
     reactor = (c.account_state or {}).get("ArkReactorData", {}) or {}
     last_ms = _ms(reactor.get("LastMoneyReceivedTime"))
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = game_clock.now_ms(c)
 
     if last_ms is not None:
         elapsed_h = (now_ms - last_ms) / 3600_000
-        if elapsed_h < REACTOR_FULL_HOURS:
-            remain = REACTOR_FULL_HOURS - elapsed_h
-            h = int(remain)
-            m = int((remain - h) * 60)
+        remaining_ms = reactor_next_ms(reactor) - now_ms
+        if remaining_ms > 0:
+            seconds = math.ceil(remaining_ms / 1000)
+            h, seconds = divmod(seconds, 3600)
+            m, seconds = divmod(seconds, 60)
             return {
                 "ok": True,
                 "skipped": True,
-                "lines": [f"未满 100%（距上次领取 {elapsed_h:.1f}h），还需约 {h} 小时 {m} 分，跳过"],
-                "detail": f"动力转换未满，还需约 {h}h{m}m",
+                "lines": [f"动力转换尚未到领取时间（距上次领取 {elapsed_h:.1f}h），还需 {h} 小时 {m} 分 {seconds} 秒，跳过"],
+                "detail": f"动力转换还需 {h}h{m}m{seconds}s",
             }
 
     try:
@@ -815,7 +800,12 @@ def task_reactor(c: GameClient) -> dict:
     return {"ok": True, "lines": [line], "detail": line, "raw": res}
 
 
-# 生产中心三个定时产出：到点(NextCanReceive*Time)即领，无需额外等待。
+def reactor_next_ms(reactor: dict):
+    last_ms = _ms(reactor.get("LastMoneyReceivedTime"))
+    return last_ms + REACTOR_FULL_HOURS * 3600_000 + REACTOR_GRACE_MS if last_ms is not None else None
+
+
+# 生产中心三个定时产出：NextCanReceive*Time 后再留 5 秒余量。
 # (显示名, 计时字段, 领取route)
 STARFORCE_REWARDS = [
     ("成长药剂", "NextCanReceivePotionTime", "ArkStarForceLabHandler.RewardPotion"),
@@ -845,6 +835,11 @@ def _starforce_next_ms(lab: dict, time_field: str):
     return next_ms
 
 
+def _starforce_claim_ms(lab: dict, time_field: str):
+    next_ms = _starforce_next_ms(lab, time_field)
+    return next_ms + game_clock.TASK_BOUNDARY_GRACE_MS if next_ms is not None else None
+
+
 def tesseract_charge_status(lab: dict, now_ms: int) -> dict:
     used = int(lab.get("TesseractChargeCount") or 0)
     charge = {"used": used, "max": TESSERACT_MAX_CHARGES,
@@ -860,19 +855,20 @@ def tesseract_charge_status(lab: dict, now_ms: int) -> dict:
         charge["note"] = "已完成，等待领取"
     elif done_ms - now_ms <= TESSERACT_CHARGE_MS:
         charge["note"] = "剩余生产时间不超过24小时，等待领取"
-    elif max(now_ms, cooldown_ms + 1) >= done_ms - TESSERACT_CHARGE_MS:
+    elif max(now_ms, cooldown_ms + game_clock.TASK_BOUNDARY_GRACE_MS) >= done_ms - TESSERACT_CHARGE_MS:
         charge["note"] = "本周期无需再加速"
     else:
-        # CanChargeTesseract uses NowTime > NextCanChargeTime (strict).
-        charge.update(nextMs=cooldown_ms + 1, ready=now_ms > cooldown_ms)
+        # Keep the raw production deadline for the >24h limit; only pad cooldown.
+        next_ms = cooldown_ms + game_clock.TASK_BOUNDARY_GRACE_MS
+        charge.update(nextMs=next_ms, ready=now_ms >= next_ms)
     return charge
 
 
 def _make_starforce_task(display: str, time_field: str, route: str):
     def _task(c: GameClient) -> dict:
         lab = (c.account_state or {}).get("ArkStarForceLabData", {}) or {}
-        next_ms = _starforce_next_ms(lab, time_field)
-        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        next_ms = _starforce_claim_ms(lab, time_field)
+        now_ms = game_clock.now_ms(c)
 
         if next_ms is not None and now_ms < next_ms:
             return {
@@ -897,7 +893,7 @@ def _make_starforce_task(display: str, time_field: str, route: str):
         new_lab = res.get("ArkStarForceLabData")
         if new_lab is not None and c.account_state is not None:
             c.account_state["ArkStarForceLabData"] = new_lab
-        new_next = _starforce_next_ms(new_lab or {}, time_field)
+        new_next = _starforce_claim_ms(new_lab or {}, time_field)
         nxt = f"（下次 {_fmt_clock(new_next)}）" if new_next else ""
         return {"ok": True, "lines": [f"领取了 {got}{nxt}"], "detail": f"领取了 {got}", "raw": res}
 
@@ -925,7 +921,7 @@ def _charge_tesseract(c: GameClient) -> tuple[str, str]:
         "reject"  = 发了请求但被服务器拒（要让用户看见）
     """
     lab = (c.account_state or {}).get("ArkStarForceLabData", {}) or {}
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = game_clock.now_ms(c)
     status = tesseract_charge_status(lab, now_ms)
     used = status["used"]
     quota = f"{used}/{TESSERACT_MAX_CHARGES}"
@@ -955,7 +951,7 @@ def _charge_tesseract(c: GameClient) -> tuple[str, str]:
 
 
 def task_tesseract(c: GameClient) -> dict:
-    """技能模块：到点即领；未到点则顺手加速（每周期 3 次、每次 -24h、间隔 24h）。
+    """技能模块：完成后留 5 秒再领；未到点则顺手加速（每周期 3 次、每次 -24h）。
 
     加速后按服务器返回的新状态重新检查领取时间。
     """
@@ -981,12 +977,12 @@ def task_tesseract(c: GameClient) -> dict:
 
 
 # ============派遣任务（ArkHighCommand）============
-# 固定 4 人小队 + 固定任务槽循环：任务到点(FinishTime<=now) → RewardQuest 领 → 用同一批
+# 固定 4 人小队 + 固定任务槽循环：FinishTime 后留 5 秒 → RewardQuest 领 → 用同一批
 # DispatchedHeroIDs 立即 DispatchQuest 续派。体力(StaticID=3)不足时只领不续派。
 def task_dispatch(c: GameClient) -> dict:
     hc = (c.account_state or {}).get("ArkHighCommandData", {}) or {}
     quests = hc.get("DispatchedQuests") or []
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = game_clock.now_ms(c)
 
     if not quests:
         return {"ok": True, "skipped": True,
@@ -1005,7 +1001,7 @@ def task_dispatch(c: GameClient) -> dict:
         finish_ms = _ms(q.get("FinishTime"))
         if not sid:
             continue
-        if finish_ms is not None and now_ms < finish_ms:
+        if finish_ms is not None and now_ms < finish_ms + game_clock.TASK_BOUNDARY_GRACE_MS:
             lines.append(f"{sid}：未完成（{_fmt_clock(finish_ms)} 完成），跳过")
             continue
 
@@ -1261,6 +1257,13 @@ def parse_equipment(equip: dict) -> dict:
     sid = equip.get("StaticID")
     ref = _equip_ref().get(sid or "", {})
     slot = ref.get("slot")
+    image = f"/assets/equip/{os.path.basename(ref['img'])}" if ref.get("img") else None
+    # Downloaded table snapshots may predate packaged images. Resolve only an
+    # exact local file; equipment level/slot still come from the pinned table.
+    if not image and isinstance(sid, str) and re.fullmatch(r"E\d{4}", sid):
+        root = Path(os.environ.get("ARK_ASSET_ROOT") or Path(__file__).resolve().parents[1])
+        if (root / "assets" / "equip" / f"{sid}.png").is_file():
+            image = f"/assets/equip/{sid}.png"
     # 名称优先用官方 loc（全中文），回退到 equip_ref（部分英文），再回退 staticID
     name = _item_names().get(sid or "") or ref.get("name") or sid
     return {
@@ -1269,7 +1272,7 @@ def parse_equipment(equip: dict) -> dict:
         "level": ref.get("level"),
         "slot": slot,
         "slotCN": SLOT_CN.get(slot, slot),
-        "img": f"/assets/equip/{os.path.basename(ref['img'])}" if ref.get("img") else None,
+        "img": image,
         "classLV": cl,
         "enhance": enhance,
         "tierName": CLASSLV_TIER.get(cl, f"品阶{cl}"),
@@ -2252,7 +2255,7 @@ def abyss_claim_rewards(c: GameClient) -> dict:
     return _claim_score_rewards(c, "虚构深渊", ABYSS_REWARD_QUEST_IDS, score_label="星数")
 
 
-def _abyss_scene_records(state: dict | None) -> dict[str, dict]:
+def _abyss_scene_records(state: dict | None, *, now=None) -> dict[str, dict]:
     """Select open stages, including a first attempt without a saved SceneData.
 
     Scene.PreScene names the required cleared stage. Missing SceneData uses the
@@ -2269,7 +2272,7 @@ def _abyss_scene_records(state: dict | None) -> dict[str, dict]:
     cleared = {sid for sid, scene in records.items()
                if isinstance(scene.get("Stars"), list) and scene["Stars"] and scene["Stars"][0]}
     tables = metadata()["tables"]
-    now = time.time()
+    now = time.time() if now is None else now
     result = {}
     for sid, definition in tables["Scene"].items():
         if not _ABYSS_BATTLE_RE.fullmatch(sid) or not tables["Fantasy"].get(sid):
@@ -2287,10 +2290,10 @@ def _abyss_scene_records(state: dict | None) -> dict[str, dict]:
     return result
 
 
-def abyss_scenes(state: dict | None) -> list[dict]:
+def abyss_scenes(state: dict | None, *, now=None) -> list[dict]:
     """Return current Fictional Abyss stages allowed by progress and activity."""
     result = []
-    for sid, scene in _abyss_scene_records(state).items():
+    for sid, scene in _abyss_scene_records(state, now=now).items():
         floor = int(_ABYSS_BATTLE_RE.fullmatch(sid).group(1))
         stars = scene.get("Stars")
         result.append({
@@ -2304,11 +2307,11 @@ def abyss_scenes(state: dict | None) -> list[dict]:
     return sorted(result, key=lambda scene: scene["floor"])
 
 
-def abyss_scene_effects(state: dict, scene_id: str) -> dict:
+def abyss_scene_effects(state: dict, scene_id: str, *, now=None) -> dict:
     """Describe the two waves using the same active Fantasy row as battle."""
     from .abyss_state import fantasy_config
 
-    fantasy = fantasy_config(scene_id, state)
+    fantasy = fantasy_config(scene_id, state, now=now)
     result = {}
     for index, wave in enumerate(("upper", "lower")):
         buffs = fantasy["Waves"][index].get("Buffs") or {}
@@ -2361,10 +2364,10 @@ def abyss_role_briefs(state: dict | None) -> list[dict]:
     return result
 
 
-def normalize_abyss_config(state: dict | None, scene_id, waves) -> dict:
+def normalize_abyss_config(state: dict | None, scene_id, waves, *, now=None) -> dict:
     """Validate and normalize the two-wave Abyss team configuration."""
     scene_id = str(scene_id or "").strip()
-    scene = next((s for s in abyss_scenes(state) if s["id"] == scene_id), None)
+    scene = next((s for s in abyss_scenes(state, now=now) if s["id"] == scene_id), None)
     if scene is None:
         raise GameError("请选择账号已解锁的虚构深渊关卡")
 
@@ -2534,13 +2537,15 @@ def task_abyss_auto(c: GameClient, params: dict | None = None) -> dict:
                         raise GameError("自动推关已中止")
                 elif seconds:
                     time.sleep(seconds)
-            normalized = normalize_abyss_config(c.account_state or {}, scene_id, waves)
+            game_now = game_clock.now_ms(c) / 1000
+            normalized = normalize_abyss_config(c.account_state or {}, scene_id, waves, now=game_now)
             last_scene_id = scene_id
             last_result = run_abyss_battle(c, {**params, **normalized})
             if not last_result.get("ok"):
                 lines.append(f"{label}：战斗失败")
                 return finish(False, f"自动推关已停止：{label}挑战失败，已通关 {len(completed)} 关")
-            scene = next((row for row in abyss_scenes(c.account_state or {}) if row["id"] == scene_id), None)
+            scene = next((row for row in abyss_scenes(c.account_state or {}, now=game_now)
+                          if row["id"] == scene_id), None)
             if not scene or not scene["cleared"]:
                 raise GameError(f"未确认{label}的通关结算")
             completed.append(scene_id)
@@ -2986,7 +2991,7 @@ def _is_activity_live(entry: dict | None, now_ms: int) -> bool:
 _ACTIVITY_TIERS = {12: "困难", 13: "精英", 14: "地狱"}
 
 
-def activity_scenes(state: dict) -> list[dict]:
+def activity_scenes(state: dict, *, now_ms=None) -> list[dict]:
     """从账号快照抽出当期活动的全部已解锁关卡，每个活动内按关卡倒序。
 
     SceneDataContainer 里存在记录即视为已解锁，不检查 Stars；未通关关卡仍允许选择，
@@ -3006,7 +3011,7 @@ def activity_scenes(state: dict) -> list[dict]:
             (int(m.group(2)), int(m.group(3)), m.group(0)))
     names = _activity_names()
     sched = _activity_schedule(state)
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) if now_ms is None else int(now_ms)
     out = []
     for fam in sorted(fam_stages):
         # BH188 -> BranchH188。排期表非当期(含查不到)的族直接跳过。
@@ -3192,7 +3197,7 @@ def urgent_missions(c: GameClient) -> list[dict]:
     container = state.get("UrgentMissionContainer")
     if not isinstance(container, dict):
         return []
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = game_clock.now_ms(c)
     source = container.get("Missions") or []
     missions = [m for m in source
                 if isinstance(m, dict)
@@ -3313,6 +3318,22 @@ ARENA_NPC_COUNT = 10
 ARENA_CHECK_ROUTE = "PVPHandler.PVPCheckTicket"
 ARENA_END_ROUTE = "PVPHandler.NPCPVPBattleEnd"
 ARENA_FLAG_ID = "4"          # 旗帜(每次挑战扣 1，MaxCount 5，随时间恢复)
+ARENA_MIN_FLAGS = 1          # 每次挑战消耗 1 面旗帜，有 1 面即可发起。
+
+
+def arena_flag_status(c: GameClient) -> dict:
+    """Read the projected flag balance and its exact eligibility time locally."""
+    sampled = c.resource_gauges()["flag"]
+    gauge = sampled.get("spendable", sampled)
+    count = gauge.get("current") or 0
+    if count >= ARENA_MIN_FLAGS:
+        return {"ready": True, "nextMs": None}
+    recovery = gauge.get("recovery") or {}
+    next_ms = None
+    if (recovery and (gauge.get("max") or 0) >= ARENA_MIN_FLAGS):
+        next_ms = int(sampled["sampledAtMs"] + recovery["nextInMs"]
+                      + (ARENA_MIN_FLAGS - count - 1) * recovery["intervalMs"])
+    return {"ready": False, "nextMs": next_ms}
 
 # 竞技场战斗元信息：**与扫荡/活动都不同的第三套**，照抓包原样(别跨类型套用)。
 #   扫荡 IsRepeatAuto=1/FinishWave=1；活动 IsRestart=1；竞技场全 0 且 IsNPCPVP=1。
@@ -3354,6 +3375,12 @@ def arena_npcs() -> list[dict]:
     """10 个地狱级 NPC 的清单(供前端展开页渲染)。"""
     return [{"n": n, "sceneId": arena_scene_id(n), "name": arena_npc_name(n)}
             for n in range(1, ARENA_NPC_COUNT + 1)]
+
+
+def arena_ready_time(snapshot_ms=None, runtime_ms=None) -> int:
+    """Pad confirmed NPC cooldowns once; local retry timestamps stay separate."""
+    cooldown_ms = max(snapshot_ms or 0, runtime_ms or 0)
+    return cooldown_ms + game_clock.TASK_BOUNDARY_GRACE_MS if cooldown_ms > 0 else 0
 
 
 def arena_next_times(state: dict) -> dict[str, int]:
@@ -3469,7 +3496,12 @@ def arena_sweep_once(c: GameClient, n: int, team_id: str) -> dict:
     except GameMessage as m:
         if "cooldown" in m.msg.lower() or "冷却" in m.msg:
             return wait_for_login(m.msg)
-        return {"ok": False, "detail": f"{name}：{m.msg}", "raw": m.msg}
+        if m.msg.strip() == "Item not enough":
+            c.note_resource_empty(ARENA_FLAG_ID)
+            return {"ok": False, "waitingForFlags": True,
+                    "detail": f"{name}：旗帜不足（{m.msg}），等待旗帜恢复", "raw": m.msg}
+        detail = m.msg
+        return {"ok": False, "detail": f"{name}：{detail}", "raw": m.msg}
     except TaskDeferred:
         raise
     except Exception as error:
@@ -3513,14 +3545,14 @@ def arena_sweep_once(c: GameClient, n: int, team_id: str) -> dict:
             "isWin": win, "sceneId": scene_id, "raw": None}
 
 
-# 明确的普通失败按 5 分钟退避；结果不明或冷却被拒则等待登录同步。
+# 旗帜不足等待恢复；其它明确失败按 5 分钟退避；结果不明或冷却被拒等待登录同步。
 ARENA_RETRY_GAP_MS = TASK_RETRY_MS
 
 
 def task_arena_npc(c: GameClient, params: dict | None = None,
                    rt: dict | None = None,
                    emit: Callable[[dict], None] | None = None) -> dict:
-    """竞技场 NPC(地狱级) 自动扫荡，各 NPC 独立冷却、退避或等待登录同步。
+    """竞技场 NPC 自动扫荡：独立冷却/登录同步，旗帜恢复后再挑战。
 
     params: {"picked": [n...], "teamId": "0"}
     rt:     该账号的运行时状态(由 accounts.Account 持有、跨轮次保留、重登即清):
@@ -3530,7 +3562,7 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
       - retryMs = 失败后的 5 分钟退避
       - waitingForLogin = 冷却被拒或结果不明，成功登录同步前不再挑战
 
-    **闸门 = max(登录快照算出的冷却, 本轮跑出来的 nextMs, retryMs)**。
+    **闸门 = max(max(登录快照冷却, 本轮 nextMs) + 5 秒, retryMs)**。
     快照那份是关键：早先只认内存里的 nextMs，一换账号就是全新 Account ⇒ 全部显示
     "可挑战" ⇒ 盲打一轮，**每个都白扣一面旗帜**才从响应得知还在冷却（实测确认扣旗
     发生在拒绝之前）。现在登录/重登就能从快照读出真实档期，不会再白扣。
@@ -3543,7 +3575,8 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
     if not picked:
         return {"ok": True, "skipped": True, "detail": "未勾选任何 NPC，跳过"}
 
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = game_clock.now_ms(c)
+    local_to_server = now_ms - int(time.time() * 1000)
     next_map = rt.setdefault("nextMs", {})
     retry_map = rt.setdefault("retryMs", {})
     waiting_map = rt.setdefault("waitingForLogin", {})
@@ -3555,8 +3588,9 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
         if waiting_map.get(sid):
             paused += 1
             continue
-        gate = max(snap_map.get(sid) or 0, next_map.get(sid) or 0,
-                   retry_map.get(sid) or 0)
+        retry_local_ms = retry_map.get(sid)
+        retry_server_ms = int(retry_local_ms) + local_to_server if retry_local_ms else 0
+        gate = max(arena_ready_time(snap_map.get(sid), next_map.get(sid)), retry_server_ms)
         if gate and now_ms < gate:
             waiting += 1
             continue
@@ -3570,6 +3604,9 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
 
     lines, fail_count = [], 0
     for n in due:
+        # 每个 NPC 发起前重读，前一场的 CostItems 已可能消耗旗帜。
+        if not arena_flag_status(c)["ready"]:
+            break
         sid = arena_scene_id(n)
         try:
             r = arena_sweep_once(c, n, team_id)
@@ -3583,16 +3620,24 @@ def task_arena_npc(c: GameClient, params: dict | None = None,
             waiting_map[sid] = True
             next_map.pop(sid, None)
             retry_map.pop(sid, None)
+        elif r.get("waitingForFlags"):
+            fail_count += 1
+            retry_map.pop(sid, None)
         elif r.get("ok"):
             retry_map.pop(sid, None)
             if r.get("nextMs"):
                 next_map[sid] = r["nextMs"]
         else:
             fail_count += 1
-            retry_map[sid] = int(datetime.now(tz=timezone.utc).timestamp() * 1000) + ARENA_RETRY_GAP_MS
+            retry_map[sid] = int(time.time() * 1000) + ARENA_RETRY_GAP_MS
         lines.append(r["detail"])
         if emit is not None:
             emit({"ok": bool(r.get("ok")), "detail": r["detail"]})
+        if r.get("waitingForFlags"):
+            break  # 所有 NPC 共用旗帜，不能继续用其它 NPC 试探。
+
+    if not lines:
+        return {"ok": True, "skipped": True, "detail": "旗帜不足，等待旗帜恢复"}
 
     return {
         "ok": fail_count == 0,
@@ -3824,6 +3869,11 @@ TASKS: dict[str, dict] = {
         "fn": task_activity_vote, "kind": "toggle", "ui": "voting",
         "wantsRuntime": True, "streamsResults": True, "needsFreshState": True,
     },
+    "activity_store": {
+        "name": "商店购买", "desc": "活动道具充足时自动购买勾选的活动商店限购商品",
+        "fn": task_activity_store, "kind": "toggle", "ui": "activity_store",
+        "wantsRuntime": True, "streamsResults": True,
+    },
     "redeem_code": {
         "name": "兑换码领取", "desc": "自动抓取并兑换最新兑换码奖励",
         "fn": task_redeem_codes, "kind": "toggle", "wantsRuntime": True, "ui": "redeem_code",
@@ -3858,7 +3908,7 @@ TASKS: dict[str, dict] = {
         "kind": "manual", "ui": "sweep", "sweepKind": "elf",
     },
     "activity_scene": {
-        "name": "活动关卡", "desc": "选择当期活动、队伍与助战好友，按次数扫荡或自动推进已开放关卡",
+        "name": "活动关卡", "desc": "扫荡、自动推进活动关卡，领取故事与成就奖励",
         "kind": "manual", "ui": "activity",  # 前端自定义渲染，走 /api/activity/* 而非 /api/tasks/run
     },
     "abyss_auto": {
@@ -3969,28 +4019,39 @@ def manual_tasks() -> list[dict]:
 
 
 def next_claim_times(state: dict, params: dict | None = None, *,
-                     runtime: dict | None = None, now_ms: int | None = None) -> dict:
+                     runtime: dict | None = None, now_ms: int | None = None,
+                     local_now_ms: int | None = None) -> dict:
     """各定时 toggle 任务的"下次可领时间"，供前端在开关旁展示。
 
     返回 {task_id: {"nextMs": 毫秒时间戳 or None, "ready": bool}}。
     读的是 account_state 缓存（登录快照 + 每次领取后的写回），比较绝对时间戳，
     与任务内部的到点判断同源，所以展示与实际巡检行为一致。
       - month_signin: 每次成功登录后一次，成功后等待下一次登录或每日快照刷新
-      - send_meal: 账号快照刷新后 / 晚间 20:01，runtime 带账号刷新档期与邮件确认状态
-      - reactor: 上次领取 + 12h
-      - 基地生产中心三项: 各自 NextCanReceive*Time
-      - dispatch: 最早一个未完成派遣的 FinishTime（全空/全完成则视为可领/无）
+      - send_meal: 账号快照刷新后 / 晚间 20:00:05，runtime 带账号刷新档期与邮件确认状态
+      - reactor: 上次领取 + 12h + 5s
+      - 基地生产中心三项: 各自 NextCanReceive*Time + 5s
+      - dispatch: 最早一个未完成派遣的 FinishTime + 5s（全空/全完成则视为可领/无）
       - shop_free: 货架 LastResetTime + 1h1s，缺少时间戳时返回 None + ready=True
       - abyss_sweep / free_summon: 不是计时型，靠 `blocked`/`note` 两个附加键表达
         状态（blocked 非空 = 前端把开关置灰并显示原因，与任务内部的拒绝条件同源）
     """
     state = state or {}
     now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) if now_ms is None else int(now_ms)
+    # Game comparisons use server time; the API continues returning local
+    # deadlines so Date.now() countdowns and relative retries share one scale.
+    offset = 0 if local_now_ms is None else int(local_now_ms) - now_ms
     out: dict = {}
     out["month_signin"] = month_signin_status((runtime or {}).get("month_signin"), now_ms)
-    out["send_meal"] = send_meal_status(state, (runtime or {}).get("send_meal"), now_ms)
+    out["send_meal"] = send_meal_status(state, (runtime or {}).get("send_meal"), now_ms,
+                                      local_now_ms=local_now_ms)
     out['activity_vote'] = voting_status(state, (params or {}).get('activity_vote'),
                                          (runtime or {}).get('activity_vote'), now_ms=now_ms)
+    if out['activity_vote']['nextMs'] is not None:
+        out['activity_vote']['nextMs'] += offset
+    out['activity_store'] = activity_store_status(state, (params or {}).get('activity_store'),
+                                                 (runtime or {}).get('activity_store'), now_ms=now_ms)
+    if out['activity_store']['nextMs'] is not None:
+        out['activity_store']['nextMs'] += offset
 
     daily = daily_achievement_status(state)
     weekly = weekly_achievement_status(state)
@@ -4017,25 +4078,28 @@ def next_claim_times(state: dict, params: dict | None = None, *,
         "noteParts": notes,
     }
     def entry(next_ms):
-        return {"nextMs": next_ms, "ready": (next_ms is None or now_ms >= next_ms)}
+        return {"nextMs": next_ms + offset if next_ms is not None else None,
+                "ready": (next_ms is None or now_ms >= next_ms)}
 
-    # 动力转换：上次领取 + 12h
+    # 动力转换与执行共用服务器档期，包含 5 秒余量。
     reactor = state.get("ArkReactorData", {}) or {}
-    last_ms = _ms(reactor.get("LastMoneyReceivedTime"))
-    out["reactor"] = entry((last_ms + REACTOR_FULL_HOURS * 3600_000) if last_ms is not None else None)
+    out["reactor"] = entry(reactor_next_ms(reactor))
 
     # 基地生产中心三项
     lab = state.get("ArkStarForceLabData", {}) or {}
     for tid, (_disp, field, _route) in zip(
         ("sf_potion", "sf_starforce", "sf_tesseract"), STARFORCE_REWARDS
     ):
-        out[tid] = entry(_starforce_next_ms(lab, field))
+        out[tid] = entry(_starforce_claim_ms(lab, field))
 
     out["sf_tesseract"]["charge"] = tesseract_charge_status(lab, now_ms)
+    if out["sf_tesseract"]["charge"].get("nextMs") is not None:
+        out["sf_tesseract"]["charge"]["nextMs"] += offset
 
     # 派遣任务：取最早的未完成 FinishTime；无派遣任务则 ready
     quests = (state.get("ArkHighCommandData", {}) or {}).get("DispatchedQuests") or []
-    finishes = [fm for fm in (_ms(q.get("FinishTime")) for q in quests) if fm is not None]
+    finishes = [fm + game_clock.TASK_BOUNDARY_GRACE_MS
+                for fm in (_ms(q.get("FinishTime")) for q in quests) if fm is not None]
     pending = [fm for fm in finishes if fm > now_ms]
     # 部分派遣已完成时仍须立即处理，不能被其它槽位未来的 FinishTime 挡住。
     out["dispatch"] = entry(min(pending) if pending and len(pending) == len(finishes) else None)

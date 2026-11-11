@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import threading
 import time
 import uuid
@@ -19,7 +20,7 @@ from typing import Any, Callable
 
 import httpx
 
-from . import config
+from . import config, game_clock
 from .logutil import format_payload, log
 
 # 要把完整请求/响应体写进开发者日志的 route（花资源、需要事后核对真实价格与
@@ -32,7 +33,7 @@ _TRACE_ROUTES = ("StoreHandler.BuyCommodity", "SceneHandler.PurityScene",
 _TRACE_MAX = 4000   # 单条截断长度
 # 响应只摘这几个键：购买/扫荡响应会把整个账号状态(AccountInfo/Quests/BattlePass…)
 # 一起带回来，几十 KB，直接截断会把真正要看的 Drop/CostItems 切掉。
-_TRACE_KEYS = ("Drop", "CostItems", "CommodityRecord", "SceneData", "Event",
+_TRACE_KEYS = ("Drop", "VirtualDrop", "CostItems", "CommodityRecord", "SceneData", "Event",
                "VIPInfo", "GotStars", "Utc")
 
 
@@ -112,6 +113,17 @@ def is_duplicate_login_message(value: Any) -> bool:
     return "duplicate login" in normalized
 
 
+def login_version(bulletin: Any, current: str) -> str:
+    """Keep an accepted profile version, or use an advertised full client version."""
+    info = bulletin.get("Info", bulletin) if isinstance(bulletin, dict) else None
+    versions = info.get("AvailableVersions") if isinstance(info, dict) else None
+    if not isinstance(versions, list) or current in versions:
+        return current
+    candidates = [value for value in versions if isinstance(value, str)
+                  and re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", value)]
+    return max(candidates, key=lambda value: tuple(map(int, value.split(".")))) if candidates else current
+
+
 _HEADERS = {
     "Content-Type": "application/octet-stream",
     "Origin": config.GAME_ORIGIN,
@@ -188,6 +200,7 @@ class GameClient:
         changed = self._connection_state != "disconnected" or self._connection_reason != reason
         if changed:
             self._connection_changed_at = int(time.time() * 1000)
+            self._resource_frozen_server_ms = game_clock.now_ms(self)
         self._connection_state = "disconnected"
         self._connection_reason = reason
         callback = getattr(self, "connection_changed_callback", None)
@@ -514,6 +527,7 @@ class GameClient:
         # NowItem（该物品操作后的绝对新余额）。把它写回缓存 ItemContainer，状态栏就能
         # 零额外请求地反映工具自己领取/购买/花费的结果（游戏没有单独查背包的接口）。
         if isinstance(body, dict):
+            game_clock.sync(self, body)
             if route == bootstrap_route:
                 from .resource_update import service as resource_service
                 resource_service.observe(body, token=bulletin_token)
@@ -533,6 +547,7 @@ class GameClient:
         state = getattr(self, "account_state", None)
         if not isinstance(state, dict) or not isinstance(body, dict):
             return
+        game_clock.sync(self, body)
         self._apply_now_items(body)
         self._apply_quest_updates(body)
         self._apply_account_status_updates(body)
@@ -741,6 +756,9 @@ class GameClient:
         self._inventory_revision += 1
         self._inventory_baseline_revision = self._inventory_revision
         self._inventory_changed.clear()
+        self._resource_missing_timer = set()
+        self._resource_empty_at = {}
+        self._resource_frozen_server_ms = None
 
     def _replace_account_state(self, state: dict) -> None:
         """Atomically replace account inventory after a successful full login."""
@@ -749,6 +767,47 @@ class GameClient:
             self.account_state = state
             self._activity_pending = None
             self._reset_inventory_locked(state)
+            game_clock.sync(self, state, reset=True)
+
+    def resource_gauges(self) -> dict:
+        """Project two gauges without changing server items or inventory revisions."""
+        from .resource_recovery import RESOURCE_IDS, snapshot
+        self._ensure_inventory_state()
+        self._ensure_connection_state()
+        now = int(time.time() * 1000)
+        connected = self._connection_state == "connected"
+        # Freeze at the observed disconnection, until a new login replaces it.
+        server_now = game_clock.now_ms(self)
+        if not connected:
+            server_now = getattr(self, "_resource_frozen_server_ms", None) or server_now
+        with self._inventory_lock:
+            items = {sid: deepcopy(self._inventory_items.get(sid, {})) for sid in RESOURCE_IDS.values()}
+            for sid in getattr(self, "_resource_missing_timer", ()):
+                timer = items.get(sid, {}).get("TimeCollect")
+                if isinstance(timer, dict):
+                    timer.pop("LastCollectTime", None)
+            for sid, empty_at in self._resource_empty_at.items():
+                item = items[sid]
+                item["Count"] = 0
+                timer = item.get("TimeCollect")
+                item["TimeCollect"] = {**(timer if isinstance(timer, dict) else {}),
+                                       "LastCollectTime": {"$date": empty_at}}
+        result = snapshot(items, server_now, connected=connected)
+        return {key: {**value, "sampledAtMs": now} for key, value in result.items()}
+
+    def note_resource_empty(self, sid: str) -> None:
+        """A rejected one-unit cost proves zero balance; reanchor its estimate only.
+
+        Keep the original server item intact. A fresh balance or login replaces
+        this conservative recovery anchor, even if its Count is unchanged.
+        """
+        from .resource_recovery import RESOURCE_IDS
+        if sid not in RESOURCE_IDS.values():
+            raise ValueError(f"Not a recovering resource: {sid}")
+        self._ensure_inventory_state()
+        now = game_clock.now_ms(self)
+        with self._inventory_lock:
+            self._resource_empty_at[sid] = now
 
     def inventory_meta(self) -> dict:
         self._ensure_inventory_state()
@@ -813,26 +872,37 @@ class GameClient:
         with self._inventory_lock:
             # Do not publish intermediate balances from one batch response.
             final = {}
+            corrected = set()
             for item in updates:
                 sid = item["StaticID"]
+                if sid in ("3", "4"):
+                    if sid in self._resource_empty_at:
+                        corrected.add(sid)
+                        self._resource_empty_at.pop(sid)
+                    timer = item.get("TimeCollect")
+                    if isinstance(timer, dict) and timer.get("LastCollectTime") is not None:
+                        self._resource_missing_timer.discard(sid)
+                    else:
+                        # A partial absolute balance must not reuse an older
+                        # recovery anchor and count the same recovery twice.
+                        self._resource_missing_timer.add(sid)
                 current = final.get(sid, self._inventory_items.get(sid, {}))
                 final[sid] = {**current, **item}
             changed = {sid: item for sid, item in final.items()
                        if self._inventory_items.get(sid) != item}
-            if not changed:
-                return
-            increases = set()
+            increases = {sid for sid in corrected if final[sid].get("Count", 0) > 0}
             for sid, item in changed.items():
                 previous = self._inventory_items.get(sid, {}).get('Count', 0)
                 count = item.get('Count')
                 if (isinstance(count, (int, float)) and not isinstance(count, bool)
                         and isinstance(previous, (int, float)) and count > previous):
                     increases.add(sid)
-            self._inventory_revision += 1
-            for sid, item in changed.items():
-                self._inventory_items[sid] = item
-                self._inventory_changed[sid] = self._inventory_revision
-            self.account_state["ItemContainer"]["Items"] = list(self._inventory_items.values())
+            if changed:
+                self._inventory_revision += 1
+                for sid, item in changed.items():
+                    self._inventory_items[sid] = item
+                    self._inventory_changed[sid] = self._inventory_revision
+                self.account_state["ItemContainer"]["Items"] = list(self._inventory_items.values())
         callback = getattr(self, 'inventory_increase_callback', None)
         if callback and increases:
             callback(increases)
@@ -884,13 +954,16 @@ class GameClient:
 
     def _bootstrap_serial(self) -> dict:
         self._sync_login_auth(False)
-        common = {"Token": self.game_token, **self._login_common}
         uid_res = {}
 
         # 1. 公告/服务器配置(可选，确认连通)
-        self.call("GameServerDBSettingHandler.QueryBulletinInfoResult", {})
+        bulletin = self.call("GameServerDBSettingHandler.QueryBulletinInfoResult", {})
         from .maintenance import service as maintenance_service
         maintenance_service.require_open()
+        version = login_version(bulletin, self._login_common.get("Version", config.GAME_VERSION))
+        if version != self._login_common.get("Version"):
+            log.info("[game] 登录客户端版本按官方公告切换：%s -> %s", self._login_common.get("Version"), version)
+        common = {"Token": self.game_token, **self._login_common, "Version": version}
 
         # V2 门户已经返回 userId，可直接作为 LoginID；旧 WebGL jwt 才需要 QueryUserID。
         if self._fixed_login_id:
@@ -911,7 +984,7 @@ class GameClient:
             # Token 可能被门户提前撤销，即使 JWT exp 尚未到期也强制续期并只重试一次。
             self._sync_login_auth(True)
             self.login_id = self._fixed_login_id
-            common = {"Token": self.game_token, **self._login_common}
+            common = {"Token": self.game_token, **self._login_common, "Version": version}
             state = self.call("AccountHandler.Login", {**common, "LoginID": self.login_id})
         self.session_id = state.get("SessionID")
         self.aid = state.get("Info", {}).get("_id", {}).get("$oid")

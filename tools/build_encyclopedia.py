@@ -182,6 +182,7 @@ def build_bundle(ark2_root: Path, output_root: Path) -> None:
             "number": entry["number"],
             "name": entry["name"],
             "nameEn": name_en,
+            "nameE7": str(source.get("NAME_e7") or ""),
             "aliases": source.get("NAME_ALIASES") or [],
             "element": element,
             "elementName": ELEMENT_LABELS.get(element, element),

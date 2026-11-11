@@ -581,7 +581,7 @@ PORTAL_REFRESH_TIMEOUT = 30.0
 GAME_ROUTER = "https://game-arkre-labs.ecchi.xxx/Router/RouterHandler.ashx"
 GAME_ORIGIN = "https://game-arkre-labs.ecchi.xxx"
 GAME_REFERER = "https://game-arkre-labs.ecchi.xxx/WebGL/index.html"
-GAME_VERSION = "4.0.0.111888"
+GAME_VERSION = "5.0.0.116271"
 
 # 旧 WebGL 握手仍保留给显式的 legacy token 入口；新默认登录使用 Android V2 profile。
 LOGIN_COMMON_WEBGL = {

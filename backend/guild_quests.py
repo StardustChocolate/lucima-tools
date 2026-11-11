@@ -105,7 +105,7 @@ class GuildWeeklyService:
                 or self.runtime.get("weeklySyncedDay") != self.guild.now_ms() // DAY_MS)
 
     def next_delay(self):
-        if self.runtime.get("weeklyScoreJob") or not has_guild(self.client.account_state):
+        if not has_guild(self.client.account_state):
             return None
         retry = self.runtime.get("weeklyRetryAtMs")
         if retry is not None:

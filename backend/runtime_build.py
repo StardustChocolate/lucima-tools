@@ -10,8 +10,12 @@ import re
 from .build_battle_metadata import build_battle_metadata
 from .guild_data_build import build_guild_aid, build_guild_quests, build_guild_store
 from .voting import build_catalog as build_voting_catalog
+from .gacha import build_catalog as build_gacha_catalog
+from .resource_recovery import build_intervals
+from .activity_store import build_catalog as build_activity_stores
+from .activity_rewards import build_catalog as build_activity_rewards
 
-BUILD_VERSION = 2
+BUILD_VERSION = 6
 
 SLOTS = {"Weapon": "weapon", "Head": "helmet", "Body": "armor", "Necklace": "necklace", "Ring": "ring", "Shoes": "boots"}
 SKILL_FIELDS = ("ID", "TargetTypeFun", "SkillType", "TargetType", "TargetCamp", "NoSelf",
@@ -125,9 +129,17 @@ def compile_data(source: Path, version: str, previous):
             family = key[len(prefix):]
             activities["BH" + family[1:] if family.startswith("H") else family] = plain(value)
     config = {"schema": 1, "tables": {key: battle["tables"][key] for key in ("Activity", "PublicVariable")}}
+    config["itemRecoverySeconds"] = build_intervals(items.values())
     config['voting'] = build_voting_catalog(
         table(source, 'Vote', ('ActivityID', 'VoteItemID', 'VoteJsonString')),
         table(source, 'Quest'), loc)
+    config['gacha'] = build_gacha_catalog(
+        commodities, table(source, 'Activity'), table(source, 'Drop', ('DropID',)),
+        names, ranks, loc, 'catalog_' + version)
+    config['activityStores'] = build_activity_stores(
+        table(source, 'Store'), commodities, table(source, 'Activity'), names, loc, 'catalog_' + version)
+    config['activityRewards'] = build_activity_rewards(
+        table(source, 'Quest'), table(source, 'QuestGroup'), table(source, 'Activity'), loc, 'catalog_' + version)
     if int(config["tables"]["PublicVariable"].get("GuildWarLessLV", {}).get("VALUE", 0)) <= 0:
         raise ValueError("佣兵团公共参数无效")
     result = {"assets/abyss_battle_static.json": battle, "assets/ark2_skill_static.json": static,

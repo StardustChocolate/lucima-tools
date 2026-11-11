@@ -136,7 +136,9 @@
         </div>
       </article>`;
 
-  function mount({ host, data, translations = {}, staticMode = true } = {}) {
+  function mount({ host, data, translations = {}, staticMode = true, version = "2026.11.11" } = {}) {
+    // Resource revisions have immutable URLs; the footer keeps the data date.
+    version = String(version).replace(/^(\d{4}\.\d{2}\.\d{2})-framing-r\d+$/, "$1");
     if (!host || typeof host.replaceChildren !== "function") {
       throw new TypeError("LucimaEncyclopediaCard.mount requires a host element.");
     }
@@ -837,8 +839,8 @@
       return window.renderArchiveScaling?.(skill, activeCharacterData, activeTranslations) || null;
     }
 
-    function fitSkillNames() {
-      for (const name of card.querySelectorAll(".character-skill__name")) {
+    function fitNames() {
+      for (const name of card.querySelectorAll(".character-name, .character-skill__name")) {
         name.style.fontSize = "";
         const defaultSize = Number.parseFloat(getComputedStyle(name).fontSize);
         let size = defaultSize;
@@ -1101,7 +1103,7 @@
       credits.append(creditMain);
       const meta = createElement("div", "character-auto-cast__credit-meta");
       meta.append(
-        creditField("character-auto-cast__credit-meta-item", "版本：", "v2026.9.9"),
+        creditField("character-auto-cast__credit-meta-item", "版本：", `v${version}`),
         creditField("character-auto-cast__credit-meta-item", "QQ Group：", qqLink)
       );
       credits.append(meta);
@@ -1145,7 +1147,7 @@
       for (const skill of visibleSkills(data)) characterSkills.append(renderSkill(skill));
       const autoCast = renderAutoCast(data);
       if (autoCast) characterSkills.append(autoCast);
-      fitSkillNames();
+      fitNames();
       characterSkills.setAttribute("aria-label", `${data.NAME || data.ID || "角色"}技能`);
     }
 
@@ -1579,7 +1581,7 @@
     const updateLayout = () => {
       if (disposed) return;
       fitProfileFactValues();
-      fitSkillNames();
+      fitNames();
       updateCardHeight();
       syncFrame();
     };
@@ -1617,6 +1619,7 @@
     resizeObserver?.observe(card);
     resizeObserver?.observe(characterSkills);
     window.addEventListener("resize", scheduleLayout);
+    document.fonts?.ready.then(scheduleLayout);
     scheduleLayout();
 
     return {

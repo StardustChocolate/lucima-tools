@@ -5,7 +5,7 @@ import random
 import time
 
 from . import runtime_data as resources
-from . import config
+from . import config, game_clock
 from .game_client import GameError, GameMessage, TaskDeferred
 from .game_data import activity_open, timestamp
 from .game_table_dsl import DSLParser
@@ -155,7 +155,9 @@ def task(client, params=None, runtime=None, on_partial=None):
             raise TaskDeferred('活动投票已停止')
         current_params = getattr(client, 'vote_params', None)
         selected = current_params() if callable(current_params) else params
-        return next((row for row in status(client.account_state, selected, runtime)['activities'] if row['id'] == aid), None)
+        return next((row for row in status(client.account_state, selected, runtime,
+                                           now_ms=game_clock.now_ms(client))['activities']
+                     if row['id'] == aid), None)
 
     def claim(aid, quest):
         prepare(aid)
@@ -182,7 +184,8 @@ def task(client, params=None, runtime=None, on_partial=None):
         runtime['waitingForLogin'].pop(aid, None)
         emit(f'领取{quest["name"]}奖励：{_fmt_items(gains)}')
 
-    for initial in status(client.account_state, params, runtime)['activities']:
+    for initial in status(client.account_state, params, runtime,
+                          now_ms=game_clock.now_ms(client))['activities']:
         aid = initial['id']
         if initial['waiting']:
             continue
@@ -230,5 +233,6 @@ def task(client, params=None, runtime=None, on_partial=None):
             waiting = aid in runtime.get('waitingForLogin', {})
             errors.append(f'{error}，等待登录同步刷新' if waiting else str(error))
     return {'ok': not errors, 'skipped': not lines and not errors,
-            'detail': '；'.join(([] if on_partial else lines) + errors) or status(client.account_state, params, runtime)['note'],
+            'detail': '；'.join(([] if on_partial else lines) + errors) or status(
+                client.account_state, params, runtime, now_ms=game_clock.now_ms(client))['note'],
             'liveLogged': bool(on_partial and lines and not errors)}

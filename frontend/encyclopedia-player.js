@@ -88,12 +88,30 @@
       const [atlasResponse, skeletonResponse] = await Promise.all([
         this.fetchChecked(atlasUrl), this.fetchChecked(skeletonUrl),
       ]);
-      const [atlasText, skeletonBuffer] = await Promise.all([
-        atlasResponse.text(), skeletonResponse.arrayBuffer(),
+      const [atlasBuffer, skeletonBuffer] = await Promise.all([
+        atlasResponse.arrayBuffer(), skeletonResponse.arrayBuffer(),
       ]);
+      const atlasText = new TextDecoder().decode(atlasBuffer);
       this.assertActive();
       const pages = atlasPageNames(atlasText);
       if (!pages.length) throw new Error("Portrait atlas has no texture pages");
+      const skin = String(this.config.skin || "LV1");
+      const animationName = String(this.config.animation || "00_Idle");
+      let profile = null;
+      if (this.config.framing !== false) {
+        const response = await this.fetchResource(new URL(`${base}.framing.json`, root).href);
+        this.assertActive();
+        if (response?.ok) {
+          profile = await response.json();
+          this.bounds = framing.validateProfile(profile, { base, skin, animation: animationName, pages });
+          await Promise.all([
+            framing.verifySource(profile, `${base}.skel`, new Uint8Array(skeletonBuffer)),
+            framing.verifySource(profile, `${base}.atlas`, new Uint8Array(atlasBuffer)),
+          ]);
+        } else if (this.config.framing === true || response?.status !== 404) {
+          throw new Error("Portrait framing profile unavailable");
+        }
+      }
       const textures = await Promise.all(pages.map(async (name) => {
         const pageUrl = new URL(name, atlasUrl);
         if (pageUrl.origin !== root.origin || !pageUrl.pathname.startsWith(root.pathname)) {
@@ -101,6 +119,7 @@
         }
         const response = await this.fetchChecked(pageUrl.href);
         const bytes = new Uint8Array(await response.arrayBuffer());
+        if (profile) await framing.verifySource(profile, name, bytes);
         this.assertActive();
         return [name, bytesToDataUri(bytes, response.headers.get("content-type") || "image/png")];
       }));
@@ -140,14 +159,12 @@
       const loader = new runtime.AtlasAttachmentLoader(atlas);
       const binary = new runtime.SkeletonBinary(loader);
       this.skeletonData = binary.readSkeletonData(assets.require(`${base}.skel`));
-      const animationName = String(this.config.animation || "00_Idle");
       const animation = this.skeletonData.findAnimation(animationName);
       if (!animation) throw new Error(`Animation not found: ${animationName}`);
-      const skin = String(this.config.skin || "LV1");
       this.skeleton = framing.createSkeleton(runtime, this.skeletonData, skin);
       this.state = new runtime.AnimationState(new runtime.AnimationStateData(this.skeletonData));
       this.state.setAnimation(0, animationName, true);
-      this.bounds = framing.measureAnimationBounds(runtime, this.skeletonData, {
+      this.bounds ||= framing.measureAnimationBounds(runtime, this.skeletonData, {
         skin, animation, assertActive: () => this.assertActive(),
       });
       this.assertActive();

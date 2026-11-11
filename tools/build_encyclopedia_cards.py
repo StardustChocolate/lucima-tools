@@ -10,11 +10,11 @@ import mimetypes
 import os
 import re
 import sys
-import unicodedata
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+from encyclopedia_search import build_search, normalize, phonetic
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = "http://encyclopedia-cards.invalid"
@@ -31,12 +31,17 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <script src="/static/encyclopedia-card.js"></script>
 <script src="/static/encyclopedia-media.js"></script>
 <script src="/static/encyclopedia-export.js"></script></body></html>"""
-EXPORT = """async ({entry, data, translations, config}) => {
+EXPORT = """async ({entry, data, translations, config, version}) => {
     const mount = LucimaEncyclopediaMedia.mount;
     window.LucimaEncyclopediaMedia = {...LucimaEncyclopediaMedia, mount: options => {
         const media = mount(options);
+        const required = [entry.hasStaticPortrait !== false,
+            ...[...options.renderer.card.querySelectorAll('.character-skill__icon')]
+                .map(icon => icon.dataset.iconSprite || '')
+                .filter(sprite => /^Icon_Skill_[A-Za-z0-9_]+$/.test(sprite))
+                .map(sprite => !Object.hasOwn(config.missingFiles || {}, `skills/${sprite}.png`))];
         media.ready = media.ready.then(results => {
-            if (results.some((ok, index) => !ok && (index > 0 || entry.hasStaticPortrait))) {
+            if (results.length !== required.length || results.some((ok, index) => !ok && required[index])) {
                 throw new Error('Expected portrait or skill icon did not decode: ' + entry.id);
             }
             return results;
@@ -44,7 +49,7 @@ EXPORT = """async ({entry, data, translations, config}) => {
         return media;
     }};
     try {
-        return await LucimaEncyclopediaExport.render({entry, data, translations, config,
+        return await LucimaEncyclopediaExport.render({entry, data, translations, config, version,
             fetchResource: async url => {
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('Resource HTTP ' + response.status);
@@ -74,35 +79,6 @@ def atomic_write(path, data):
     os.replace(pending, path)
 
 
-def normalize(text):
-    return " ".join(unicodedata.normalize("NFKC", str(text)).split()).casefold()
-
-
-def phonetic(text):
-    from pypinyin import Style, lazy_pinyin
-    return normalize("".join(lazy_pinyin(char, style=Style.NORMAL)[0]
-                             if "\u4e00" <= char <= "\u9fff" else char for char in normalize(text)))
-
-
-def build_search(records):
-    """Keep every candidate; never overwrite a name/alias/pinyin collision."""
-    ids, names, aliases, pinyin = (defaultdict(set) for _ in range(4))
-    for row in records:
-        hero = row["id"]
-        ids[normalize(hero)].add(hero)
-        for name in (row["name"], row["nameEn"]):
-            if name:
-                names[normalize(name)].add(hero)
-        for name in (row["nameE7"], *row["aliases"]):
-            if name:
-                aliases[normalize(name)].add(hero)
-    for table in (ids, names, aliases):
-        for word, heroes in table.items():
-            pinyin[phonetic(word)].update(heroes)
-    return {key: {word: sorted(heroes) for word, heroes in sorted(table.items())}
-            for key, table in (("ids", ids), ("names", names), ("aliases", aliases), ("pinyin", pinyin))}
-
-
 def verify_png(data):
     from PIL import Image
     with Image.open(io.BytesIO(data)) as image:
@@ -121,7 +97,8 @@ def build(args):
     translations = read_json(bundle / "ui.json")
     details = {row["id"]: read_json(bundle / row["detail"]) for row in entries}
     source_root = args.resources.resolve()
-    config = read_json(source_root / "manifest.json")
+    media_snapshot = source_root / "manifests" / f"{args.version}.json"
+    config = read_json(media_snapshot if media_snapshot.is_file() else source_root / "manifest.json")
     config["baseUrl"] = ORIGIN + "/media/"
     inputs = {name: digest((ROOT / "frontend" / name).read_bytes()) for name in RENDER_FILES}
     inputs["exporter"] = digest(Path(__file__).read_bytes())
@@ -226,7 +203,7 @@ def build(args):
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(ORIGIN, wait_until="load")
             result = page.evaluate(EXPORT, {"entry": entry, "data": details[hero],
-                                            "translations": translations, "config": config})
+                                            "translations": translations, "config": config, "version": args.version})
             if missing or errors:
                 raise ValueError(f"Incomplete render {hero}: {missing} {errors}")
             data = base64.b64decode(result["pngBase64"], validate=True)
@@ -275,6 +252,7 @@ def write_catalog(args, entries, details, state, inputs):
     report = {"version": args.version, "cards": len(records),
               "totalImageBytes": sum(row["image"]["size"] for row in records),
               "missingPortraits": [row["id"] for row in records if not row["hasPortrait"]],
+              "sourceGaps": read_json(args.resources / "manifest.json").get("missingFiles", {}),
               "queryCounts": {key: len(search[key]) for key in ("ids", "names", "aliases", "pinyin")},
               "ambiguousAliases": {key: value for key, value in search["aliases"].items() if len(value) > 1},
               "renderEnvironment": inputs}

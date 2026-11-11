@@ -90,6 +90,7 @@ class ActivityProgressUITests(unittest.TestCase):
           const DATA = {scenes:[{id:'BH610_1_12', name:'困难'}],
             teams:[{id:'T', name:'我的队伍'}], supports:[], favorites:[],
             activities:[{id:'BH610',name:'活动测试',completed:2,total:13}]};
+          const REWARDS = {story:{claimable:2,claimed:4},achievement:{claimable:1,claimed:3}};
           let finishRun, finishOptions, holdOptions = false, failOptions = false;
           const api = async (path, body) => {
             calls.push({path, body, account: activeAccount});
@@ -99,6 +100,8 @@ class ActivityProgressUITests(unittest.TestCase):
               return DATA;
             }
             if (path === '/api/activity/progress/run') return new Promise(resolve => {finishRun = resolve;});
+            if (path.startsWith('/api/activity/rewards/options')) return REWARDS;
+            if (path === '/api/activity/rewards/claim') return {ok:true, detail:'已领取 1 项奖励', rewards:REWARDS};
             return {ok:true};
           };
         """ + shared + activity + """
@@ -266,6 +269,20 @@ class ActivityProgressUITests(unittest.TestCase):
         self.page.evaluate("failOptions = false")
         self.page.click('.act-family-slot .act-options-retry')
         self.assertTrue(self.page.locator('.act-family .dd-cur').is_visible())
+        self.assertEqual(self.errors, [])
+
+    def test_rewards_tab_loads_counts_hides_battle_controls_and_claims_by_kind(self):
+        self.page.click('[data-act-mode="rewards"]')
+        self.assertEqual(self.page.evaluate('calls.at(-1).path'), '/api/activity/rewards/options?account=alpha')
+        self.assertEqual(self.page.locator('[data-act-reward-count="story"]').inner_text(), '2 项可领取')
+        self.assertEqual(self.page.locator('[data-act-reward-count="achievement"]').inner_text(), '1 项可领取')
+        self.assertFalse(self.page.locator('.act-team-slot').is_visible())
+        self.assertFalse(self.page.locator('.act-support-slot').is_visible())
+        self.page.click('[data-act-reward="achievement"]')
+        self.page.wait_for_function("calls.some(call => call.path === '/api/activity/rewards/claim')")
+        call = self.page.evaluate("calls.find(call => call.path === '/api/activity/rewards/claim')")
+        self.assertEqual(call['body'], {'account':'alpha','kind':'achievement'})
+        self.assertFalse(self.page.locator('[data-act-reward="story"]').is_disabled())
         self.assertEqual(self.errors, [])
 
 

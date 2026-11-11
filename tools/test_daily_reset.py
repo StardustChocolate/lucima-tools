@@ -124,13 +124,16 @@ class DailyResetTests(unittest.TestCase):
         self.assertEqual(self.acc.automation_wait_reason(), '等待每日重登')
         self.assertEqual(self.client.calls, [])
 
-    def test_successful_login_requires_guild_sync_and_accounts_are_isolated(self):
+    def test_successful_login_releases_ordinary_tasks_without_guild_sync_and_accounts_are_isolated(self):
         _, second = self.make_account('second@example.invalid')
         self.move('2026-10-26 08:06:00')
         self.login()
-        self.assertEqual(self.acc.automation_wait_reason(), '等待佣兵团同步')
+        self.assertIsNone(self.acc.automation_wait_reason())
+        self.assertEqual(self.acc.automation_wait_reason(guild_task=True), '等待佣兵团同步')
+        self.assertEqual(self.acc.guild_snapshot()['waiting'], '等待佣兵团同步')
         self.assertEqual(second.automation_wait_reason(), '等待每日重登')
-        self.assertEqual(self.acc.run_toggles(['daily_probe'], 'test'), [])
+        self.assertTrue(self.acc.run_toggles(['daily_probe'], 'test')[0]['ok'])
+        self.assertTrue(all(not row.get('waiting') for row in self.acc.next_claims().values()))
         self.acc._run_guild_if_due()
         self.assertIsNone(self.acc.automation_wait_reason())
         self.assertTrue(self.acc.run_toggles(['daily_probe'], 'test')[0]['ok'])
@@ -140,7 +143,8 @@ class DailyResetTests(unittest.TestCase):
         self.acc._state_refresh_at = self.now / 1000
         self.assertTrue(self.acc._refresh_state_if_due())
         self.assertTrue(self.acc.daily_state_current())
-        self.assertEqual(self.acc.automation_wait_reason(), '等待佣兵团同步')
+        self.assertIsNone(self.acc.automation_wait_reason())
+        self.assertEqual(self.acc.automation_wait_reason(guild_task=True), '等待佣兵团同步')
 
     def test_recovery_login_success_releases_daily_gate(self):
         self.move('2026-10-26 08:06:00')
@@ -150,9 +154,10 @@ class DailyResetTests(unittest.TestCase):
                 config, 'get_auto_relogin_config', return_value={'enabled': True, 'delaySeconds': 0}):
             self.assertTrue(self.acc._auto_relogin_if_due())
         self.assertTrue(self.acc.daily_state_current())
-        self.assertEqual(self.acc.automation_wait_reason(), '等待佣兵团同步')
+        self.assertIsNone(self.acc.automation_wait_reason())
+        self.assertEqual(self.acc.automation_wait_reason(guild_task=True), '等待佣兵团同步')
 
-    def test_failed_guild_entry_keeps_ordinary_tasks_waiting_but_allows_login_tasks(self):
+    def test_failed_guild_entry_only_blocks_guild_tasks_and_keeps_its_retry(self):
         self.move('2026-10-26 08:06:00')
         self.login()
         original = self.client.call
@@ -162,16 +167,55 @@ class DailyResetTests(unittest.TestCase):
             return original(route, data)
         with patch.object(self.client, 'call', side_effect=call):
             self.acc._run_guild_if_due()
-        self.assertEqual(self.acc.automation_wait_reason(), '等待佣兵团同步')
-        self.assertEqual(self.acc.run_toggles(['daily_probe'], 'test'), [])
+        self.assertIsNone(self.acc.automation_wait_reason())
+        self.assertEqual(self.acc.automation_wait_reason(guild_task=True), '等待佣兵团同步')
+        self.assertTrue(self.acc.run_toggles(['daily_probe'], 'test')[0]['ok'])
+        for route in ('GuildHandler.DonateGold', 'StoreHandler.BuyCommodity', 'QuestHandler.RewardQuest'):
+            with self.subTest(route=route), self.acc._request_scope(guild_task=True):
+                with self.assertRaisesRegex(TaskDeferred, '等待佣兵团同步'):
+                    self.acc._before_game_request(route)
+        with self.assertRaisesRegex(TaskDeferred, '等待佣兵团同步'):
+            self.acc._before_game_request('GuildHandler.DonateGold')
         self.acc.toggles['month_signin'] = True
         with patch.dict(tasks.TASKS['month_signin'], {'fn': lambda c, p, r: self.probe(c)}):
             self.assertTrue(self.acc.run_toggles(['month_signin'], 'test')[0]['ok'])
-        self.assertEqual(self.acc._next_wake_delay(), 300)
+        self.acc.toggles = {}
+        with patch.object(accounts.redeem_codes, 'next_refresh_delay', return_value=3600):
+            self.assertEqual(self.acc._next_wake_delay(), 300)
         self.now += 300_000
         self.client.now = self.now
         self.acc._run_guild_if_due()
         self.assertIsNone(self.acc.automation_wait_reason())
+        self.assertIsNone(self.acc.automation_wait_reason(guild_task=True))
+
+    def test_guild_retry_does_not_delay_npc_deadline_or_replace_its_status(self):
+        self.move('2026-10-26 08:06:00')
+        self.login()
+        deadline = self.now + 10_000
+        self.acc.guild_runtime['retryAtMs'] = self.now + 300_000
+        self.acc.toggles = {'arena_npc': True}
+        self.acc.params['arena_npc'] = {'picked': [1]}
+        self.client._apply_now_items({'Drop': {'Items': [{'NowItem': {'StaticID': '4', 'Count': 1}}]}})
+        self.client.account_state['PVPData'] = {'NPCPVPInfoList': [
+            {'NPCID': 1, 'NextTime': {'$date': deadline}}]}
+        self.assertEqual(self.acc._next_wake_delay(), 15)
+        self.assertEqual(self.acc.next_fixed_task_at_ms(self.now), deadline + 5_000)
+        npc = appcore.arena_state(self.acc)['npcs'][0]
+        self.assertIsNone(npc['waiting'])
+        self.assertEqual(npc['nextMs'], deadline + 5_000)
+        self.assertEqual(self.acc.guild_snapshot()['waiting'], '等待佣兵团同步')
+
+    def test_guild_api_scope_blocks_shared_shop_route_but_ordinary_transport_can_send(self):
+        self.move('2026-10-26 08:06:00')
+        self.login()
+        with patch.object(appcore, '_require', return_value=self.acc), patch.object(
+                accounts, 'get', return_value=self.acc):
+            with self.assertRaisesRegex(appcore.ApiError, '等待佣兵团同步'):
+                with appcore._guild_account(self.acc.email):
+                    self.acc._before_game_request('StoreHandler.BuyCommodity')
+        with self.acc._request_scope(), patch.object(self.client, '_call_serial', return_value={}) as send:
+            GameClient.call(self.client, 'Test.Automatic', self.client._auth_data())
+        send.assert_called_once()
 
     def test_scheduler_order_login_tasks_queries_checkin_donation_then_ordinary(self):
         self.move('2026-10-26 08:06:00')

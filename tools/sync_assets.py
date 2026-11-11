@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+from io import BytesIO
 import json
 import re
 import shutil
@@ -77,6 +78,7 @@ UI_SOURCE_FILES = {
     "store.png": Path("菜单模块") / "Lobby_Shop_商店.png",
     "hero-all.png": Path("其它") / "UIz" / "UIz_Icon_All.png",
     "hero-illustrated.png": Path("菜单模块") / "Lobby_Illustrated_图鉴.png",
+    "summon.png": Path("菜单模块") / "Lobby_Summon_招募.png",
     "DailyPoint.png": Path("其它") / "Item" / "DailyPoint.png",
     "GiftPack.png": Path("其它") / "Item" / "GiftPack.png",
 }
@@ -156,6 +158,41 @@ def _avatar_files(source: Path) -> tuple[dict[str, Path], list[str]]:
         raise RuntimeError(f"no avatar directories found in: {avatar_root}")
     missing_known = sorted(_known_avatar_ids() - {Path(name).stem for name in files})
     return files, missing_known
+
+
+def _artifact_files(source: Path) -> dict[str, bytes]:
+    """Build summon thumbnails from the official small bond-card sprites."""
+    from PIL import Image
+
+    catalog = source / "羁绊" / "列表.csv"
+    files: dict[str, bytes] = {}
+    with catalog.open(encoding="utf-8-sig", newline="") as stream:
+        rows = csv.DictReader(stream)
+        if not rows.fieldnames or not {"ID", "有图", "图标文件"}.issubset(rows.fieldnames):
+            raise RuntimeError(f"invalid artifact catalog header: {catalog}")
+        seen = set()
+        for row in rows:
+            sid = row.get("ID") or ""
+            if not re.fullmatch(r"[A-Za-z0-9_]+", sid) or sid in seen:
+                raise RuntimeError(f"invalid or duplicate artifact ID: {sid!r}")
+            seen.add(sid)
+            if (row.get("有图") or "").lower() != "true":
+                continue
+            relative = Path(row.get("图标文件") or "")
+            if relative.is_absolute() or not relative.parts or relative.parts[0] != "assets":
+                raise RuntimeError(f"invalid artifact icon path for {sid}: {relative}")
+            path = source.joinpath(*relative.parts[1:]).resolve()
+            if not path.is_relative_to((source / "羁绊" / "图标").resolve()) or not path.is_file():
+                raise RuntimeError(f"missing or invalid artifact icon for {sid}: {path}")
+            with Image.open(path) as image:
+                if image.format != "PNG":
+                    raise RuntimeError(f"artifact icon must be PNG: {path}")
+                image = image.convert("RGBA")
+                image.thumbnail((112, 112), Image.Resampling.LANCZOS)
+                output = BytesIO()
+                image.save(output, format="WEBP", quality=90, method=6)
+            files[f"{sid}.webp"] = output.getvalue()
+    return files
 
 
 def _equipment_files(source: Path, equipment: dict | None = None,
@@ -400,7 +437,7 @@ def _validate_target(target: Path, categories: set[str]) -> None:
             raise RuntimeError(f"unexpected directory in managed target: {unexpected_dirs[0]}")
 
 
-def _sync_category(target: Path, category: str, files: dict[str, Path], *,
+def _sync_category(target: Path, category: str, files: dict[str, Path | bytes], *,
                    preserve_existing: bool = False) -> None:
     target_dir = target / category
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -410,7 +447,10 @@ def _sync_category(target: Path, category: str, files: dict[str, Path], *,
                 path.unlink()
     for output_name, source_file in sorted(files.items()):
         output_file = target_dir / output_name
-        if not preserve_existing or not output_file.exists():
+        if isinstance(source_file, bytes):
+            if not output_file.is_file() or output_file.read_bytes() != source_file:
+                output_file.write_bytes(source_file)
+        elif not preserve_existing or not output_file.exists():
             shutil.copy2(source_file, output_file)
         elif category == "avatars" and output_file.read_bytes() != source_file.read_bytes():
             # Existing avatars can be pre-release placeholders even when the
@@ -433,6 +473,7 @@ def sync(source: Path, target: Path, *, items_target: Path | None = None,
         avatar_files, missing_known_avatars = _avatar_files(source)
         selection.update({
             "avatars": avatar_files,
+            "gacha/artifacts": _artifact_files(source),
             "equip": _equipment_files(source, equipment_references,
                                       target if preserve_existing_images else None),
             "sets": _set_files(source),

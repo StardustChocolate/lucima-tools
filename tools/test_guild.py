@@ -1,4 +1,4 @@
-"""Offline guild protocol, job and account lifecycle regression checks."""
+"""Offline guild protocol and account lifecycle regression checks."""
 import threading
 import time
 from contextlib import nullcontext
@@ -11,7 +11,6 @@ from backend.game_client import GameClient, GameError, GameMessage
 from backend.guild import (CaptainBuffStatusPending, CaptainShopInsufficientCurrency,
                            GUILD_ROUTES, GuildService,
                            commodity_record, quest_response_summary)
-from backend.guild_jobs import GuildJobManager
 
 
 def client(responses):
@@ -335,177 +334,6 @@ class GuildProtocolTests(unittest.TestCase):
                 self.assertEqual(c.call.call_count, 1)
 
 
-class GuildJobTests(unittest.TestCase):
-    def setUp(self):
-        self.acc = SimpleNamespace(email="test@example.invalid", client=client([]), lock=threading.Lock())
-        self.acc.require_current_day = Mock()
-        self.acc._request_scope = lambda **kwargs: nullcontext()
-        self.acc.state_revision = 1
-        self.acc.guild_runtime = {"enteredRevision": 1}
-        self.registry = {self.acc.email: self.acc}
-        self.service = Mock()
-        self.service.quest_ids.return_value = {"guildName": "Test", "questIds": ["one", "two"]}
-        self.service.claim_quest.return_value = {}
-        self.manager = GuildJobManager(service_factory=lambda _: self.service,
-                                       account_lookup=self.registry.get, interval=0)
-        self.addCleanup(self.cleanup)
-
-    def cleanup(self):
-        self.manager.cancel(self.acc.email)
-        self.wait_finished()
-
-    def wait_finished(self, job_id=None):
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            result = self.manager.status(self.acc.email, job_id)
-            if not result["running"] and self.acc.email not in self.manager._active:
-                return result
-            time.sleep(.005)
-        self.fail("guild worker failed to stop")
-
-    def test_ordered_rounds_snapshot_once_and_detached_status(self):
-        self.manager.start_rewards(self.acc, rounds=2)
-        result = self.wait_finished()
-        self.assertEqual(result["state"], "completed")
-        self.assertEqual(result["noDetails"], 4)
-        self.assertEqual([call.args[0] for call in self.service.claim_quest.call_args_list],
-                         ["one", "two", "one", "two"])
-        self.service.quest_ids.assert_called_once_with()
-        result["results"].clear()
-        self.assertEqual(len(self.manager.status(self.acc.email)["results"]), 4)
-
-    def test_business_rejection_continues_but_auth_and_transport_stop(self):
-        self.service.claim_quest.side_effect = [GameMessage("OverCount"), {}]
-        self.manager.start_rewards(self.acc, rounds=1)
-        result = self.wait_finished()
-        self.assertEqual((result["state"], result["failed"], result["noDetails"]), ("completed", 1, 1))
-        for error in (GameMessage("Duplicate Login"), GameMessage("invalid token"), OSError("network down")):
-            self.service.claim_quest.reset_mock(side_effect=True)
-            self.service.claim_quest.side_effect = error
-            self.manager.start_rewards(self.acc, rounds=1)
-            result = self.wait_finished()
-            self.assertEqual(result["state"], "failed")
-            self.assertEqual(result["attempted"], 1)
-            self.service.claim_quest.assert_called_once_with("one")
-
-    def test_cancel_waiting_for_account_lock_sends_no_request(self):
-        self.acc.lock.acquire()
-        try:
-            job = self.manager.start_rewards(self.acc, rounds=1)
-            self.assertEqual(self.manager.cancel(self.acc.email, job["id"])["state"], "stopping")
-        finally:
-            self.acc.lock.release()
-        self.assertEqual(self.wait_finished()["state"], "cancelled")
-        self.service.quest_ids.assert_not_called()
-
-    def test_cancel_during_request_waits_for_reply_and_stops_next_request(self):
-        entered, release = threading.Event(), threading.Event()
-        self.addCleanup(release.set)
-        def claim(_):
-            entered.set()
-            release.wait(2)
-            return {"Results": [{"HasMail": True}]}
-        self.service.claim_quest.side_effect = claim
-        job = self.manager.start_rewards(self.acc, rounds=2)
-        try:
-            self.assertTrue(entered.wait(1))
-            self.assertEqual(self.manager.cancel(self.acc.email, job["id"])["state"], "stopping")
-            self.assertEqual(self.manager.status(self.acc.email)["completed"], 0)
-        finally:
-            release.set()
-        result = self.wait_finished()
-        self.assertEqual((result["state"], result["succeeded"]), ("cancelled", 1))
-        self.service.claim_quest.assert_called_once_with("one")
-
-    def test_cancel_interrupts_configured_request_delay(self):
-        self.manager._interval = None
-        with patch.object(config, "get_request_delay_config", return_value={"enabled": True, "ms": 60000, "jitter": 0}):
-            self.manager.start_rewards(self.acc, rounds=1)
-            deadline = time.monotonic() + 1
-            while self.manager.status(self.acc.email)["completed"] == 0 and time.monotonic() < deadline:
-                time.sleep(.005)
-            self.assertEqual(self.manager.status(self.acc.email)["completed"], 1)
-            acquired = self.acc.lock.acquire(timeout=.5)
-            self.assertTrue(acquired, "request spacing must not block scheduled account tasks")
-            if acquired:
-                self.acc.lock.release()
-            self.manager.cancel(self.acc.email)
-            self.assertEqual(self.wait_finished()["state"], "cancelled")
-        self.service.claim_quest.assert_called_once_with("one")
-
-    def test_each_game_call_owns_account_lock(self):
-        def listing():
-            self.assertTrue(self.acc.lock.locked())
-            return {"questIds": ["one"]}
-        def claim(_):
-            self.assertTrue(self.acc.lock.locked())
-            return {}
-        self.service.quest_ids.side_effect = listing
-        self.service.claim_quest.side_effect = claim
-        self.manager.start_rewards(self.acc, rounds=1)
-        self.assertEqual(self.wait_finished()["state"], "completed")
-        self.assertFalse(self.acc.lock.locked())
-
-    def test_same_request_is_not_replayed_and_concurrent_job_is_rejected(self):
-        request_id = "12345678-1234-1234-1234-123456789abc"
-        self.acc.lock.acquire()
-        try:
-            first = self.manager.start_rewards(self.acc, rounds=1, requestId=request_id)
-            second = self.manager.start_rewards(self.acc, rounds=99, requestId=request_id)
-            self.assertEqual(first["id"], second["id"])
-            self.assertEqual(second["rounds"], 1)
-            with self.assertRaises(GameError):
-                self.manager.start_rewards(self.acc, rounds=1)
-        finally:
-            self.acc.lock.release()
-        self.wait_finished()
-        self.manager.start_rewards(self.acc, rounds=1, requestId=request_id)
-        self.assertEqual(self.service.claim_quest.call_count, 2)
-
-    def test_session_replacement_stops_worker_and_rejects_stale_start(self):
-        self.acc.lock.acquire()
-        try:
-            self.manager.start_rewards(self.acc, rounds=1)
-            self.registry[self.acc.email] = object()
-        finally:
-            self.acc.lock.release()
-        self.assertEqual(self.wait_finished()["state"], "failed")
-        self.service.claim_quest.assert_not_called()
-        with self.assertRaises(GameError):
-            self.manager.start_rewards(self.acc, rounds=1)
-
-    def test_disconnected_account_never_sends_requests(self):
-        self.acc.client.is_connected.return_value = False
-        self.manager.start_rewards(self.acc, rounds=1)
-        self.assertEqual(self.wait_finished()["state"], "failed")
-        self.service.quest_ids.assert_not_called()
-
-    def test_result_and_history_limits_keep_request_deduplication(self):
-        request_id = "12345678-1234-1234-1234-123456789abc"
-        self.service.quest_ids.return_value = {"questIds": ["one", "two", "three"]}
-        self.manager.start_rewards(self.acc, rounds=100, requestId=request_id)
-        result = self.wait_finished()
-        self.assertEqual(result["completed"], 300)
-        self.assertEqual(len(result["results"]), 200)
-        self.assertEqual(len(result["logs"]), 100)
-        for _ in range(10):
-            self.manager.start_rewards(self.acc, rounds=1)
-            self.wait_finished()
-        self.assertEqual(len(self.manager._jobs), 10)
-        self.assertEqual(self.manager._cancel_events, {})
-        before = self.service.claim_quest.call_count
-        self.assertEqual(self.manager.start_rewards(self.acc, rounds=1, requestId=request_id)["state"], "unknown")
-        self.assertEqual(self.service.claim_quest.call_count, before)
-
-    def test_invalid_rounds_and_request_ids_never_start(self):
-        for rounds in (0, 101, True, 1.5, "bad"):
-            with self.subTest(rounds=rounds), self.assertRaises(GameError):
-                self.manager.start_rewards(self.acc, rounds=rounds)
-        with self.assertRaises(GameError):
-            self.manager.start_rewards(self.acc, requestId="not-a-uuid")
-        self.service.quest_ids.assert_not_called()
-
-
 class GuildIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.acc = SimpleNamespace(email="test@example.invalid", client=client([]), lock=threading.Lock())
@@ -518,17 +346,30 @@ class GuildIntegrationTests(unittest.TestCase):
         self.lookup.start()
         self.addCleanup(self.lookup.stop)
 
-    def test_busy_account_rejects_query_without_waiting_and_status_remains_available(self):
+    def test_busy_account_rejects_query_without_waiting(self):
         self.acc.lock.acquire()
         try:
             with self.assertRaises(appcore.ApiError) as raised:
                 appcore.guild_overview(self.acc.email)
             self.assertEqual(raised.exception.status, 409)
-            with patch.object(appcore.guild_jobs, "status", return_value={"state": "running"}):
-                self.assertEqual(server._route_api("GET", "/api/guild/quests", {}, {"account": self.acc.email}),
-                                 {"state": "running", "guild": {"joined": True}})
         finally:
             self.acc.lock.release()
+        self.acc.client.call.assert_not_called()
+
+    def test_removed_repeat_reward_routes_reject_without_game_requests(self):
+        for method, path, body in (
+            ("GET", "/api/guild/quests", {}),
+            ("POST", "/api/guild/quests/query", {}),
+            ("POST", "/api/guild/quests/cancel", {"id": "old-job"}),
+            ("POST", "/api/guild/quests/start", {"mode": "score"}),
+            ("POST", "/api/guild/quests/start", {"mode": "rounds"}),
+            ("POST", "/api/guild/quests/start", {}),
+        ):
+            with self.subTest(method=method, path=path, body=body):
+                with self.assertRaises(appcore.ApiError) as raised:
+                    server._route_api(method, path, {"account": self.acc.email, **body},
+                                      {"account": self.acc.email})
+                self.assertEqual(raised.exception.status, 404)
         self.acc.client.call.assert_not_called()
 
     def test_business_errors_are_api_errors_and_lock_is_released(self):
@@ -547,16 +388,6 @@ class GuildIntegrationTests(unittest.TestCase):
             with self.subTest(action=action), self.assertRaises(appcore.ApiError):
                 appcore.guild_action(self.acc.email, action)
         self.assertEqual(self.acc.client.call.call_count, 1)
-
-    def test_status_and_cancel_available_after_duplicate_login(self):
-        self.acc.client.connection_status.return_value = {"connected": False, "reason": "duplicate_login"}
-        with patch.object(appcore.guild_jobs, "status", return_value={"state": "failed"}), \
-                patch.object(appcore.guild_jobs, "cancel", return_value={"state": "stopping"}):
-            self.assertEqual(appcore.guild_quests_status(self.acc.email)["state"], "failed")
-            self.assertEqual(appcore.guild_quests_cancel(self.acc.email, "job")["state"], "stopping")
-        with self.assertRaises(appcore.ApiError) as raised:
-            appcore.guild_overview(self.acc.email)
-        self.assertEqual(raised.exception.status, 409)
 
     def test_manual_guild_refresh_wakes_scheduler_to_recheck_cached_status(self):
         self.acc._wake = threading.Event()

@@ -128,6 +128,15 @@ class EncyclopediaReleaseTests(unittest.TestCase):
         self.assertEqual(release.version, "data1")
         self.assertTrue((self.pool / PLAN_NAME).is_file())
 
+    def test_gap_cannot_hide_an_existing_image_or_an_unrelated_media_failure(self):
+        path = self.pool / "manifest.json"
+        manifest = read(path)
+        for missing in ({"skills/Icon_Skill_Test.png": "Actually exists"},
+                        {"portraits/static/H002.png": "Not an allowed skill gap"}):
+            write_json(path, {**manifest, "missingFiles": missing})
+            with self.assertRaisesRegex(ValueError, "skill image gap"):
+                collect_release(self.pool)
+
 
 if __name__ == "__main__":
     unittest.main()

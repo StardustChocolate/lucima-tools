@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from typing import Any, Callable
 
-from . import config
+from . import config, game_clock
 from .maintenance import service as maintenance_service
 from .logutil import log as _log
 from . import redeem_codes
@@ -34,14 +34,15 @@ from .guild_store import GuildStoreService, store_options
 from .guild_captain_store import GuildCaptainStoreService, captain_store_options
 from .voting import catalog as voting_catalog
 from .tasks import (
-    TASKS, run_auto_tasks, run_toggle_tasks, next_claim_times, arena_next_times,
+    TASKS, run_auto_tasks, run_toggle_tasks, next_claim_times,
+    arena_next_times, arena_ready_time, arena_flag_status,
     achievement_options, TASK_RETRY_MS, SHOP_FREE_COOLDOWN_MS,
 )
 
 # 调度参数。
 # **不再是固定 5 分钟盲扫**：绝大多数 toggle 任务都有服务器下发的精确档期
-# （reactor=上次领+12h / 生产中心三项=NextCanReceive*Time / dispatch=FinishTime /
-#  shop_free=LastResetTime+1h1s / 竞技场=各 NPC 的 nextMs|retryMs），
+# （reactor=上次领+12h / 生产中心三项=NextCanReceive*Time / dispatch=FinishTime，
+#  以上及 NPC 冷却均留 5 秒；shop_free=LastResetTime+1h1s；失败退避另算），
 # 所以调度线程改成"睡到最早那个到点时刻"，并在用户改开关/改勾选时**立刻唤醒**。
 # 只有 abyss_sweep / free_summon 拿不到服务器下发的下次时刻。它们依赖每日重置后的
 # 登录快照，因此在东八区每天 08:05~08:15 为每个账号随机安排一次重登。
@@ -127,6 +128,7 @@ class Account:
         self._state_refresh_at = _next_daily_state_refresh()
         self.state_revision = 1
         self.state_synced_at = int(time.time() * 1000)
+        game_clock.now_ms(self.client)
         self._request_context = threading.local()
         self._login_server_ms = self._snapshot_time_ms()
         self._login_game_day = self._snapshot_game_day()
@@ -160,6 +162,10 @@ class Account:
         self.client.before_game_request = self._before_game_request
         self.client.vote_enabled = lambda: bool(self.toggles.get('activity_vote')) and not self._stop.is_set()
         self.client.vote_params = lambda: self.params.get('activity_vote')
+        self.client.activity_store_enabled = lambda: (
+            bool(self.toggles.get('activity_store')) and not self._stop.is_set()
+            and self.client.is_connected())
+        self.client.activity_store_params = lambda: self.params.get('activity_store')
         self._maintenance_pending = False
         self._maintenance_epoch = 0
         self._maintenance_attempted = 0
@@ -228,21 +234,19 @@ class Account:
         # UTC midnight is the game's 08:00 boundary. A failed login never
         # changes this marker; ordinary guild queries cannot release it.
         if now_ms is None:
-            # A response processed before 08:00 may arrive after 08:00. Its Utc
-            # must not rewind the login clock and release the next request.
-            elapsed = int(time.time() * 1000) - self.state_synced_at
-            now_ms = max(GuildService(self.client, self.guild_runtime).now_ms(),
-                         self._login_server_ms + elapsed)
+            # A successful response advances the shared clock without allowing
+            # delayed Utc values to rewind the game's 08:00 reset boundary.
+            now_ms = game_clock.now_ms(self.client)
         return int(now_ms) // DAY_MS == self._login_game_day
 
-    def automation_wait_reason(self, *, login_task=False):
+    def automation_wait_reason(self, *, guild_task=False):
         if maintenance_service.active:
             return "等待维护结束"
         if self._maintenance_pending:
             return "等待维护后重登"
         if not self.daily_state_current():
             return "等待每日重登"
-        if (not login_task and has_guild(self.client.account_state)
+        if (guild_task and has_guild(self.client.account_state)
                 and self.guild_runtime.get("enteredRevision") != self.state_revision):
             return "等待佣兵团同步"
         return None
@@ -252,9 +256,9 @@ class Account:
             raise TaskDeferred("等待每日重登")
 
     @contextmanager
-    def _request_scope(self, *, login_task=False, guild_entry=False):
+    def _request_scope(self, *, login_task=False, guild_entry=False, guild_task=False):
         previous = getattr(self._request_context, "scope", None)
-        self._request_context.scope = (login_task, guild_entry)
+        self._request_context.scope = (login_task, guild_entry, guild_task)
         try:
             with resources.pin():
                 yield
@@ -270,8 +274,8 @@ class Account:
         if scope is None and not guild_route:
             return
         self.require_current_day()
-        if scope is not None and not scope[0] and not scope[1]:
-            reason = self.automation_wait_reason()
+        if scope is not None and not scope[1]:
+            reason = self.automation_wait_reason(guild_task=scope[2])
             if reason:
                 raise TaskDeferred(reason)
         if (guild_route and (scope is None or not scope[1])
@@ -352,7 +356,7 @@ class Account:
                 "weekly": GuildWeeklyService(service).snapshot(),
                 "store": GuildStoreService(service).snapshot(),
                 "captainStore": GuildCaptainStoreService(service).snapshot(),
-                "waiting": self.automation_wait_reason(),
+                "waiting": self.automation_wait_reason(guild_task=True),
                 "loginRevision": self.state_revision, "revision": self._guild_revision}
 
     def _guild_due_delay(self) -> float | None:
@@ -652,8 +656,6 @@ class Account:
             raise
 
     def _weekly_guild_locked(self):
-        if self.guild_runtime.get("weeklyScoreJob"):
-            return
         from .updater import service as update_service
         runtime = self.guild_runtime
         service = GuildService(self.client, runtime)
@@ -721,11 +723,20 @@ class Account:
             self._guild_revision += 1
 
     def _on_inventory_increase(self, identifiers):
+        if self.toggles.get('arena_npc') and '4' in identifiers:
+            self._wake.set()
         if (self.toggles.get('activity_vote')
                 and set(identifiers) & {row['ticket'] for row in voting_catalog().values()}):
             self._wake.set()
         if self.toggles.get('guild_auto_store') and set(identifiers) & self.guild_runtime.get('shopWatchCurrencies', set()):
             self._wake.set()
+        if self.toggles.get('activity_store'):
+            from .activity_store import status
+            watched = status(self.client.account_state, self.params.get('activity_store'),
+                             self.task_runtime.get('activity_store'),
+                             now_ms=game_clock.now_ms(self.client))['watchCurrencies']
+            if set(identifiers) & set(watched):
+                self._wake.set()
 
     def _on_guild_currency_increase(self, identifiers):
         watched = self.guild_runtime.get('captainShopWatchCurrencies', set())
@@ -910,8 +921,10 @@ class Account:
     def next_claims(self, now_ms: int | None = None) -> dict:
         """界面、调度与后台限制计时共用的账号任务档期。"""
         now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        server_now_ms = game_clock.now_ms(self.client)
         claims = next_claim_times(self.client.account_state or {}, self.params,
-                                 runtime=self._claim_runtime(), now_ms=now_ms)
+                                 runtime=self._claim_runtime(), now_ms=server_now_ms,
+                                 local_now_ms=now_ms)
         shop = claims.get("shop_free") or {}
         if (shop.get("nextMs") is None and self._shop_free_last
                 and not self._retry_at_ms("shop_free")):
@@ -934,7 +947,7 @@ class Account:
         for task_id, meta in TASKS.items():
             if meta.get("kind") != "toggle":
                 continue
-            reason = self.automation_wait_reason(login_task=task_id in LOGIN_TASK_IDS)
+            reason = self.automation_wait_reason()
             if reason:
                 entry = claims.setdefault(task_id, {})
                 deadline = (self._state_refresh_at if not self.daily_state_current()
@@ -972,7 +985,7 @@ class Account:
         claims = self.next_claims(now_ms)
         ids = []
         for tid in self._enabled_ids():
-            if self.automation_wait_reason(login_task=tid in LOGIN_TASK_IDS):
+            if self.automation_wait_reason():
                 continue
             if now_ms < self._retry_at_ms(tid):
                 continue
@@ -992,7 +1005,7 @@ class Account:
                     continue
                 ids.append(tid)
                 continue
-            if tid == 'activity_vote':
+            if tid in {'activity_vote', 'activity_store'}:
                 if (claims.get(tid) or {}).get('ready'):
                     ids.append(tid)
                 continue
@@ -1131,13 +1144,13 @@ class Account:
             if self._stop.is_set() or not self.daily_state_current():
                 return []
             ids = [task_id for task_id in ids
-                   if task_id not in {"daily_achievement", "redeem_code", "send_meal", "month_signin", "activity_vote"}
+                   if task_id not in {"daily_achievement", "redeem_code", "send_meal", "month_signin", "activity_vote", "activity_store"}
                    or self.toggles.get(task_id)]
             # 排队等锁期间可能已有另一轮失败；拿到锁后再次检查退避。
             now_ms = int(time.time() * 1000)
             ids = [task_id for task_id in ids if now_ms >= self._retry_at_ms(task_id)]
             ids = [task_id for task_id in ids
-                   if not self.automation_wait_reason(login_task=task_id in LOGIN_TASK_IDS)]
+                   if not self.automation_wait_reason()]
             if not ids:
                 return []
             # 每次拿到账号锁后合并当前登录版本，任务内再检查，避免开关与后台重复执行。
@@ -1149,7 +1162,7 @@ class Account:
                 self.params.setdefault("redeem_code", {})
             results = []
             for task_id in ids:
-                if self.automation_wait_reason(login_task=task_id in LOGIN_TASK_IDS):
+                if self.automation_wait_reason():
                     break
                 with self._request_scope(login_task=task_id in LOGIN_TASK_IDS):
                     results.extend(run_toggle_tasks(
@@ -1246,7 +1259,9 @@ class Account:
         """手动重登成功后重排每日任务，避免当天再次自动重登。"""
         with maintenance_service.lock:
             maintenance_service.require_open()
+        game_clock.sync(self.client, self.client.account_state or {}, reset=True)
         self._sync_arena_after_login()
+        self.task_runtime.pop('activity_store', None)
         self._auto_relogin_at = None
         self._auto_relogin_transition_ms = None
         self.state_revision += 1
@@ -1296,9 +1311,6 @@ class Account:
         now_ms = now * 1000
         if not self.daily_state_current():
             return min(SCAN_MAX_GAP, max(1.0, self._state_refresh_at - now))
-        if (has_guild(self.client.account_state)
-                and self.guild_runtime.get("enteredRevision") != self.state_revision):
-            return min(SCAN_MAX_GAP, max(1.0, self.guild_runtime.get("retryAtMs", 0) / 1000 - now))
         try:
             nc = self.next_claims(int(now_ms))
         except Exception:
@@ -1331,7 +1343,7 @@ class Account:
                          self._quest_update_revision > self._quest_checked_revision)):
                     cands.append(max(0.0, (self._retry_at_ms(tid) - now_ms) / 1000))
                 continue
-            if tid == 'activity_vote':
+            if tid in {'activity_vote', 'activity_store'}:
                 entry = nc.get(tid) or {}
                 if entry.get('ready'):
                     cands.append(max(0.0, (self._retry_at_ms(tid) - now_ms) / 1000))
@@ -1397,6 +1409,13 @@ class Account:
             # catalogue change rather than by a clock deadline.
             if task_id in {"redeem_code", "daily_achievement", "activity_vote"}:
                 continue
+            if task_id == 'activity_store':
+                entry = claim_times.get(task_id) or {}
+                if entry.get('ready'):
+                    candidates.append(now)
+                elif entry.get('nextMs') is not None:
+                    candidates.append(max(now, int(entry['nextMs'])))
+                continue
 
             if task_id == "arena_npc":
                 picked = (self.params.get("arena_npc") or {}).get("picked") or []
@@ -1407,6 +1426,10 @@ class Account:
                 next_times = runtime.get("nextMs") or {}
                 retry_times = runtime.get("retryMs") or {}
                 waiting = runtime.get("waitingForLogin") or {}
+                flags = arena_flag_status(self.client)
+                if not flags["ready"] and flags["nextMs"] is None:
+                    continue
+                server_now = game_clock.now_ms(self.client)
                 for value in picked:
                     try:
                         scene_id = f"HellNPC_{int(value)}"
@@ -1414,11 +1437,13 @@ class Account:
                         continue
                     if waiting.get(scene_id):
                         continue
+                    server_gate = arena_ready_time(snapshot_times.get(scene_id), next_times.get(scene_id))
                     gate = max(
-                        int(snapshot_times.get(scene_id) or 0),
-                        int(next_times.get(scene_id) or 0),
+                        game_clock.local_deadline(self.client, server_gate, local_now_ms=now,
+                                                  server_now_ms=server_now) if server_gate else 0,
                         int(retry_times.get(scene_id) or 0),
                         self._retry_at_ms(task_id),
+                        flags["nextMs"] or 0,
                     )
                     candidates.append(max(now, gate))
                 continue
@@ -1456,7 +1481,7 @@ class Account:
     def _arena_due_delay(self, now_ms: float) -> float:
         """竞技场：勾选的 NPC 里最早一个可挑战时刻（未知/已到点=立刻）。
 
-        闸门与 task_arena_npc 同源：max(快照档期, 扫荡后拿到的 nextMs, 失败退避)。
+        闸门为 max(快照档期, 本地冷却, 失败退避, 旗帜恢复时间)。
         """
         rt = self.task_runtime.get("arena_npc") or {}
         picked = (self.params.get("arena_npc") or {}).get("picked") or []
@@ -1466,13 +1491,19 @@ class Account:
         retry_map = rt.get("retryMs") or {}
         waiting = rt.get("waitingForLogin") or {}
         snap_map = arena_next_times(self.client.account_state or {})
+        flags = arena_flag_status(self.client)
+        if not flags["ready"] and flags["nextMs"] is None:
+            return SCAN_MAX_GAP  # 缺少恢复时间，只等库存更新或登录快照。
         best = None
+        server_now = game_clock.now_ms(self.client)
         for n in picked:
             sid = f"HellNPC_{int(n)}"
             if waiting.get(sid):
                 continue
-            gate = max(snap_map.get(sid) or 0, next_map.get(sid) or 0,
-                       retry_map.get(sid) or 0)
+            server_gate = arena_ready_time(snap_map.get(sid), next_map.get(sid))
+            local_gate = (game_clock.local_deadline(self.client, server_gate,
+                          local_now_ms=int(now_ms), server_now_ms=server_now) if server_gate else 0)
+            gate = max(local_gate, retry_map.get(sid) or 0, flags["nextMs"] or 0)
             delay = 0.0 if not gate else max(0.0, (gate - now_ms) / 1000)
             best = delay if best is None else min(best, delay)
             if best == 0.0:

@@ -18,12 +18,12 @@ import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
-from . import config
+from . import config, game_clock
 from . import accounts
 from . import background_timer
 from . import redeem_codes
 from .guild import GuildService, describe_error
-from .guild_jobs import manager as guild_jobs
+from .gacha import manager as gacha_jobs
 from .logutil import log
 from .game_client import GameClient, GameError, GameMessage, is_duplicate_login_message
 from .portal import (
@@ -101,7 +101,7 @@ def avatar_url(hero_id: str | None) -> str | None:
     return f"/assets/avatars/{fname}" if fname else None
 
 
-def summarize(state: dict) -> dict:
+def summarize(state: dict, *, gauges: dict | None = None) -> dict:
     """从庞大的登录响应里抽取要展示的关键信息。"""
     info = state.get("Info", {})
 
@@ -140,9 +140,14 @@ def summarize(state: dict) -> dict:
             "mystery": count(CURRENCY_IDS["mystery"]),
             "galaxy": count(CURRENCY_IDS["galaxy"]),
         },
-        "stamina": gauge(CURRENCY_IDS["stamina"]),
-        "flag": gauge(CURRENCY_IDS["flag"]),
+        "stamina": (gauges or {}).get("stamina", gauge(CURRENCY_IDS["stamina"])),
+        "flag": (gauges or {}).get("flag", gauge(CURRENCY_IDS["flag"])),
     }
+
+
+def _resource_gauges(acc) -> dict:
+    getter = getattr(acc.client, "resource_gauges", None)
+    return getter() if callable(getter) else {}
 
 
 # ---------- 团员 / 物品清单（基本信息页展示） ----------
@@ -267,7 +272,7 @@ def inventory(account: str, since: int | None = None, epoch: str | None = None) 
                       "removed": sorted(removed - shown)},
         "inventoryEpoch": snapshot["epoch"],
         "inventoryRevision": snapshot["revision"],
-        "status": summarize(acc.client.account_state or {}),
+        "status": summarize(acc.client.account_state or {}, gauges=_resource_gauges(acc)),
     }
 
 
@@ -389,7 +394,7 @@ def _account_payload(acc: accounts.Account) -> dict:
     state = acc.client.account_state or {}
     payload = {
         "account": acc.email,
-        "status": summarize(state),
+        "status": summarize(state, gauges=_resource_gauges(acc)),
         "nextClaims": acc.next_claims(),
         "toggles": acc.toggles,
         "params": acc.params,
@@ -434,7 +439,7 @@ def _guild_account(account):
         if accounts.get(acc.email) is not acc:
             raise ApiError(401, "登录会话已变更，请使用当前账号")
         acc.require_current_day()
-        with acc._request_scope():
+        with acc._request_scope(guild_task=True):
             yield acc
     except (GameError, GameMessage) as error:
         status = 409 if is_duplicate_login_message(error) else 400
@@ -482,36 +487,6 @@ def guild_store_buy(account, data):
             acc._guild_revision += 1
             acc._wake.set()
         return {'ok': True, **_status_snapshot(acc)}
-
-
-def guild_quests_query(account):
-    with _guild_account(account) as acc:
-        return GuildService(acc.client).quest_ids()
-
-
-def guild_quests_start(account, data):
-    acc = _require(account)
-    try:
-        if data.get("mode") == "score":
-            return guild_jobs.start_score(acc, requestId=data.get("requestId"))
-        if data.get("mode") not in (None, "rounds"):
-            raise GameError("未知周任务执行方式")
-        return guild_jobs.start_rewards(acc, rounds=data.get("rounds", 30), requestId=data.get("requestId"))
-    except GameError as error:
-        raise ApiError(400, str(error)) from error
-
-
-def guild_quests_status(account, job_id=None):
-    acc = _require(account, allow_disconnected=True)
-    return {**guild_jobs.status(acc.email, job_id, kind="quest_rewards"),
-            "guild": acc.guild_snapshot()}
-
-
-def guild_quests_cancel(account, job_id):
-    acc = _require(account, allow_disconnected=True)
-    if not job_id:
-        raise ApiError(400, "缺少任务 ID")
-    return guild_jobs.cancel(acc.email, job_id, kind="quest_rewards")
 
 
 # ---------- 端点处理（平台无关） ----------
@@ -662,6 +637,8 @@ def auto_logs(account: str, since: int = 0) -> dict:
         "stateSyncError": acc.state_sync_error,
         "abyssBattle": _abyss_snapshot(account or ""),
         "activityProgress": activity_progress_snapshot(account or ""),
+        "gacha": gacha_jobs.status(acc),
+        "resourceGauges": _resource_gauges(acc),
         "guild": acc.guild_snapshot(),
         **_inventory_meta(acc),
     }
@@ -678,7 +655,7 @@ def _status_snapshot(acc) -> dict:
     if not st:
         return {}
     return {
-        "status": summarize(st),
+        "status": summarize(st, gauges=_resource_gauges(acc)),
         "nextClaims": acc.next_claims(),
         "guild": acc.guild_snapshot(),
         "stateRevision": acc.state_revision,
@@ -721,7 +698,7 @@ def refresh_status(account: str) -> dict:
 def arena_state(acc) -> dict:
     """竞技场展开页要的状态：10 个 NPC 的名字 + 各自下次可挑战时刻。
 
-    冷却取 **max(登录快照算出的档期, 本工具扫荡后拿到的 nextMs)**，再和失败退避
+    冷却取 **max(登录快照算出的档期, 本工具扫荡后拿到的 nextMs) + 5 秒**，再和失败退避
     `retryMs` 一起决定闸门。
 
     快照那份怎么来的：`PVPData.NPCPVPInfoList` 有 30 条(10 NPC × 普通/困难/地狱)，
@@ -730,7 +707,7 @@ def arena_state(acc) -> dict:
     不需要分辨哪条是地狱级、也不需要额外请求 QueryPVPData。详见
     `tasks.arena_next_times`（含 7/7 实测验证）。
     """
-    from .tasks import arena_npcs, arena_next_times
+    from .tasks import arena_npcs, arena_next_times, arena_ready_time, arena_flag_status
     rt = acc.task_runtime.get("arena_npc") or {}
     next_map = rt.get("nextMs") or {}
     retry_map = rt.get("retryMs") or {}
@@ -738,10 +715,16 @@ def arena_state(acc) -> dict:
     snap_map = arena_next_times(acc.client.account_state or {})
     params = (acc.params.get("arena_npc") or {})
     picked = [int(x) for x in (params.get("picked") or [])]
+    flags = arena_flag_status(acc.client)
+    now_ms = int(time.time() * 1000)
+    server_now_ms = game_clock.now_ms(acc.client)
     items = []
     for it in arena_npcs():
         sid = it["sceneId"]
-        nxt = max(snap_map.get(sid) or 0, next_map.get(sid) or 0) or None
+        server_deadline = arena_ready_time(snap_map.get(sid), next_map.get(sid))
+        nxt = (game_clock.local_deadline(acc.client, server_deadline, local_now_ms=now_ms,
+                                         server_now_ms=server_now_ms)
+               if server_deadline else None)
         paused = bool(waiting.get(sid))
         items.append({
             **it,
@@ -749,6 +732,8 @@ def arena_state(acc) -> dict:
             "nextMs": None if paused else nxt,
             "retryMs": None if paused else retry_map.get(sid),
             "waitingForLogin": paused,
+            "waitingForFlags": (not paused and not flags["ready"]
+                                and max(nxt or 0, retry_map.get(sid) or 0) <= now_ms),
             "waiting": acc.automation_wait_reason(),
         })
     return {"npcs": items, "teamId": str(params.get("teamId") or "0"),
@@ -774,7 +759,17 @@ def voting_options(account: str) -> dict:
     acc = _require(account, allow_disconnected=True)
     with resources.pin():
         return status(acc.client.account_state, acc.params.get('activity_vote'),
-                      acc.task_runtime.get('activity_vote'), candidates=True)
+                      acc.task_runtime.get('activity_vote'),
+                      now_ms=game_clock.now_ms(acc.client), candidates=True)
+
+
+def activity_store_options(account: str) -> dict:
+    """Read event-shop shelves from cached account and official game data."""
+    from .activity_store import status
+    acc = _require(account, allow_disconnected=True)
+    with resources.pin():
+        return status(acc.client.account_state, acc.params.get('activity_store'),
+                      acc.task_runtime.get('activity_store'), now_ms=game_clock.now_ms(acc.client))
 
 
 def arena_set(account: str, picked: list | None, team_id: str | None) -> dict:
@@ -1028,12 +1023,38 @@ def activity_options(account: str) -> dict:
         f["fav"] = str(f["cuid"]) in fav_cuids
         _decorate_support(f)
     return {
-        "scenes": activity_scenes(state),
-        "activities": progress_options(state),
+        "scenes": activity_scenes(state, now_ms=game_clock.now_ms(acc.client)),
+        "activities": progress_options(state, now=game_clock.now_ms(acc.client) / 1000),
         "teams": list_teams(acc.client),
         "supports": friends,
         "favorites": fav_list,
     }
+
+
+def gacha_options(account: str) -> dict:
+    from .gacha import options
+    acc = _require(account, allow_disconnected=True)
+    return {'pools': options(acc.client.account_state or {}, now=game_clock.now_ms(acc.client) / 1000),
+            'job': gacha_jobs.status(acc),
+            'config': acc.params.get('gacha') or {}, 'dataVersion': resources.snapshot().version}
+
+
+def gacha_start(account: str, params, request_id) -> dict:
+    from .gacha import normalize
+    acc = _require(account)
+    try:
+        normalized = normalize(params)
+        job = gacha_jobs.start(acc, normalized, request_id)
+        acc.params = {**acc.params, 'gacha': job['params']}
+        config.save_account(acc.email, toggles=acc.toggles, params=acc.params)
+        return {'job': job}
+    except GameError as error:
+        raise ApiError(400, str(error)) from error
+
+
+def gacha_cancel(account: str, request_id=None) -> dict:
+    acc = _require(account, allow_disconnected=True)
+    return {'job': gacha_jobs.cancel(acc, request_id)}
 
 
 def support_fav_add(account: str, support_cuid: str) -> dict:
@@ -1056,6 +1077,27 @@ def support_fav_remove(account: str, support_cuid: str) -> dict:
     """从收藏夹移除。已不在收藏夹里也返回 ok（幂等）。"""
     acc = _require(account)
     return {"ok": True, "removed": config.delete_support_fav(acc.email, support_cuid)}
+
+
+def activity_rewards_options(account: str) -> dict:
+    from .activity_rewards import status
+    acc = _require(account, allow_disconnected=True)
+    with acc.lock, resources.pin():
+        return status(acc.client.account_state or {}, now=game_clock.now_ms(acc.client) / 1000)
+
+
+def activity_claim_rewards(account: str, kind: str) -> dict:
+    from .activity_rewards import claim, status
+    acc = _require(account)
+    if activity_progress_snapshot(acc.email)['running']:
+        raise ApiError(409, '请在活动推关结束后领取奖励')
+    try:
+        with acc.lock, resources.pin():
+            result = claim(acc.client, kind)
+            result['rewards'] = status(acc.client.account_state or {}, now=game_clock.now_ms(acc.client) / 1000)
+    except GameError as error:
+        raise ApiError(400, str(error)) from error
+    return {**result, **_status_snapshot(acc)}
 
 
 def _activity_support_entry(acc, support_cuid: str | None) -> dict | None:
@@ -1192,13 +1234,14 @@ def abyss_options(account: str) -> dict:
     # Return only the normalized, user-editable fields; old malformed records are
     # ignored so a stale config cannot break opening the options panel.
     try:
-        selected = normalize_abyss_config(state, saved.get("sceneId"), saved.get("waves"))
+        game_now = game_clock.now_ms(acc.client) / 1000
+        selected = normalize_abyss_config(state, saved.get("sceneId"), saved.get("waves"), now=game_now)
     except Exception:
         selected = {"sceneId": "", "waves": {"upper": [None] * 4, "lower": [None] * 4}}
     selected["autoAdvance"] = saved.get("autoAdvance") is True
     return {
-        "scenes": [{**scene, "effects": abyss_scene_effects(state, scene["id"])}
-                   for scene in abyss_scenes(state)],
+        "scenes": [{**scene, "effects": abyss_scene_effects(state, scene["id"], now=game_now)}
+                   for scene in abyss_scenes(state, now=game_now)],
         "heroes": heroes,
         "roles": heroes,
         "teams": [],
@@ -1213,7 +1256,8 @@ def abyss_set(account: str, scene_id, waves, auto_advance: bool = False) -> dict
     """Validate and persist the two-wave Abyss picker configuration."""
     acc = _require(account)
     try:
-        normalized = normalize_abyss_config(acc.client.account_state or {}, scene_id, waves)
+        normalized = normalize_abyss_config(acc.client.account_state or {}, scene_id, waves,
+                                            now=game_clock.now_ms(acc.client) / 1000)
     except GameError as error:
         raise ApiError(400, str(error)) from error
     if auto_advance is True:
@@ -1274,7 +1318,8 @@ def abyss_run(account: str, scene_id, waves, auto_advance: bool = False) -> dict
     """Persist a configuration and execute one Abyss battle or stage sequence."""
     acc = _require(account)
     try:
-        normalized = normalize_abyss_config(acc.client.account_state or {}, scene_id, waves)
+        normalized = normalize_abyss_config(acc.client.account_state or {}, scene_id, waves,
+                                            now=game_clock.now_ms(acc.client) / 1000)
     except GameError as error:
         raise ApiError(400, str(error)) from error
     if auto_advance is True:

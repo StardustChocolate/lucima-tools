@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 
 from build_encyclopedia import build_bundle
 from encyclopedia_catalog import load_character_records
-from stage_encyclopedia_resources import stage_resources
+from stage_encyclopedia_resources import resource_sources, stage_resources
 
 
 class EncyclopediaCatalogTests(unittest.TestCase):
@@ -29,6 +30,8 @@ class EncyclopediaCatalogTests(unittest.TestCase):
             record = {
                 "schema_version": "2.0-processed", "ID": entry["id"], "NAME": entry["name"],
                 "Element": entry["element"], "Job": entry["job"], "Group": "_014",
+                "NAME_e7": "甲别称" if entry["id"] == "H001" else "",
+                "NAME_ALIASES": ["测试外号"] if entry["id"] == "H001" else [],
                 "Skill": [{"ID": f"{entry['id']}S1", "IconSprite": "Icon_Skill_Test"}],
                 "HiddenSkillIDs": [],
             }
@@ -64,6 +67,8 @@ class EncyclopediaCatalogTests(unittest.TestCase):
         self.assertEqual([entry["id"] for entry in index["characters"]], ["H001", "H002"])
         self.assertEqual([entry["hasSpine"] for entry in index["characters"]], [True, False])
         self.assertEqual([entry["statuses"] for entry in index["characters"]], [[], []])
+        self.assertEqual(index["characters"][0]["nameE7"], "甲别称")
+        self.assertEqual(index["characters"][0]["aliases"], ["测试外号"])
         detail = json.loads((output / "characters" / "H001.json").read_text(encoding="utf-8"))
         self.assertEqual(detail["assets"]["spine"], {"Base": "H001", "Skin": "LV1", "Animation": "00_Idle"})
         self.assertEqual(detail["assets"]["jobIcon"], "defender.png")
@@ -133,6 +138,24 @@ class EncyclopediaCatalogTests(unittest.TestCase):
         self.write_index()
         with self.assertRaisesRegex(ValueError, "hasSpine"):
             load_character_records(self.root)
+
+    def test_only_catalog_bound_documented_skill_gap_can_be_omitted(self):
+        (self.source / "技能图标/Icon_Skill_Test.png").unlink()
+        with self.assertRaises(FileNotFoundError):
+            resource_sources(self.root)
+        catalog = self.root / "tools/work/catalog/catalog_123.json"
+        catalog.parent.mkdir(parents=True)
+        catalog.write_bytes(b"official catalog fixture")
+        report = {"catalog_version": 123, "catalog_sha256": hashlib.sha256(catalog.read_bytes()).hexdigest(),
+                  "missing_images": [{"path": "/out/assets/团员/技能图标/Icon_Skill_Test.png", "reason": "Official reference has no exact image"}]}
+        document = self.root / "gaps.json"
+        document.write_text(json.dumps(report), encoding="utf-8")
+        files, counts = resource_sources(self.root, source_gaps=document)
+        self.assertEqual(counts["skill_icons"], 0)
+        self.assertFalse(any(path.startswith("skills/") for path in files))
+        catalog.write_bytes(b"different catalog")
+        with self.assertRaisesRegex(ValueError, "catalog"):
+            resource_sources(self.root, source_gaps=document)
 
 
 if __name__ == "__main__":

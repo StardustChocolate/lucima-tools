@@ -112,7 +112,7 @@
     }
   }
 
-  async function render({ entry, data, translations = {}, config = {}, fetchResource }) {
+  async function render({ entry, data, translations = {}, config = {}, version = config.version, fetchResource }) {
     const library = await loadLibrary();
     const css = cardStyles();
     const host = document.createElement("div");
@@ -124,7 +124,7 @@
     let media = null;
     let canvas = null;
     try {
-      renderer = window.LucimaEncyclopediaCard.mount({ host, data, translations, staticMode: true });
+      renderer = window.LucimaEncyclopediaCard.mount({ host, data, translations, staticMode: true, version });
       // Reuse the app's persistent resource cache. A missing or timed-out
       // portrait/icon remains empty, just as it does in the on-screen card.
       const boundedFetch = async (url) => {

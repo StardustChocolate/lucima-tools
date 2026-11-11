@@ -1,7 +1,7 @@
 """Query-index contracts for consumers of the finished encyclopedia cards."""
 import unittest
 
-from build_encyclopedia_cards import build_search, normalize, phonetic
+from build_encyclopedia_cards import EXPORT, build_search, normalize, phonetic
 
 
 def record(hero, name, aliases=(), english="", e7=""):
@@ -31,6 +31,34 @@ class EncyclopediaCardsTests(unittest.TestCase):
         self.assertEqual(search["aliases"]["火龙"], ["H001"])
         self.assertEqual(search["pinyin"]["huolong"], ["H001", "H002"])
         self.assertEqual(phonetic("火隆"), "huolong")
+
+    def test_export_allows_only_documented_absent_skill_and_still_rejects_decode_failures(self):
+        from playwright.sync_api import Error, sync_playwright
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<div id="card"><img class="character-skill__icon" data-icon-sprite="Icon_Skill_Test"></div>')
+                page.add_script_tag(content='''
+                  window.LucimaEncyclopediaMedia = {mount: () => ({ready: Promise.resolve([false, false])})};
+                  window.LucimaEncyclopediaExport = {render: async () => {
+                    const media = LucimaEncyclopediaMedia.mount({renderer: {card: document.getElementById('card')}});
+                    await media.ready;
+                    return 'rendered';
+                  }};
+                ''')
+                options = {"entry": {"id": "H001", "hasStaticPortrait": False}, "data": {}, "translations": {},
+                           "config": {"missingFiles": {"skills/Icon_Skill_Test.png": "Official gap"}}}
+                self.assertEqual(page.evaluate(EXPORT, options), "rendered")
+                options["config"]["missingFiles"] = {"skills/Icon_Skill_Other.png": "Different gap"}
+                with self.assertRaisesRegex(Error, "did not decode"):
+                    page.evaluate(EXPORT, options)
+                options["config"]["missingFiles"] = {"skills/Icon_Skill_Test.png": "Official gap"}
+                options["entry"]["hasStaticPortrait"] = True
+                with self.assertRaisesRegex(Error, "did not decode"):
+                    page.evaluate(EXPORT, options)
+            finally:
+                browser.close()
 
 
 if __name__ == "__main__":

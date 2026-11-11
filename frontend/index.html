@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>LucimaTools · 璐茜玛的深层幻影</title>
   <link rel="icon" type="image/png" href="/assets/app-icon.png?v=77">
-  <link rel="stylesheet" href="/static/style.css?v=256">
-  <link rel="stylesheet" href="/static/encyclopedia-card.css?v=6">
+  <link rel="stylesheet" href="/static/style.css?v=268">
+  <link rel="stylesheet" href="/static/encyclopedia-card.css?v=7">
 </head>
 <body>
   <!-- Lucide interface icons (ISC): local sprite, colored through currentColor. -->
@@ -76,6 +76,18 @@
     </symbol>
     <symbol id="ui-chevron-down" viewBox="0 0 24 24">
       <path d="m6 9 6 6 6-6"></path>
+    </symbol>
+    <symbol id="ui-minus" viewBox="0 0 24 24">
+      <path d="M5 12h14"></path>
+    </symbol>
+    <symbol id="ui-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"></path>
+    </symbol>
+    <symbol id="ui-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path>
+    </symbol>
+    <symbol id="ui-x" viewBox="0 0 24 24">
+      <path d="m18 6-12 12M6 6l12 12"></path>
     </symbol>
     <symbol id="ui-arrow-left" viewBox="0 0 24 24">
       <path d="M19 12H5m7 7-7-7 7-7"></path>
@@ -398,16 +410,6 @@
                 <div class="arena-wrap"><div class="guild-store-balances" id="guildManualStoreBalances"></div><div id="guildManualStoreGoods" class="guild-store-grid"></div></div>
               </div>
             </div>
-            <div class="auto-item guild-task-row guild-score-row" id="guildScoreRow">
-              <div class="auto-head">
-                <span class="tinfo">
-                  <span class="guild-score-heading"><span class="tname">获取团积分</span><span class="guild-score-warning" title="该功能非常规功能，请在明确功能含义的情况下执行，建议使用非正式账号"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ui-triangle-alert"></use></svg>非常规功能</span></span>
-                  <span class="tdesc">重复领取已完成的周任务，直至全团积分满足全部奖励条件。重复领取只会增加团积分，不会增加奖励</span>
-                  <span class="tnext" id="guildScoreState" role="status" aria-live="polite">等待同步全团积分</span>
-                </span>
-                <button class="mini guild-score-start" id="guildScoreStart" type="button" disabled>开始</button>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -440,6 +442,11 @@
               <button class="tool-tile" type="button" data-tool="encyclopedia">
                 <span class="tool-icon" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/hero-illustrated.png" alt=""></span>
                 <span class="tool-tile-copy"><strong>图鉴查询</strong><small>按属性与职业浏览团员</small></span>
+                <span class="tool-arrow" aria-hidden="true">→</span>
+              </button>
+              <button class="tool-tile" type="button" data-tool="gacha">
+                <span class="tool-icon" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/summon.png" alt=""></span>
+                <span class="tool-tile-copy"><strong>抽卡</strong><small>选择卡池，自动招募 UP 目标</small></span>
                 <span class="tool-arrow" aria-hidden="true">→</span>
               </button>
               <button class="tool-tile" type="button" data-tool="background-limit-test">
@@ -574,6 +581,16 @@
             </div>
           </div>
 
+          <div class="tool-page hidden" id="gachaPage">
+            <div class="tool-page-head">
+              <button class="tool-back" type="button" id="gachaBack">← <span>返回工具箱</span></button>
+              <div class="tool-page-title"><span class="tool-icon small" aria-hidden="true"><img class="task-icon-light-invert" src="/assets/ui/summon.png" alt=""></span><h2>抽卡</h2></div>
+            </div>
+            <div class="gacha-workspace">
+              <div class="card gacha-settings" id="gachaSettings"><div class="tdesc">正在加载卡池…</div></div>
+            </div>
+          </div>
+
           <div class="tool-page hidden" id="encyclopediaPage">
             <div class="tool-page-head encyclopedia-page-head">
               <button class="tool-back" type="button" id="encyclopediaBack">← <span>返回工具箱</span></button>
@@ -581,6 +598,14 @@
             </div>
 
             <div class="encyclopedia-filter-panel" aria-label="图鉴筛选器">
+              <div class="encyclopedia-search-row">
+                <div class="encyclopedia-search">
+                  <svg aria-hidden="true"><use href="#ui-search"></use></svg>
+                  <input id="encyclopediaSearchInput" type="search" autocomplete="off" spellcheck="false" aria-label="搜索图鉴角色" placeholder="搜索角色名、别名、ID 或拼音">
+                  <button type="button" id="encyclopediaSearchClear" class="encyclopedia-search-clear" aria-label="清除搜索" title="清除搜索" hidden><svg aria-hidden="true"><use href="#ui-x"></use></svg></button>
+                </div>
+                <div class="encyclopedia-result-count" role="status" title="匹配角色数 / 总角色数"><strong id="encyclopediaResultCount">—</strong><span>/</span><span id="encyclopediaTotalCount">—</span></div>
+              </div>
               <div class="encyclopedia-filter-group">
                 <span class="encyclopedia-filter-label">属性</span>
                 <div class="encyclopedia-filter-options" id="encyclopediaElementFilters"></div>
@@ -602,7 +627,6 @@
                   <div class="encyclopedia-status-selected-icons" id="encyclopediaStatusSelectedIcons" role="list" aria-label="已选状态"></div>
                 </div>
               </div>
-              <div class="encyclopedia-filter-meta"><span>已筛选：</span><strong id="encyclopediaResultCount">—</strong><span> / </span><strong id="encyclopediaTotalCount">—</strong><button type="button" class="encyclopedia-sync" id="encyclopediaSync" title="检查图鉴更新"><svg aria-hidden="true"><use href="#nav-refresh-cw"></use></svg><span>同步</span></button></div>
             </div>
 
             <div class="encyclopedia-preview-panel">
@@ -1041,14 +1065,16 @@
   <script src="/static/encyclopedia-scaling.js?v=1"></script>
   <script src="/static/encyclopedia-data.js?v=1"></script>
   <script src="/static/encyclopedia-palette.js?v=1"></script>
-  <script src="/static/encyclopedia-card.js?v=3"></script>
-  <script src="/static/encyclopedia-framing.js?v=1"></script>
-  <script src="/static/encyclopedia-player.js?v=6"></script>
-  <script src="/static/encyclopedia-media.js?v=3"></script>
-  <script src="/static/encyclopedia-export.js?v=4"></script>
+  <script src="/static/encyclopedia-card.js?v=6"></script>
+  <script src="/static/encyclopedia-framing.js?v=2"></script>
+  <script src="/static/encyclopedia-player.js?v=7"></script>
+  <script src="/static/encyclopedia-media.js?v=4"></script>
+  <script src="/static/encyclopedia-export.js?v=5"></script>
   <script src="/static/voting.js?v=2"></script>
-  <script src="/static/app.js?v=272"></script>
-  <script src="/static/guild.js?v=12"></script>
+  <script src="/static/activity-store.js?v=3"></script>
+  <script src="/static/gacha.js?v=9"></script>
+  <script src="/static/app.js?v=284"></script>
+  <script src="/static/guild.js?v=13"></script>
   <script src="/static/guild-store.js?v=5"></script>
 </body>
 </html>

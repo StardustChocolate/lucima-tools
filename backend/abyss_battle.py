@@ -18,6 +18,7 @@ from time import monotonic
 import httpx
 
 from . import config
+from . import game_clock
 from .game_client import GameError
 from .logutil import log
 from .tasks import _abyss_scene_records, _build_role_for_battle, _oid, _to_send_format
@@ -44,11 +45,11 @@ def _room_value(value):
     return _oid(value) if isinstance(value, dict) else value
 
 
-def _scene(state: dict, scene_id: str) -> dict:
+def _scene(state: dict, scene_id: str, *, now=None) -> dict:
     for item in (state.get("SceneDataContainer", {}).get("Scenes", []) or []):
         if isinstance(item, dict) and str(item.get("StaticID")) == scene_id:
             return _to_send_format(item)
-    first_attempt = _abyss_scene_records(state).get(scene_id)
+    first_attempt = _abyss_scene_records(state, now=now).get(scene_id)
     if first_attempt is not None:
         return _to_send_format(first_attempt)
     raise GameError("当前虚构深渊关卡未解锁或未开放，请刷新账号状态后重试")
@@ -62,9 +63,9 @@ def _wave_map(state: dict, ids: list) -> dict:
     return result
 
 
-def _start_info(state: dict, scene_id: str, waves: dict) -> dict:
+def _start_info(state: dict, scene_id: str, waves: dict, *, now=None) -> dict:
     return {
-        "SceneData": _scene(state, scene_id),
+        "SceneData": _scene(state, scene_id, now=now),
         "CampData1": {}, "CampData2": {},
         "WaveCampDatas": [
             {"PositionRoleMap": _wave_map(state, waves.get("upper") or [])},
@@ -400,13 +401,14 @@ async def _run(c, scene_id: str, waves: dict, *, use_soul: bool = False, cancel_
         raise GameError("缺少 websockets 依赖，请重新安装运行环境") from exc
 
     state = c.account_state or {}
-    start_info = activity_start if single_team else _start_info(state, scene_id, waves)
+    start_info = (activity_start if single_team else
+                  _start_info(state, scene_id, waves, now=game_clock.now_ms(c) / 1000))
     if single_team:
         scene = _battle_metadata()["tables"]["Scene"][scene_id]
         fantasy = {"Waves": [{"Monsters": row["Ms"]} for row in scene["Waves"]]}
         units = initialize_units(start_info, fantasy, single_team=True)
     else:
-        fantasy = fantasy_config(scene_id, state, now=getattr(c, "_battle_reference_utc", None))
+        fantasy = fantasy_config(scene_id, state, now=game_clock.now_ms(c) / 1000)
         units = initialize_units(start_info, fantasy)
     wave_index = 0
     last_snapshot = None

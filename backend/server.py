@@ -97,11 +97,17 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             return appcore.activity_run(body.get("account"), body["sceneId"], body["teamId"],
                                         body.get("supportCuid"), body.get("quick", True),
                                         urgent_modes)
+        if path == "/api/activity/rewards/claim":
+            return appcore.activity_claim_rewards(body.get("account"), body.get("kind"))
         if path == "/api/activity/progress/run":
             return appcore.activity_progress_run(body.get("account"), body.get("family"),
                                                  body.get("teamId"), body.get("supportCuid"))
         if path == "/api/activity/progress/cancel":
             return appcore.activity_progress_cancel(body.get("account"))
+        if path == '/api/gacha/start':
+            return appcore.gacha_start(body.get('account'), body.get('params'), body.get('requestId'))
+        if path == '/api/gacha/cancel':
+            return appcore.gacha_cancel(body.get('account'), body.get('id'))
         if path == "/api/activity/urgent/clear":
             return appcore.activity_clear_urgent(
                 body.get("account"), body["teamId"], body.get("supportCuid"))
@@ -127,12 +133,6 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             return appcore.guild_action(body.get("account"), body.get("action"), body)
         if path == "/api/guild/store/buy":
             return appcore.guild_store_buy(body.get('account'), body)
-        if path == "/api/guild/quests/query":
-            return appcore.guild_quests_query(body.get("account"))
-        if path == "/api/guild/quests/start":
-            return appcore.guild_quests_start(body.get("account"), body)
-        if path == "/api/guild/quests/cancel":
-            return appcore.guild_quests_cancel(body.get("account"), body.get("id"))
         if path == "/api/support/favorite":
             return appcore.support_fav_add(body.get("account"), body["cuid"])
         if path == "/api/support/unfavorite":
@@ -206,8 +206,6 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
                                     body.get("data"), body.get("useAuth", True),
                                     body.get("pass"))
     elif method == "GET":
-        if path == "/api/guild/quests":
-            return appcore.guild_quests_status(query.get("account"), query.get("id"))
         if path == "/api/accounts":
             return appcore.list_accounts()
         if path == "/api/status":
@@ -228,6 +226,8 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             return appcore.sweep_options(query.get("account"), query.get("kind") or "hunt")
         if path == "/api/store/options":
             return appcore.store_options(query.get("account"))
+        if path == "/api/activity/rewards/options":
+            return appcore.activity_rewards_options(query.get("account"))
         if path == "/api/activity/options":
             return appcore.activity_options(query.get("account"))
         if path == "/api/abyss/options":
@@ -236,6 +236,10 @@ def _route_api(method: str, path: str, body: dict, query: dict) -> dict:
             return appcore.arena_options(query.get("account"))
         if path == '/api/voting/options':
             return appcore.voting_options(query.get('account'))
+        if path == '/api/activity-store/options':
+            return appcore.activity_store_options(query.get('account'))
+        if path == '/api/gacha/options':
+            return appcore.gacha_options(query.get('account'))
         if path == "/api/config":
             return appcore.get_config()
         if path == "/api/preferences":
@@ -360,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result)
                 # 日志增量接口由每个在线页面持续轮询；正常响应没有诊断价值，
                 # 记录它只会刷屏并挤掉真正有用的开发者日志。异常仍走下方分支记录。
-                if path not in {"/api/logs/auto", "/api/inventory", "/api/dev/history", "/api/update/status", "/api/resources/status", "/api/guild/quests"}:
+                if path not in {"/api/logs/auto", "/api/inventory", "/api/dev/history", "/api/update/status", "/api/resources/status"}:
                     log.info("%s %s -> 200", method, path)
             except EncyclopediaError as e:
                 self._send_json({"detail": str(e)}, 503)

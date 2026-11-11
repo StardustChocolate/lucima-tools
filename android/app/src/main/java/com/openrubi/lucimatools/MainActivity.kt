@@ -179,7 +179,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
-        fun saveDeveloperLogs(): String {
+        fun saveDeveloperLogs(gameDataVersion: String): String {
             if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                 ContextCompat.checkSelfPermission(
                     this@MainActivity, Manifest.permission.WRITE_EXTERNAL_STORAGE
@@ -191,7 +191,7 @@ class MainActivity : AppCompatActivity() {
                 return jsonResult(false, detail = "请授予存储权限后再次保存")
             }
             return try {
-                val savedTo = saveDeveloperLogFile()
+                val savedTo = saveDeveloperLogFile(gameDataVersion)
                 jsonResult(true, path = savedTo)
             } catch (error: Exception) {
                 jsonResult(false, detail = error.message ?: "保存开发者日志失败")
@@ -448,21 +448,35 @@ class MainActivity : AppCompatActivity() {
         return filename to bytes.toString(Charsets.UTF_8)
     }
 
-    private fun developerLogText(): String {
+    private fun developerLogHeader(gameDataVersion: String): String {
+        val release = Build.VERSION.RELEASE?.takeIf { it.isNotBlank() } ?: "未知"
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown architecture"
+        val safeDataVersion = gameDataVersion
+            .filter { it >= ' ' && it != '\u007f' }
+            .take(128)
+            .ifBlank { "未知" }
+        val appVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "未知"
+        return "应用版本：$appVersion\n" +
+            "平台：Android $release (API ${Build.VERSION.SDK_INT}; $abi)\n" +
+            "游戏数据版本：$safeDataVersion\n\n"
+    }
+
+    private fun developerLogText(gameDataVersion: String): String {
         val logDirectory = File(filesDir, "logs")
         val sources = (3 downTo 1).map { File(logDirectory, "app.log.$it") } +
             File(logDirectory, "app.log")
         val chunks = sources.filter { it.isFile }.mapNotNull { file ->
             file.readText(Charsets.UTF_8).trimEnd('\n').takeIf { it.isNotEmpty() }
         }
-        return if (chunks.isEmpty()) "（暂无日志）\n" else chunks.joinToString("\n") + "\n"
+        val retained = if (chunks.isEmpty()) "（暂无日志）\n" else chunks.joinToString("\n") + "\n"
+        return developerLogHeader(gameDataVersion) + retained
     }
 
-    private fun saveDeveloperLogFile(): String {
+    private fun saveDeveloperLogFile(gameDataVersion: String): String {
         val filename = "LucimaTools-developer-log-${
             SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())
         }.txt"
-        val contents = developerLogText().toByteArray(Charsets.UTF_8)
+        val contents = developerLogText(gameDataVersion).toByteArray(Charsets.UTF_8)
         return saveDownloadFile(filename, contents, "text/plain")
     }
 

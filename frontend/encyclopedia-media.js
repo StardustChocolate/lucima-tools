@@ -8,7 +8,7 @@
     try {
       if (config.schema === 2) {
         const file = config.files?.[path];
-        const extension = String(path).match(/\.(png|jpg|jpeg|webp|skel|atlas|js)$/i)?.[0].toLowerCase();
+        const extension = String(path).match(/\.(png|jpg|jpeg|webp|skel|atlas|js|json)$/i)?.[0].toLowerCase();
         if (!file || !/^[a-f0-9]{64}$/.test(file.sha256) || !extension) return "";
         path = `objects/${file.sha256}${extension}`;
       }
@@ -130,7 +130,9 @@
         canvas.hidden = false;
         pending = window.createEncyclopediaSpinePlayer({
           host, canvas, fetchResource: fetchPortrait,
-          config: { id: entry.id, root, base: spine.Base, skin: spine.Skin, animation: spine.Animation },
+          config: { id: entry.id, root, base: spine.Base, skin: spine.Skin, animation: spine.Animation,
+            framing: config.schema === 2
+              ? Boolean(config.files?.[`${path.replace(/\/?$/, "/")}${spine.Base}.framing.json`]) : undefined },
         });
         player = pending;
         await pending.initialize();
